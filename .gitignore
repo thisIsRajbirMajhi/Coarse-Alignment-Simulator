@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+env/
+
+# PyQt / OS
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+Thumbs.db
+*.log
+
+# PyInstaller
+dist/
+*.spec
+
+# Performance logs (generated)
+perf_log/*.csv
+perf_log/*.json
+*.csv
+*.json
+!requirements.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temp
+*.tmp
+*.bak
