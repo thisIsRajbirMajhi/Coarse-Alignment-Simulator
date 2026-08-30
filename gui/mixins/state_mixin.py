@@ -75,6 +75,8 @@ class StateMixin:
                 self._on_target_beacon_change(int(self.target_beacon_spin.value()))
             elif section == "camera":
                 self._apply_camera_hot()
+            elif section == "control":
+                self._apply_control_hot()
             elif section == "overlay":
                 self._apply_overlay_hot()
             elif section == "environment":
@@ -178,6 +180,26 @@ class StateMixin:
                             elif hasattr(w, "setChecked"): w.setChecked(bool(val))
                         finally:
                             w.blockSignals(False)
+            elif section == "control" and snap and "controller_type" in snap:
+                try:
+                    from control.config import ControllerConfig
+                    cfg = ControllerConfig.from_dict(snap).validate()
+                    self.controller_config = cfg
+                    if hasattr(self, "controller"):
+                        self.controller.apply_config(cfg)
+                    if hasattr(self, "control_panel"):
+                        self.control_panel.set_config(cfg, emit=False)
+                except Exception:
+                    for key, val in snap.items():
+                        w = getattr(self, key, None)
+                        if w is None: continue
+                        try:
+                            w.blockSignals(True)
+                            if hasattr(w, "setValue"): w.setValue(val)
+                            elif hasattr(w, "setCurrentText"): w.setCurrentText(val)
+                            elif hasattr(w, "setChecked"): w.setChecked(bool(val))
+                        finally:
+                            w.blockSignals(False)
             elif section == "overlay" and snap and "crosshair_style" in snap:
                 try:
                     from overlay.config import OverlayConfig
@@ -219,7 +241,7 @@ class StateMixin:
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
             if ret != QMessageBox.Yes:
                 return
-        for sec in ["global", "beacons", "camera", "overlay", "environment", "disturbances"]:
+        for sec in ["global", "beacons", "camera", "control", "overlay", "environment", "disturbances"]:
             self._apply_section(sec, hot=True)
         self._dirty_tabs.clear()
         self.statusBar().showMessage("All sections applied — HOT", 3000)
@@ -280,6 +302,16 @@ class StateMixin:
                         "god_h_spin": self.god_h_spin.value(),
                         "gain_spin": self.gain_spin.value(),
                     }
+            elif section == "control":
+                try:
+                    if hasattr(self, "control_panel"):
+                        self._applied_snapshot[section] = self.control_panel.collect_config().to_dict()
+                    else:
+                        self._applied_snapshot[section] = self.controller_config.to_dict()
+                except Exception:
+                    try:
+                        self._applied_snapshot[section] = self.controller_config.to_dict()
+                    except: pass
             elif section == "environment":
                 try:
                     cfg_dict = self.env_panel.collect_config().to_dict() if hasattr(self, "env_panel") else self.env_config.to_dict()

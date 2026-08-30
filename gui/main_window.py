@@ -29,7 +29,8 @@ from PyQt5.QtWidgets import (
 )
 
 from camera.ptz_camera import PTZCamera
-from control.controller import ProportionalController
+from control.config import ControllerConfig
+from control.controller import PIDController, ProportionalController
 from detection.detector import BeaconDetector
 from disturbance import disturbances as dist
 from environment.config import EnvironmentConfig
@@ -41,6 +42,7 @@ from gui.environment_panel import EnvironmentPanel
 from gui.mixins.state_mixin import StateMixin
 from gui.multi_beacon_panel import MultiBeaconPanel
 from gui.panels.camera_panel import CameraPanel
+from gui.panels.control_panel import ControlPanel
 from gui.panels.dashboard_panel import DashboardPanel
 from gui.panels.disturbances_panel import DisturbancesPanel
 from gui.panels.global_panel import GlobalPanel
@@ -97,6 +99,8 @@ class MainWindow(StateMixin, QMainWindow):
         # Overlay — crosshair / lock / error (modular, intuitive)
         self.overlay_config = OverlayConfig().validate()
         self._overlay_pulse = PulseState()
+        # Controller — P/PI/PID, dead zone, clamp, update rate (robust, modular)
+        self.controller_config = ControllerConfig().validate()
         self._last_viewport_frame = None
         self._last_god_frame = None
         # Dirty tracking for HOT Apply per-section (now auto-HOT, but kept for Master confirm)
@@ -274,7 +278,34 @@ class MainWindow(StateMixin, QMainWindow):
         self.camera = PTZCamera(config=cam_cfg, scene_bounds=(scene_w, scene_h))
         self.detector = BeaconDetector(brightness_threshold=thresh, min_area=min_area)
         self.tracker = Tracker(smoothing=smoothing, miss_limit=miss_limit)
-        self.controller = ProportionalController(gain=gain)
+        # Controller — P/PI/PID with dead zone, clamp, update rate (robust, modular)
+        # Collect from ControlPanel if UI exists, else from stored controller_config
+        try:
+            if hasattr(self, "control_panel") and self.control_panel is not None:
+                ctrl_cfg = self.control_panel.collect_config().validate()
+                self.controller_config = ctrl_cfg
+            else:
+                ctrl_cfg = self.controller_config.validate()
+                # Also sync legacy gain variable if present (old _ctrl_gain)
+                try:
+                    if 'gain' in locals():
+                        ctrl_cfg.kp = float(gain)
+                        ctrl_cfg.validate()
+                        self.controller_config = ctrl_cfg
+                except: pass
+        except Exception:
+            ctrl_cfg = self.controller_config.validate()
+        # Sync camera panel gain alias for backward compat (if exists)
+        try:
+            if hasattr(self, "camera_panel") and hasattr(self.camera_panel, "gain_spin"):
+                self.camera_panel.gain_spin.blockSignals(True)
+                self.camera_panel.gain_spin.setValue(float(np.clip(ctrl_cfg.kp, 0.02, 0.50)))
+                self.camera_panel.gain_slider.blockSignals(True)
+                self.camera_panel.gain_slider.setValue(int(round(float(ctrl_cfg.kp)*100)))
+                self.camera_panel.gain_spin.blockSignals(False)
+                self.camera_panel.gain_slider.blockSignals(False)
+        except: pass
+        self.controller = PIDController(config=ctrl_cfg)
         # store sim speed for tick
         self._sim_speed = float(sim_speed)
         if not hasattr(self, "perf"):
@@ -546,6 +577,16 @@ class MainWindow(StateMixin, QMainWindow):
         self.camera_panel.configChanged.connect(lambda: self._schedule_auto("camera", self._apply_camera_hot, 420))
         tabs.addTab(self.camera_panel, "Camera")
 
+        # ── Control Tab — Modular (P/PI/PID, dead zone, clamp, update rate) ──
+        self.control_panel = ControlPanel(initial=self.controller_config)
+        tabs.addTab(self.control_panel, "Control")
+        # HOT wiring — controller tuning
+        self.control_panel.configChanged.connect(self._on_control_config_changed)
+        # Keep camera gain in sync with control Kp (bidirectional)
+        self.control_panel.kp_spin.valueChanged.connect(lambda v: self._sync_control_gain_to_camera(v))
+        self.camera_panel.gain_spin.valueChanged.connect(lambda v: self._sync_camera_gain_to_control(v))
+        self.camera_panel.gain_slider.valueChanged.connect(lambda v: self._sync_camera_gain_to_control(v/100.0))
+
         # ── Overlay Tab — Modular (Crosshair / Lock / Error) ──
         self.overlay_panel = OverlayPanel(initial=self.overlay_config)
         tabs.addTab(self.overlay_panel, "Overlay")
@@ -593,8 +634,8 @@ class MainWindow(StateMixin, QMainWindow):
         self.sliders = self.disturbances_panel.sliders
         tabs.addTab(self.disturbances_panel, "Disturbances")
 
-        # initial snapshots for dirty tracking (HOT) — includes overlay
-        for sec in ["global", "beacons", "camera", "overlay", "environment", "disturbances"]:
+        # initial snapshots for dirty tracking (HOT) — includes control+overlay
+        for sec in ["global", "beacons", "camera", "control", "overlay", "environment", "disturbances"]:
             try: self._snapshot_section(sec)
             except: pass
 
@@ -777,6 +818,75 @@ class MainWindow(StateMixin, QMainWindow):
             self.statusBar().showMessage(f"Overlay HOT — {self.overlay_config.crosshair_style} gap {self.overlay_config.crosshair_gap} lock {self.overlay_config.lock_circle_radius} {self.overlay_config.error_units}", 2000)
         except Exception as e:
             QMessageBox.warning(self, "Overlay", f"Failed: {e}")
+
+    def _on_control_config_changed(self, cfg):
+        """HOT handler — ControlPanel emitted validated ControllerConfig."""
+        try:
+            cfg = cfg.validate()
+            self.controller_config = cfg
+            # Apply to live controller without rebuild
+            if hasattr(self, "controller"):
+                self.controller.apply_config(cfg)
+        except Exception:
+            pass
+        self._mark_dirty("control")
+        self._schedule_auto("control", self._apply_control_hot, 80)
+
+    def _apply_control_hot(self):
+        """Apply controller config — HOT, validates, syncs gain alias, snapshots."""
+        try:
+            if hasattr(self, "control_panel"):
+                cfg = self.control_panel.collect_config().validate()
+                self.controller_config = cfg
+            else:
+                cfg = self.controller_config.validate()
+            self.controller.apply_config(cfg)
+            # Sync camera gain alias (bidirectional, but avoid loop)
+            try:
+                if hasattr(self, "camera_panel"):
+                    self.camera_panel.gain_spin.blockSignals(True)
+                    self.camera_panel.gain_spin.setValue(float(np.clip(cfg.kp, 0.02, 0.50)))
+                    self.camera_panel.gain_slider.blockSignals(True)
+                    self.camera_panel.gain_slider.setValue(int(round(float(cfg.kp)*100)))
+                    self.camera_panel.gain_spin.blockSignals(False)
+                    self.camera_panel.gain_slider.blockSignals(False)
+            except: pass
+            self._clear_dirty("control")
+            self._snapshot_section("control")
+            self.statusBar().showMessage(f"Control HOT — {cfg.controller_type} Kp {cfg.kp:.3f} Ki {cfg.ki:.3f} Kd {cfg.kd:.3f} dead {cfg.dead_zone:.1f}px clamp {cfg.output_clamp:.0f}px rate {cfg.update_rate_hz:.0f}Hz", 2000)
+        except Exception as e:
+            QMessageBox.warning(self, "Control", f"Failed: {e}")
+
+    def _sync_control_gain_to_camera(self, v: float) -> None:
+        # Control Kp → Camera gain alias (no loop)
+        try:
+            if hasattr(self, "camera_panel"):
+                self.camera_panel.gain_spin.blockSignals(True)
+                self.camera_panel.gain_spin.setValue(float(np.clip(float(v), 0.02, 0.50)))
+                self.camera_panel.gain_slider.blockSignals(True)
+                self.camera_panel.gain_slider.setValue(int(round(float(v)*100)))
+                self.camera_panel.gain_spin.blockSignals(False)
+                self.camera_panel.gain_slider.blockSignals(False)
+        except: pass
+
+    def _sync_camera_gain_to_control(self, v: float) -> None:
+        # Camera gain → Control Kp
+        try:
+            if hasattr(self, "control_panel"):
+                self.control_panel.kp_spin.blockSignals(True)
+                self.control_panel.kp_spin.setValue(float(v))
+                self.control_panel.kp_spin.blockSignals(False)
+                # Also sync gain alias
+                self.control_panel.gain_spin.blockSignals(True)
+                self.control_panel.gain_spin.setValue(float(np.clip(float(v), 0.02, 0.50)))
+                self.control_panel.gain_spin.blockSignals(False)
+                # Update controller directly for immediate response
+                if hasattr(self, "controller"):
+                    self.controller.config.kp = float(v)
+        except: pass
+        # Mark dirty for HOT
+        self._mark_dirty("control")
+        self._schedule_auto("control", self._apply_control_hot, 80)
 
     def _update_beacon_count_label(self, v: int):
         try:
@@ -1770,8 +1880,16 @@ class MainWindow(StateMixin, QMainWindow):
             err_x, err_y = estimate[0]-cx, estimate[1]-cy
             tracking_error_px=float(np.hypot(err_x, err_y))
             # Also compute to perfect center
-            # Use center error for control — passes dt for slew/resolution/latency handling
-            d_pan,d_tilt=self.controller.compute_correction(err_x, err_y)
+            # Control — PID with dead zone, output clamp respecting camera slew, update rate (robust)
+            # Pass dt and camera max slew for clamp → controller respects actuator limits, no double-define
+            try:
+                cam_slew = float(self.camera_config.max_slew_rate) if hasattr(self, "camera_config") else None
+            except: cam_slew = None
+            try:
+                d_pan,d_tilt=self.controller.compute_correction(err_x, err_y, dt=dt, camera_max_slew=cam_slew)
+            except TypeError:
+                # Back-compat fallback (old Proportional without dt/camera)
+                d_pan,d_tilt=self.controller.compute_correction(err_x, err_y)
             try:
                 self.camera.move(d_pan, d_tilt, dt)
             except TypeError:
