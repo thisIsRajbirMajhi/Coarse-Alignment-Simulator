@@ -173,10 +173,18 @@ class CameraConfig:
 
     @classmethod
     def from_dict(cls, data: dict) -> "CameraConfig":
-        # Filter to known fields
-        known = {k: v for k, v in data.items() if k in CAMERA_DEFAULTS or k in DISPLAY_DEFAULTS or k in ("pan_min","pan_max","tilt_min","tilt_max","home_pan","home_tilt","max_slew_rate","resolution","latency_ms","pixel_scale_mrad","fov_width","fov_height","viewport_width","viewport_height","god_width","god_height")}
-        # Merge with defaults
-        merged = {**CAMERA_DEFAULTS, **DISPLAY_DEFAULTS, **known}
+        # Filter to dataclass fields only (exclude helper defaults like scene_width)
+        allowed = set(cls.__dataclass_fields__.keys())
+        known = {k: v for k, v in data.items() if k in allowed}
+        # Build with defaults for missing fields
+        merged = {}
+        for k in allowed:
+            if k in known:
+                merged[k] = known[k]
+            elif k in CAMERA_DEFAULTS:
+                merged[k] = CAMERA_DEFAULTS[k]
+            elif k in DISPLAY_DEFAULTS:
+                merged[k] = DISPLAY_DEFAULTS[k]
         return cls(**merged).validate()
 
     def pixel_to_mrad(self, px: float) -> float:

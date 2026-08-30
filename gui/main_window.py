@@ -47,11 +47,13 @@ from gui.panels.dashboard_panel import DashboardPanel
 from gui.panels.disturbances_panel import DisturbancesPanel
 from gui.panels.global_panel import GlobalPanel
 from gui.panels.overlay_panel import OverlayPanel
+from gui.panels.presets_panel import PresetsPanel
 from gui.styles import APP_STYLE, FOV_SIZE, SCENE_SIZE, TICK_MS
 from gui.windows.control_window import ControlDashboardWindow
 from overlay.config import OverlayConfig
 from overlay.renderer import PulseState
 from perf_log.metrics import PerformanceLogger
+from presets.applier import apply_preset
 from target.config import BeaconConfig, MultiBeaconConfig
 from target.motion import MotionProfile, Target, create_beacons
 from tracking.tracker import LockStatus, Tracker
@@ -476,6 +478,11 @@ class MainWindow(StateMixin, QMainWindow):
         tabs.setStyleSheet("QTabWidget::pane { border: 1px solid #e2e8f0; border-radius: 8px; background: white; }")
         cw_layout.addWidget(tabs, 1)
 
+        # ── Presets Tab — One-click entire software + auto-run (curated test cases) ──
+        self.presets_panel = PresetsPanel()
+        tabs.addTab(self.presets_panel, "Presets")
+        self.presets_panel.presetSelected.connect(self._on_preset_selected)
+
         # ── Dashboard Tab — Modular (DashboardPanel) ──
         self.dashboard_panel = DashboardPanel()
         self.stat_labels = self.dashboard_panel.stat_labels
@@ -887,6 +894,20 @@ class MainWindow(StateMixin, QMainWindow):
         # Mark dirty for HOT
         self._mark_dirty("control")
         self._schedule_auto("control", self._apply_control_hot, 80)
+
+    def _on_preset_selected(self, preset):
+        """Presets — one-click configure entire software + auto-run."""
+        try:
+            apply_preset(self, preset, auto_run=True)
+            # Snapshot all sections for dirty tracking after preset
+            for sec in ["environment", "camera", "beacons", "control", "overlay", "disturbances", "global"]:
+                try:
+                    self._snapshot_section(sec)
+                except: pass
+            self._dirty_tabs.clear()
+            self.statusBar().showMessage(f"Preset '{preset.name}' applied — running: {preset.goal}", 5000)
+        except Exception as e:
+            QMessageBox.warning(self, "Preset", f"Failed to apply preset '{getattr(preset, 'name', 'Unknown')}': {e}")
 
     def _update_beacon_count_label(self, v: int):
         try:
