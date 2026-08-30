@@ -1,71 +1,144 @@
 """
-Tracking module.
-
-Owns continuity across frames: takes each new detection (or None) and
-maintains a smoothed position estimate + lock status. This is where
-reacquisition-after-loss logic lives, separate from raw per-frame
-detection.
-
-Status machine:
-  SEARCHING -> ACQUIRED   (first successful detection)
-  ACQUIRED  -> TRACKING   (a couple more consecutive detections, confirms lock)
-  TRACKING  -> LOST       (detection missing for miss_limit consecutive frames)
-  LOST      -> SEARCHING  (after a short grace period with no detection)
+Module: tracking.tracker
+Purpose: Continuous tracking — combines smoothing filter + lock state machine (modular, well-commented).
+Public API: Tracker, LockStatus
+Architecture:
+  - constants.py : limits/defaults
+  - config.py    : TrackerConfig
+  - filter.py    : ExponentialFilter (y=α·y_prev+(1-α)·x)
+  - state.py     : LockStateMachine (SEARCHING→ACQUIRED→TRACKING→LOST)
+  - tracker.py   : Tracker — orchestrates filter + state, owns estimate lifecycle
+Notes:
+  - Detection runs every frame (stateless) — Tracker owns continuity (stateful).
+  - Physics: Exponential filter is RC low-pass (τ=-1/ln α frames), rejects scintillation jitter.
+  - Lock definitions per spec: SEARCHING (estimate None), ACQUIRED (probation), TRACKING (≥3 hits, counts toward retention), LOST (keeps last estimate for reacquisition, else SEARCHING).
 """
 
-from enum import Enum
+from __future__ import annotations
 
+from tracking.config import TrackerConfig
+from tracking.constants import TRACKER_DEFAULTS
+from tracking.filter import ExponentialFilter
+from tracking.state import LockStatus, LockStateMachine
 
-class LockStatus(Enum):
-    SEARCHING = "searching"
-    ACQUIRED = "acquired"
-    TRACKING = "tracking"
-    LOST = "lost"
+# Re-export LockStatus for backward compat `from tracking.tracker import LockStatus`
+__all__ = ["Tracker", "LockStatus"]
 
+# ============================================================
+# SECTION: Tracker — filter + state orchestrator
+# ============================================================
 
 class Tracker:
-    def __init__(self, smoothing: float = 0.5, miss_limit: int = 5):
-        self.status = LockStatus.SEARCHING
+    """
+    Tracker — maintains smoothed estimate + lock status across frames.
+
+    Pipeline per frame:
+      detection = detector.detect(frame)  # (x,y) or None — raw input, always runs
+      estimate  = tracker.update(detection)  # → smoothed (x,y) or None, updates status
+
+    State machine (LockStatus):
+      SEARCHING (None) → ACQUIRED (first hit, probation) → TRACKING (≥3 hits, locked) → LOST (miss≥5, keep estimate) → SEARCHING (miss≥10, discard)
+
+    Filter: y[n]=α·y[n-1]+(1-α)·x[n] — α=smoothing (0..0.95, default 0.5).
+    """
+
+    def __init__(self, smoothing: float = TRACKER_DEFAULTS["smoothing"], miss_limit: int = TRACKER_DEFAULTS["miss_limit"], config: TrackerConfig | None = None):
+        # Config-driven or legacy direct
+        if config is not None:
+            cfg = config.validate()
+            self.config = cfg
+            smoothing = float(cfg.smoothing)
+            miss_limit = int(cfg.miss_limit)
+            acquire_hits = int(cfg.acquire_hits)
+            grace_mult = float(cfg.lost_grace_mult)
+        else:
+            cfg = TrackerConfig(smoothing=float(smoothing), miss_limit=int(miss_limit)).validate()
+            self.config = cfg
+            acquire_hits = int(cfg.acquire_hits)
+            grace_mult = float(cfg.lost_grace_mult)
+
+        self.smoothing = float(smoothing)
+        self.miss_limit = int(miss_limit)
+        self.status: LockStatus = LockStatus.SEARCHING
         self.estimated_position: tuple[float, float] | None = None
-        self.smoothing = smoothing  # 0 = no smoothing (snap to detection), 1 = ignore new detections
-        self.miss_limit = miss_limit
-        self._consecutive_hits = 0
-        self._consecutive_misses = 0
+
+        # Submodules — filter and state machine
+        self._filter = ExponentialFilter(smoothing=float(smoothing))
+        self._state = LockStateMachine(miss_limit=int(miss_limit), acquire_hits=int(acquire_hits), lost_grace_mult=float(grace_mult))
+        self.status = self._state.status
+
+        # Mirror for backward compat (tests read _consecutive_hits etc.)
+        self._consecutive_hits: int = 0
+        self._consecutive_misses: int = 0
+
+    # --------------------------------------------------------
+    # Config bridge — hot-apply without rebuild
+    # --------------------------------------------------------
+
+    def apply_config(self, config: TrackerConfig) -> None:
+        cfg = config.validate()
+        self.config = cfg
+        self.smoothing = float(cfg.smoothing)
+        self.miss_limit = int(cfg.miss_limit)
+        self._filter.set_smoothing(float(cfg.smoothing))
+        self._state.set_thresholds(miss_limit=int(cfg.miss_limit), acquire_hits=int(cfg.acquire_hits), grace_mult=float(cfg.lost_grace_mult))
+
+    def to_config(self) -> TrackerConfig:
+        return TrackerConfig(smoothing=float(self.smoothing), miss_limit=int(self.miss_limit), acquire_hits=int(self._state.acquire_hits), lost_grace_mult=float(self._state.lost_grace_mult)).validate()
+
+    # --------------------------------------------------------
+    # Update — per-frame detection (or None) → estimate + status
+    # --------------------------------------------------------
 
     def update(self, detection: tuple[float, float] | None) -> tuple[float, float] | None:
-        """Feed in this frame's detection (or None); return the current
-        best position estimate (or None) and update self.status."""
-        if detection is not None:
-            self._consecutive_hits += 1
-            self._consecutive_misses = 0
+        """
+        Feed this frame's detection (or None) — returns current best estimate (or None) and updates status.
 
-            if self.estimated_position is None:
-                self.estimated_position = detection
-            else:
-                ex, ey = self.estimated_position
-                dx, dy = detection
-                self.estimated_position = (
-                    self.smoothing * ex + (1 - self.smoothing) * dx,
-                    self.smoothing * ey + (1 - self.smoothing) * dy,
-                )
+        Steps:
+          1) Filter: if hit, y = α·y_prev + (1-α)·x (or seed if first); if miss, hold.
+          2) State: update hit/miss counters and transition per table.
+          3) Lifecycle: if LOST→SEARCHING, discard stale estimate (set None).
 
-            if self.status == LockStatus.SEARCHING:
-                self.status = LockStatus.ACQUIRED
-            elif self.status == LockStatus.ACQUIRED and self._consecutive_hits >= 3:
-                self.status = LockStatus.TRACKING
-            elif self.status == LockStatus.LOST:
-                self.status = LockStatus.ACQUIRED
+        Returns estimate for controller/GUI (None when SEARCHING).
+        """
+        has_det = detection is not None
 
+        # Filter — smoothing (holds on miss)
+        if has_det:
+            # If state says SEARCHING and estimate is None, filter will seed
+            self.estimated_position = self._filter.update(detection)
         else:
-            self._consecutive_hits = 0
-            self._consecutive_misses += 1
+            # No detection — filter holds (no update), but we keep last estimate unless state says clear
+            self._filter.update(None)
 
-            if self.status in (LockStatus.ACQUIRED, LockStatus.TRACKING):
-                if self._consecutive_misses >= self.miss_limit:
-                    self.status = LockStatus.LOST
-            elif self.status == LockStatus.LOST:
-                if self._consecutive_misses >= self.miss_limit * 2:
-                    self.status = LockStatus.SEARCHING
-                    self.estimated_position = None
+        # State machine — updates status and decides if estimate should be cleared
+        new_status = self._state.update(bool(has_det))
+        self.status = new_status
+
+        # Sync mirror counters for backward compat
+        self._consecutive_hits = int(self._state.hits)
+        self._consecutive_misses = int(self._state.misses)
+
+        # Lifecycle: if state says clear (LOST→SEARCHING after grace), discard
+        if self._state.should_clear_estimate:
+            self.estimated_position = None
+            self._filter.reset()
+            self._state.should_clear_estimate = False
+
+        # Keep filter in sync when estimate is cleared externally
+        if self.estimated_position is None:
+            self._filter.reset()
 
         return self.estimated_position
+
+    # --------------------------------------------------------
+    # Reset — for GUI _reset()
+    # --------------------------------------------------------
+
+    def reset(self) -> None:
+        self.estimated_position = None
+        self._filter.reset()
+        self._state.reset()
+        self.status = self._state.status
+        self._consecutive_hits = 0
+        self._consecutive_misses = 0
