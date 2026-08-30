@@ -1643,6 +1643,13 @@ class MainWindow(StateMixin, QMainWindow):
             try: b.profile = MotionProfile(cur)
             except: pass
         self.perf=PerformanceLogger(); self._camera_drift_state={}; self._last_tick_time=None
+        # Reset disturbance global state — fixes stale phase/velocity on fresh run (reproducibility)
+        try:
+            dist.reset_disturbance_state()
+            # Also clear per-instance drift dict (already {}) and any module globals
+            self._camera_drift_state.clear()
+        except Exception:
+            pass
         for l in self.stat_labels.values(): l.setText("-")
         self.footer_lock.setText("SEARCHING"); self.lock_dot.setStyleSheet("color:#64748b; font-size:14px;")
         self.viewport_label.clear(); self.minimap_label.clear()
@@ -1702,14 +1709,15 @@ class MainWindow(StateMixin, QMainWindow):
         except: pass
         scene_frame=self.scene.get_frame()
         self._draw_targets(scene_frame)
-        # Platform disturbances — temporarily perturb camera pointing for capture, then restore
-        pan_vib, tilt_vib = dist.apply_platform_vibration(self.camera.pan, self.camera.tilt, self.sliders["Vibration"].value())
-        pan_dist, tilt_dist = dist.apply_camera_motion_with_state(pan_vib, tilt_vib, self.sliders["Camera Motion"].value(), self._camera_drift_state)
+        # Platform disturbances — dt_eff ensures sim-speed lockstep (fixes wall-clock decoupling)
+        # All four disturbances now evolve with same sim-speed-scaled dt
+        pan_vib, tilt_vib = dist.apply_platform_vibration(self.camera.pan, self.camera.tilt, self.sliders["Vibration"].value(), dt=dt_eff)
+        pan_dist, tilt_dist = dist.apply_camera_motion_with_state(pan_vib, tilt_vib, self.sliders["Camera Motion"].value(), self._camera_drift_state, dt=dt_eff)
         rp, rt = self.camera.pan, self.camera.tilt
         self.camera.pan, self.camera.tilt = pan_dist, tilt_dist
         fov_frame=self.camera.capture(scene_frame)
         self.camera.pan, self.camera.tilt = rp, rt
-        fov_frame=dist.apply_turbulence(fov_frame, self.sliders["Turbulence"].value())
+        fov_frame=dist.apply_turbulence(fov_frame, self.sliders["Turbulence"].value(), dt=dt_eff)
         fov_frame=dist.apply_sensor_noise(fov_frame, self.sliders["Noise"].value())
         # ── Target-only realtime check (not hardcoded, hitbox-gated) ──
         all_dets = self.detector.detect_all(fov_frame)

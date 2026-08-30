@@ -1,0 +1,95 @@
+"""
+Module: disturbance.camera_motion
+Purpose: Camera drift — Ornstein-Uhlenbeck thermal/mount, well-commented.
+Public API: apply_camera_motion, apply_camera_motion_with_state
+Notes: Now dt-aware — caller passes sim-speed-scaled dt. Falls back to wall-clock
+       when dt not supplied. State is per-instance dict (or global) for temporal correlation.
+       Includes max-velocity clamp and slow bias random walk.
+"""
+
+import math
+import time
+
+import numpy as np
+
+from disturbance.constants import CAMERA_TAU
+from disturbance.state import _cam_motion_state_global
+
+# ============================================================
+# SECTION: Camera drift — OU process
+# ============================================================
+
+def apply_camera_motion(pan: float, tilt: float, intensity: float, dt: float | None = None) -> tuple[float, float]:
+    """
+    Stateless wrapper — delegates to OU with global state, now dt-aware.
+
+    Args:
+      pan, tilt: pre-drift
+      intensity: 0..10
+      dt: seconds, sim-speed-scaled. If None, wall-clock fallback.
+
+    Returns (pan_drifted, tilt_drifted).
+    """
+    return apply_camera_motion_with_state(pan, tilt, float(intensity), _cam_motion_state_global, dt=dt)
+
+
+def apply_camera_motion_with_state(
+    pan: float,
+    tilt: float,
+    intensity: float,
+    state: dict | None = None,
+    dt: float | None = None,
+) -> tuple[float, float]:
+    """
+    OU drift: dv = −v/τ dt + σ√(2/τ) dW,  dx = v dt
+
+    Physics:
+      τ=6.0 s (thermal), σ=0.42·I·(I/5)^{0.25} px/s, v clamped ±(2.2·I+1.5)
+      bias RW ±0.012·I·√dt for slow thermal.
+
+    Args:
+      pan, tilt: pre-drift world pixels
+      intensity: 0..10
+      state: dict holding vx,vy,bias_pan/bias_tilt,_last_wall. If None, uses fresh dict.
+      dt: seconds, sim-speed-scaled. If None, derives from wall time (fallback).
+
+    Returns (pan+drift, tilt+drift).
+    """
+    if float(intensity) <= 0:
+        return pan, tilt
+    if state is None:
+        state = {}
+
+    # dt — explicit sim-scaled preferred, else wall-clock fallback
+    if dt is None:
+        now = time.time()
+        last = state.get("_last_wall")
+        dt = 0.033 if last is None else float(np.clip(now - last, 0.005, 0.08))
+        state["_last_wall"] = now
+    else:
+        # Keep wall in sync for fallback callers
+        state["_last_wall"] = time.time()
+        dt = float(np.clip(float(dt), 0.005, 0.08))
+
+    tau = float(CAMERA_TAU)
+    sigma_v = 0.42 * float(intensity) * (float(intensity)/5.0)**0.25
+    vx = float(state.get("vx", 0.0))
+    vy = float(state.get("vy", 0.0))
+    alpha = math.exp(-float(dt) / float(tau))
+    diff_scale = float(sigma_v) * math.sqrt(max(0.0, 1 - alpha**2))
+    vx = vx * alpha + float(np.random.normal(0, 1)) * diff_scale
+    vy = vy * alpha + float(np.random.normal(0, 1)) * diff_scale
+    vmax = 2.2 * float(intensity) + 1.5
+    vx = float(np.clip(vx, -vmax, vmax))
+    vy = float(np.clip(vy, -vmax, vmax))
+    state["vx"], state["vy"] = vx, vy
+    dpan = vx * float(dt)
+    dtilt = vy * float(dt)
+    bias = float(state.get("bias_pan", 0.0) + float(np.random.normal(0, 0.012 * float(intensity) * math.sqrt(float(dt)))))
+    bias2 = float(state.get("bias_tilt", 0.0) + float(np.random.normal(0, 0.012 * float(intensity) * math.sqrt(float(dt)))))
+    bias = float(np.clip(bias, -0.4*float(intensity), 0.4*float(intensity)))
+    bias2 = float(np.clip(bias2, -0.4*float(intensity), 0.4*float(intensity)))
+    state["bias_pan"] = bias; state["bias_tilt"] = bias2
+    dpan += bias * float(dt) * 0.3
+    dtilt += bias2 * float(dt) * 0.3
+    return pan + dpan, tilt + dtilt
