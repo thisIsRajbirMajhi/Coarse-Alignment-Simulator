@@ -1986,11 +1986,15 @@ class MainWindow(StateMixin, QMainWindow):
         return rgb
 
     def _update_stats(self, tracking_error_px):
-        # Delegate dashboard metrics to DashboardPanel (modular)
+        # Delegate to intuitive DashboardPanel (health header + progress, angular mrad)
         s = self.perf.summary()
         try:
             if hasattr(self, "dashboard_panel"):
-                self.dashboard_panel.update_from_summary(s, self.tracker.status.value, tracking_error_px)
+                cam_scale = None
+                try:
+                    cam_scale = float(getattr(getattr(self, "camera", None).config, "pixel_scale_mrad", None))
+                except: pass
+                self.dashboard_panel.update_from_summary(s, self.tracker.status.value, tracking_error_px, camera_scale_mrad=cam_scale)
             else:
                 # Fallback legacy direct label updates
                 for k in ["fps","simulation_duration_s","acquisition_time_s","avg_processing_time_ms","avg_tracking_error_px","max_tracking_error_px","tracking_error_pct","lock_retention_rate_pct","acquisitions","detection_rate_pct","detection_time_s","searching_rate_pct","searching_time_s","center_hit_rate_pct","center_hit_time_s"]:
