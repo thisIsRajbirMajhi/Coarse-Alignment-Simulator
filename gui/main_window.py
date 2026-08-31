@@ -326,117 +326,97 @@ class MainWindow(StateMixin, QMainWindow):
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(12)
 
-        # ——— Left: single separate dynamic & responsive video window (side-by-side) ———
-        video_container = QFrame()
-        video_container.setStyleSheet("QFrame { background: transparent; border: none; }")
-        vc_layout = QVBoxLayout(video_container)
-        vc_layout.setContentsMargins(0, 0, 0, 0)
-        vc_layout.setSpacing(10)
+        main_splitter = QSplitter(Qt.Horizontal)
+        main_splitter.setHandleWidth(6)
+        main_splitter.setChildrenCollapsible(False)
 
-        # Splitter horizontal — FOV + God's-eye side-by-side (responsive)
-        splitter = QSplitter(Qt.Horizontal)
-        splitter.setHandleWidth(6)
-        splitter.setChildrenCollapsible(False)
+        # ——— Left: Videos and Graphs (HUD) ———
+        left_panel = QWidget()
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(10)
+
+        # Videos (FOV & God's Eye)
+        video_container = QWidget()
+        video_layout = QHBoxLayout(video_container)
+        video_layout.setContentsMargins(0, 0, 0, 0)
+        video_layout.setSpacing(10)
+        video_splitter = QSplitter(Qt.Horizontal)
+        video_splitter.setHandleWidth(6)
 
         # FOV panel
         fov_frame = QFrame()
-        fov_frame.setStyleSheet("QFrame { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; }")
         fov_layout = QVBoxLayout(fov_frame)
-        fov_layout.setContentsMargins(10, 10, 10, 10)
+        fov_layout.setContentsMargins(8, 8, 8, 8)
         fov_layout.setSpacing(8)
         fov_hdr = QHBoxLayout()
-        fov_hdr.setSpacing(8)
-        fov_title = QLabel("▣ Camera FOV ")
-        fov_title.setStyleSheet("color: #0f172a; font-weight: 600;")
+        fov_title = QLabel("▣ Camera FOV")
         fov_hdr.addWidget(fov_title)
         self.fov_res_lbl = QLabel(f"{self._fov_size[0]}×{self._fov_size[1]}")
-        self.fov_res_lbl.setStyleSheet("color:#64748b; font-size:10px; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:4px; padding:2px 6px;")
         fov_hdr.addStretch(); fov_hdr.addWidget(self.fov_res_lbl)
         fov_layout.addLayout(fov_hdr)
         self.viewport_label = QLabel()
         self.viewport_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.viewport_label.setMinimumSize(320, 200)
         self.viewport_label.setAlignment(Qt.AlignCenter)
-        self.viewport_label.setStyleSheet("background: #06080c; border: 1px solid #334155; border-radius: 8px;")
         self.viewport_label.setScaledContents(False)
         fov_layout.addWidget(self.viewport_label, 1)
-        splitter.addWidget(fov_frame)
+        video_splitter.addWidget(fov_frame)
 
         # God's-eye panel
         god_frame = QFrame()
-        god_frame.setStyleSheet("QFrame { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; }")
         god_layout = QVBoxLayout(god_frame)
-        god_layout.setContentsMargins(10, 10, 10, 10)
+        god_layout.setContentsMargins(8, 8, 8, 8)
         god_layout.setSpacing(8)
         god_hdr = QHBoxLayout()
-        god_hdr.setSpacing(8)
         god_title = QLabel("◉ God's-Eye")
-        god_title.setStyleSheet("color: #0f172a; font-weight: 600;")
         god_hdr.addWidget(god_title)
         self.god_res_lbl = QLabel(f"{self._scene_size[0]}×{self._scene_size[1]}")
-        self.god_res_lbl.setStyleSheet("color:#64748b; font-size:10px; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:4px; padding:2px 6px;")
         god_hdr.addStretch(); god_hdr.addWidget(self.god_res_lbl)
         god_layout.addLayout(god_hdr)
         self.minimap_label = QLabel()
         self.minimap_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.minimap_label.setMinimumSize(320, 200)
         self.minimap_label.setAlignment(Qt.AlignCenter)
-        self.minimap_label.setStyleSheet("background: #06080c; border: 1px solid #334155; border-radius: 8px;")
         god_layout.addWidget(self.minimap_label, 1)
-        splitter.addWidget(god_frame)
+        video_splitter.addWidget(god_frame)
 
-        splitter.setSizes([520, 520])
-        vc_layout.addWidget(splitter, 1)
+        video_layout.addWidget(video_splitter)
+        left_layout.addWidget(video_container, 1)
 
-        # Footer stats inside video window for at-a-glance
+        # Footer stats
         footer = QHBoxLayout()
         footer.setSpacing(8)
-        footer.setContentsMargins(4, 6, 4, 2)
         self.lock_dot = QLabel("●")
-        self.lock_dot.setStyleSheet("color: #64748b; font-size: 14px;")
         footer.addWidget(self.lock_dot)
         self.footer_lock = QLabel("SEARCHING")
-        self.footer_lock.setStyleSheet("color: #475569; font-weight:700; font-size:11px;")
         footer.addWidget(self.footer_lock)
         footer.addSpacing(16)
         self.footer_fps = QLabel("FPS —")
-        self.footer_fps.setStyleSheet("color:#475569; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:6px; padding:4px 8px;")
         footer.addWidget(self.footer_fps)
         footer.addStretch()
         self.footer_info = QLabel("Pan/Tilt —  •  Error —")
-        self.footer_info.setStyleSheet("color:#64748b; font-size:10px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:4px 8px;")
         footer.addWidget(self.footer_info)
-        vc_layout.addLayout(footer)
+        left_layout.addLayout(footer)
 
-        # Keep reference
-        self.video_splitter = splitter
-        self.video_container = video_container
+        main_splitter.addWidget(left_panel)
 
-        # Build Control Panel + Live Dashboard as separate window (distinguished sections)
-        # We build the right-side content as a standalone widget that will be hosted
-        # in ControlDashboardWindow. All groups are clearly distinguished with icons/tabs.
+        # ——— Right: Control Panels ———
         self._build_control_panel_widget()
+        
+        right_scroll = QScrollArea()
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setWidget(self._control_widget)
+        right_scroll.setMinimumWidth(400)
+        
+        main_splitter.addWidget(right_scroll)
+        main_splitter.setSizes([900, 400])
 
-        # Assemble root — Main Window is now VIDEO ONLY (controls live in separate window)
-        # Keep a top bar with button to open controls
-        top_bar = QHBoxLayout()
-        top_bar.setSpacing(8)
-        open_ctrl_btn = QPushButton("Open Control Panel")
-        open_ctrl_btn.setMinimumHeight(30)
-        open_ctrl_btn.setStyleSheet("background:#2563eb; color:white; font-weight:700; border:none; border-radius:8px; padding:6px 12px;")
-        open_ctrl_btn.clicked.connect(self._show_control_panel)
-        top_bar.addWidget(open_ctrl_btn)
-        top_bar.addStretch()
-        vc_layout.insertLayout(0, top_bar)
+        root.addWidget(main_splitter)
 
-        root.addWidget(video_container, 1)
-
-        # Create and show separate control window
-        self.control_window = ControlDashboardWindow(self, self._control_widget)
-        self.control_window.show()
-
-        # keep old attribute for compatibility (some code expects self.stat_labels etc. still on MainWindow — they are, because widget was built with MainWindow as logical owner)
-        self.main_splitter = None
+        self.control_window = None
+        self.control_dock = None
+        self.main_splitter = main_splitter
+        self.video_splitter = video_splitter
+        self.video_container = video_container
 
         self._target_speed = 60
         self._det_thresh = 200
@@ -466,16 +446,14 @@ class MainWindow(StateMixin, QMainWindow):
 
         # Title
         title = QLabel("Control Panel")
-        title.setStyleSheet("color:#0f172a; font-weight:800; font-size:13px; padding:6px; background:#eff6ff; border:1px solid #dbeafe; border-radius:8px;")
         title.setAlignment(Qt.AlignCenter)
         cw_layout.addWidget(title)
 
         hint = QLabel("All changes are HOT reloaded.")
-        hint.setWordWrap(True); hint.setStyleSheet("color:#64748b; font-size:10px; font-style:italic; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:6px; padding:4px;")
+        hint.setWordWrap(True)
         cw_layout.addWidget(hint)
 
         tabs = QTabWidget()
-        tabs.setStyleSheet("QTabWidget::pane { border: 1px solid #e2e8f0; border-radius: 8px; background: white; }")
         cw_layout.addWidget(tabs, 1)
 
         # ── Presets Tab — One-click entire software + auto-run (curated test cases) ──
@@ -2003,6 +1981,7 @@ class MainWindow(StateMixin, QMainWindow):
                 if "lock_status" in getattr(self, "stat_labels", {}):
                     self.stat_labels["lock_status"].setText(self.tracker.status.value)
         except: pass
+
         # Footer + statusBar — now with angular units (px/mrad/µrad) via camera scale + overlay
         try:
             col={"tracking":"#22c55e","acquired":"#06b6d4","lost":"#ef4444","searching":"#64748b"}[self.tracker.status.value]

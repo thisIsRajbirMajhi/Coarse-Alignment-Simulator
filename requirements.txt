@@ -4,3 +4,4 @@ PyQt5==5.15.11
 # Optional: for packaging and testing
 # pytest>=8.0
 # pyinstaller>=6.0
+pyqtgraph==0.14.0
