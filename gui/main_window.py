@@ -126,6 +126,13 @@ class MainWindow(StateMixin, QMainWindow):
         sb.showMessage("Ready — configure scene/viewport (up to 5000×5000) then Start")
         self.setStatusBar(sb)
 
+        # Initial dashboard populate so no field appears empty ("-" -> "0.00 S")
+        try:
+            if hasattr(self, "dashboard_panel"):
+                self.dashboard_panel.update_from_summary(self.perf.summary(), self.tracker.status.value, None, camera_scale_mrad=getattr(getattr(self, "camera", None), "config", None) and getattr(self.camera.config, "pixel_scale_mrad", 0.035))
+        except Exception:
+            pass
+
     # ---------- simulation setup ----------
     def _build_simulation(self):
         speed = getattr(self, "_target_speed", 100)
@@ -1793,9 +1800,31 @@ class MainWindow(StateMixin, QMainWindow):
             self._camera_drift_state.clear()
         except Exception:
             pass
-        for l in self.stat_labels.values(): l.setText("-")
+        # Proper reset: show initial 0 values with correct units (not "-") so no field appears empty
+        try:
+            if hasattr(self, "dashboard_panel") and hasattr(self.dashboard_panel, "update_from_summary"):
+                # tracker is newly created via _build_simulation, use its status
+                init_status = getattr(getattr(self, "tracker", None), "status", None)
+                init_status = init_status.value if hasattr(init_status, "value") else "searching"
+                self.dashboard_panel.update_from_summary(self.perf.summary(), init_status, None, camera_scale_mrad=getattr(getattr(self, "camera", None), "config", None) and getattr(self.camera.config, "pixel_scale_mrad", 0.035))
+        except Exception:
+            # Fallback: set labels to 0 with units
+            for lbl in self.stat_labels.values():
+                try:
+                    lbl.setText("0.0")
+                except: pass
         self.footer_lock.setText("SEARCHING"); self.lock_dot.setStyleSheet("color:#64748b; font-size:14px;")
         self.viewport_label.clear(); self.minimap_label.clear()
+        # Force repaint for immediate visibility
+        try:
+            if hasattr(self, "dashboard_panel"):
+                self.dashboard_panel.repaint()
+                if hasattr(self.dashboard_panel, "graph"):
+                    self.dashboard_panel.graph.plot.repaint()
+            if hasattr(self, "dashboard_window"):
+                self.dashboard_window.repaint()
+        except Exception:
+            pass
         self.statusBar().showMessage("Reset — ready", 2000)
     def _export_log(self):
         path,_=QFileDialog.getSaveFileName(self,"Export performance log","performance_log.csv","CSV (*.csv);;JSON (*.json)")
@@ -1945,9 +1974,27 @@ class MainWindow(StateMixin, QMainWindow):
         self.perf.log_frame(is_locked, tracking_error_px, time.time()-frame_start,
                             detected=detected_primary, hitbox_hit=hitbox_hit, center_hit=center_hit,
                             lock_state=self.tracker.status.value)
-        self._render_viewport(fov_frame, estimate, all_dets)
-        self._render_minimap(scene_frame)
-        self._update_stats(tracking_error_px)
+        # Rendering must not block dashboard — ensure _update_stats always runs
+        try:
+            self._render_viewport(fov_frame, estimate, all_dets)
+        except Exception:
+            pass
+        try:
+            self._render_minimap(scene_frame)
+        except Exception:
+            pass
+        try:
+            self._update_stats(tracking_error_px)
+        except Exception:
+            pass
+        # Force dashboard repaint for real-time visibility
+        try:
+            if hasattr(self, "dashboard_panel"):
+                self.dashboard_panel.repaint()
+                if hasattr(self.dashboard_panel, "graph"):
+                    self.dashboard_panel.graph.plot.repaint()
+        except Exception:
+            pass
 
     # ========================================================
     # SECTION: Rendering — delegated to gui.core.renderer.Renderer

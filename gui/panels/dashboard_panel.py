@@ -554,13 +554,24 @@ class DashboardPanel(QWidget):
         except Exception:
             pass
 
-        # --- Dashboard group — proper units per spec ---
+        # --- Dashboard group — proper units per spec, always display value (no empty) ---
         fps = float(summary.get("fps", 0) or 0)
         set_val("fps", f"{fps:.1f} FPS", _color_for_fps(fps))
         dur = summary.get("simulation_duration_s")
-        set_val("simulation_duration_s", f"{float(dur):.2f} S" if dur is not None else "-", "#0f172a")
+        # Always show S suffix, even when 0
+        try:
+            set_val("simulation_duration_s", f"{float(dur):.2f} S" if dur is not None else "0.00 S", "#0f172a")
+        except Exception:
+            set_val("simulation_duration_s", "0.00 S")
         acq = summary.get("acquisition_time_s")
-        set_val("acquisition_time_s", f"{float(acq):.2f} S" if acq is not None else "—", "#0f172a" if acq else "#64748b")
+        if acq is not None:
+            try:
+                set_val("acquisition_time_s", f"{float(acq):.2f} S", "#0f172a")
+            except Exception:
+                set_val("acquisition_time_s", "— S", "#64748b")
+        else:
+            # Proper unit even when no acquisition yet — show 0.00 S with muted color, not empty
+            set_val("acquisition_time_s", "0.00 S", "#64748b")
         # Proc time: image wants (S) — convert ms -> s, keep 4 decimals for precision
         avg_ms = summary.get("avg_processing_time_ms")
         proc_s_val = summary.get("proc_time_s", None)  # seconds from metrics if available
@@ -573,7 +584,7 @@ class DashboardPanel(QWidget):
                 if "avg_processing_time_ms" in self.stat_labels and avg_ms is not None:
                     self.stat_labels["avg_processing_time_ms"].setText(f"{float(avg_ms):.1f} ms")
             except Exception:
-                set_val("proc_time_s", str(proc_s_val) + " S" if proc_s_val is not None else "-")
+                set_val("proc_time_s", "0.0000 S")
         elif avg_ms is not None:
             try:
                 s_val = float(avg_ms) / 1000.0
@@ -583,9 +594,9 @@ class DashboardPanel(QWidget):
                 if "avg_processing_time_ms" in self.stat_labels:
                     self.stat_labels["avg_processing_time_ms"].setText(f"{float(avg_ms):.1f} ms")
             except Exception:
-                set_val("proc_time_s", str(avg_ms))
+                set_val("proc_time_s", "0.0000 S")
         else:
-            set_val("proc_time_s", "-")
+            set_val("proc_time_s", "0.0000 S")
 
         # Legacy mirror: acquisition_time_s already, keep.
 
@@ -605,42 +616,44 @@ class DashboardPanel(QWidget):
                 max_pct = _error_pct_from_px(float(max_px))
             except Exception:
                 max_pct = 0
-        # Display as "34.5% (5.2 px)" for informativeness
+        # Display as "34.5% (5.2 px)" for informativeness — always show, even when 0
         if avg_px is not None:
             try:
-                txt = f"{float(avg_pct):.1f}% ({float(avg_px):.1f} px)"
-                # Also offer mrad if scale available
+                txt = f"{float(avg_pct):.1f} % ({float(avg_px):.1f} px)"
                 if camera_scale_mrad is not None:
                     mrad = float(avg_px) * float(camera_scale_mrad)
-                    txt = f"{float(avg_pct):.1f}% ({float(avg_px):.1f} px · {mrad:.2f} mrad)"
+                    txt = f"{float(avg_pct):.1f} % ({float(avg_px):.1f} px · {mrad:.2f} mrad)"
                 set_val("avg_tracking_error_pct", txt, _color_for_error(float(avg_px)))
-                # Keep legacy tracking_error_pct for tests
-                if "tracking_error_pct" in self.stat_labels:
-                    # tracking_error_pct in summary is avg/max*100, keep that numeric too
-                    legacy = summary.get("tracking_error_pct")
-                    if legacy is not None and "tracking_error_pct" not in ("avg_tracking_error_pct", "max_tracking_error_pct"):
-                        # Don't overwrite new; legacy already mapped if needed
-                        pass
             except Exception:
-                set_val("avg_tracking_error_pct", f"{avg_pct:.1f}%" if avg_pct is not None else "-")
+                set_val("avg_tracking_error_pct", f"{float(avg_pct):.1f} %" if avg_pct is not None else "0.0 % (0.0 px)")
+        else:
+            # No error yet — show 0.0% properly, not empty
+            try:
+                set_val("avg_tracking_error_pct", f"{float(avg_pct):.1f} % (0.0 px)" if avg_pct is not None else "0.0 % (0.0 px)", "#22c55e")
+            except Exception:
+                set_val("avg_tracking_error_pct", "0.0 % (0.0 px)", "#22c55e")
         if max_px is not None:
             try:
-                txt = f"{float(max_pct):.1f}% ({float(max_px):.1f} px)"
+                txt = f"{float(max_pct):.1f} % ({float(max_px):.1f} px)"
                 if camera_scale_mrad is not None:
                     mrad = float(max_px) * float(camera_scale_mrad)
-                    txt = f"{float(max_pct):.1f}% ({float(max_px):.1f} px · {mrad:.2f} mrad)"
+                    txt = f"{float(max_pct):.1f} % ({float(max_px):.1f} px · {mrad:.2f} mrad)"
                 set_val("max_tracking_error_pct", txt, _color_for_error(float(max_px)))
             except Exception:
-                set_val("max_tracking_error_pct", f"{max_pct:.1f}%" if max_pct is not None else "-")
-        # Keep legacy px labels for compat
-        if "avg_tracking_error_px" in self.stat_labels and avg_px is not None:
-            self.stat_labels["avg_tracking_error_px"].setText(str(avg_px))
-        if "max_tracking_error_px" in self.stat_labels and max_px is not None:
-            self.stat_labels["max_tracking_error_px"].setText(str(max_px))
+                set_val("max_tracking_error_pct", f"{float(max_pct):.1f} %" if max_pct is not None else "0.0 % (0.0 px)")
+        else:
+            set_val("max_tracking_error_pct", f"{float(max_pct):.1f} % (0.0 px)" if max_pct is not None else "0.0 % (0.0 px)", "#22c55e")
+        # Keep legacy px labels for compat — always display with proper unit
+        if "avg_tracking_error_px" in self.stat_labels:
+            self.stat_labels["avg_tracking_error_px"].setText(f"{float(avg_px):.1f} px" if avg_px is not None else "0.0 px")
+        if "max_tracking_error_px" in self.stat_labels:
+            self.stat_labels["max_tracking_error_px"].setText(f"{float(max_px):.1f} px" if max_px is not None else "0.0 px")
         if "tracking_error_pct" in self.stat_labels:
             v = summary.get("tracking_error_pct")
             if v is not None:
-                self.stat_labels["tracking_error_pct"].setText(str(v))
+                self.stat_labels["tracking_error_pct"].setText(f"{float(v):.1f} %")
+            else:
+                self.stat_labels["tracking_error_pct"].setText("0.0 %")
 
         # --- Locking — proper units: Status (enum), Retention (%), Acquisitions (count) ---
         set_val("lock_status", status.upper(), color, "#f1f5f9")
@@ -650,25 +663,22 @@ class DashboardPanel(QWidget):
         # Proper count unit: integer count
         set_val("acquisitions", f"{int(acqs)}" if acqs is not None else "0")
 
-        # --- Detection / Searching / Center — proper units: Rate (%) Time (S) ---
+        # --- Detection / Searching / Center — proper units: Rate (%) Time (S) — always display ---
         for key in ("detection_rate_pct", "searching_rate_pct", "center_hit_rate_pct"):
             v = summary.get(key)
-            if v is not None:
-                try:
-                    pct = float(v)
-                    set_val(key, f"{pct:.1f} %", _color_for_rate(pct))
-                except Exception:
-                    set_val(key, str(v) + " %" if v is not None else "-")
+            try:
+                pct = float(v) if v is not None else 0.0
+                # When v is None, show 0.0 % instead of empty
+                col = _color_for_rate(pct) if key != "searching_rate_pct" else (_color_for_error_pct(pct) if pct>30 else _color_for_rate(100-pct))
+                set_val(key, f"{pct:.1f} %", col)
+            except Exception:
+                set_val(key, "0.0 %")
         for key in ("detection_time_s", "searching_time_s", "center_hit_time_s"):
             v = summary.get(key)
-            # Proper S suffix per spec
-            if v is not None:
-                try:
-                    set_val(key, f"{float(v):.2f} S")
-                except Exception:
-                    set_val(key, str(v) + " S")
-            else:
-                set_val(key, "-")
+            try:
+                set_val(key, f"{float(v):.2f} S" if v is not None else "0.00 S")
+            except Exception:
+                set_val(key, "0.00 S")
 
         # Progress bars — intuitive colors
         for k, bar in self.progress_bars.items():
