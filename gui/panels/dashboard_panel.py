@@ -5,7 +5,7 @@ Public API: DashboardPanel, GraphPanel
 Layout (per spec image, intuitive & informative):
   LEFT (metrics):
     - Dashboard: FPS | Duration (S) | Acquisition (S) | Proc. Time (S)
-    - Tracking: Average Tracking Error (%) | Maximum Tracking Error (%)
+    - Tracking: Average Tracking Error | Maximum Tracking Error (px / mrad, no %)
     - Locking: Status | Retention Rate (%) | Total Acquisitions
     - Detection / Searching / Center: Rate (%) | Time (S) for each (6 rows)
   RIGHT (graph):
@@ -13,6 +13,7 @@ Layout (per spec image, intuitive & informative):
     - Complete picture: ViewBox autoRange, downsample, legend, axis labels, grid, complete history without trimming.
 Notes: Modular rebuild 2026-09-01 — sections as helpers, GraphPanel encapsulated, tooltips, color-coded status.
        HOT via update_from_summary(summary, tracker_status, error_px, camera_scale). Keeps stat_labels for backward compat.
+       2026-09-01 update: System Health card removed, tracking error % unit removed (px/mrad only).
 """
 
 from collections import deque
@@ -25,7 +26,6 @@ from PyQt5.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
-    QProgressBar,
     QScrollArea,
     QSplitter,
     QVBoxLayout,
@@ -77,10 +77,8 @@ def _status_color(s: str) -> str:
     return STATUS_COLOR.get(s.lower(), "#64748b")
 
 def _progress_style(color: str) -> str:
-    return (
-        f"QProgressBar {{ border:1px solid #e2e8f0; border-radius:4px; background:#f1f5f9; }}"
-        f" QProgressBar::chunk {{ background:{color}; border-radius:3px; }}"
-    )
+    # Kept for backward compat — progress bars removed per user request
+    return ""
 
 def _value_style(color: str = "#0f172a", bg: str = "#ffffff") -> str:
     return (
@@ -256,11 +254,11 @@ class DashboardPanel(QWidget):
     Modular dashboard — 4 spec sections + responsive graph.
     Sections per image:
       1) Dashboard: FPS, Duration (S), Acquisition (S), Proc. Time (S)
-      2) Tracking: Average Tracking Error (%), Maximum Tracking Error (%)
+      2) Tracking: Average Tracking Error | Maximum Tracking Error (px / mrad, no %)
       3) Locking: Status, Retention Rate (%), Total Acquisitions
       4) Detection / Searching / Center: Rate (%), Time (S) ×3
-    Intuitive cues: status dot, progress bars (green>80 yellow>50 red), error inverted, FPS thresholds.
-    Informative: tooltips, units in labels, values rounded, progress + numeric.
+    Intuitive cues: status dot (green/yellow/red), error inverted, FPS thresholds.
+    Informative: tooltips, units in labels, values rounded, numeric only (progress bars removed, health removed, % removed from tracking error).
     Modular: each section built via _make_section helper; GraphPanel separate.
     """
 
@@ -269,7 +267,25 @@ class DashboardPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.stat_labels: dict[str, QLabel] = {}
-        self.progress_bars: dict[str, QProgressBar] = {}
+        # Progress bars removed — keep dict-like compat that returns dummy bar for any key (no visual)
+        class _CompatProgressDict(dict):
+            def __getitem__(self, key):
+                if key in self:
+                    return super().__getitem__(key)
+                # return dummy no-op bar for compat
+                class _Dummy:
+                    def setValue(self, v): pass
+                    def setStyleSheet(self, s): pass
+                    def setRange(self, a, b): pass
+                    def setFixedHeight(self, h): pass
+                    def setTextVisible(self, v): pass
+                    def setFormat(self, s): pass
+                    def value(self): return 0
+                dummy = _Dummy()
+                # cache it so future setValue doesn't recreate
+                super().__setitem__(key, dummy)
+                return dummy
+        self.progress_bars: dict = _CompatProgressDict()  # type: ignore
         self.graph = GraphPanel(self)
         # Mirror deques for backward compat with existing tests that inspect time_data etc.
         self.time_data = self.graph.time
@@ -293,7 +309,7 @@ class DashboardPanel(QWidget):
 
     # Backward-compat helpers expected by tests
     def _progress_style(self, color: str) -> str:
-        return _progress_style(color)
+        return ""
 
     def _color_for_rate(self, pct: float) -> str:
         return _color_for_rate(pct)
@@ -341,9 +357,29 @@ class DashboardPanel(QWidget):
         sub.setStyleSheet("color:#64748b; font-size:10px; background:transparent;")
         metrics_layout.addWidget(sub)
 
-        # Health strip — at-a-glance (retained for intuitiveness, not in image but informative)
-        self.health_card = self._build_health_header()
-        metrics_layout.addWidget(self.health_card)
+        # System Health — Live section removed per user request
+        # Keep dummy attributes for backward compat (hidden, not added to layout)
+        self.health_card = QFrame()
+        self.health_card.hide()
+        self.health_lock_dot = QLabel("●")
+        self.health_lock_dot.hide()
+        self.health_lock_text = QLabel("SEARCHING")
+        self.health_lock_text.hide()
+        self.health_retention_val = QLabel("—")
+        self.health_retention_val.hide()
+        self.health_retention_bar = self.health_retention_val
+        try:
+            self.health_retention_bar.setValue = lambda v: None  # type: ignore
+            self.health_retention_bar.setRange = lambda a, b: None  # type: ignore
+            self.health_retention_bar.setTextVisible = lambda v: None  # type: ignore
+            self.health_retention_bar.setFormat = lambda s: None  # type: ignore
+            self.health_retention_bar.setFixedHeight = lambda h: None  # type: ignore
+        except Exception:
+            pass
+        self.health_fps = QLabel("FPS —")
+        self.health_fps.hide()
+        self.health_error = QLabel("Err —")
+        self.health_error.hide()
 
         # 1) Dashboard (FPS, Duration, Acquisition, Proc Time)
         self._make_section(metrics_layout, "Dashboard", [
@@ -353,10 +389,10 @@ class DashboardPanel(QWidget):
             ("Proc. Time (S)", "proc_time_s", "⚙ Proc.", "Average per-frame processing time (s) — informative, <33ms = real-time", False, None),
         ])
 
-        # 2) Tracking — avg/max error as % (intuitive) plus px tooltip
+        # 2) Tracking — avg/max error as px / mrad ( % unit removed per user request)
         self._make_section(metrics_layout, "Tracking", [
-            ("Average Tracking Error (%)", "avg_tracking_error_pct", "🎯 Avg Err", "Average error mapped to % where 15px =100% (green<25 yellow<60 red)", True, "avg_tracking_error_pct"),
-            ("Maximum Tracking Error (%)", "max_tracking_error_pct", "📈 Max Err", "Peak error % (15px=100%) — complete picture of worst case", True, "max_tracking_error_pct"),
+            ("Average Tracking Error", "avg_tracking_error_pct", "🎯 Avg Err", "Average tracking error (px / mrad) — green<5px yellow<15px red", True, "avg_tracking_error_pct"),
+            ("Maximum Tracking Error", "max_tracking_error_pct", "📈 Max Err", "Peak tracking error (px / mrad) — complete picture of worst case", True, "max_tracking_error_pct"),
         ])
 
         # 3) Locking
@@ -397,11 +433,7 @@ class DashboardPanel(QWidget):
         splitter.setStretchFactor(1, 1)
 
         # Backward-compat aliases for legacy tests / MainWindow expectations
-        try:
-            if "avg_tracking_error_pct" in self.progress_bars and "tracking_error_pct" not in self.progress_bars:
-                self.progress_bars["tracking_error_pct"] = self.progress_bars["avg_tracking_error_pct"]
-        except Exception:
-            pass
+        # progress_bars removed — no alias needed
         for _k in ("tracking_error_pct", "avg_tracking_error_px", "max_tracking_error_px"):
             if _k not in self.stat_labels:
                 _lbl = QLabel("-")
@@ -433,17 +465,22 @@ class DashboardPanel(QWidget):
         self.health_lock_text = QLabel("SEARCHING")
         self.health_lock_text.setStyleSheet("color:#64748b; font-weight:800; font-size:11px; background:transparent; border:none;")
         grid.addWidget(self.health_lock_text, 1, 1)
-        self.health_retention_bar = QProgressBar()
-        self.health_retention_bar.setRange(0, 100)
-        self.health_retention_bar.setValue(0)
-        self.health_retention_bar.setTextVisible(True)
-        self.health_retention_bar.setFormat("%p% retention")
-        self.health_retention_bar.setFixedHeight(16)
-        self.health_retention_bar.setStyleSheet(_progress_style("#22c55e"))
-        grid.addWidget(self.health_retention_bar, 1, 2)
+        # Retention bar removed — show value as text only
         self.health_retention_val = QLabel("—%")
-        self.health_retention_val.setStyleSheet("color:#0f172a; font-weight:700; font-size:10px; background:transparent; border:none;")
-        grid.addWidget(self.health_retention_val, 1, 3)
+        self.health_retention_val.setStyleSheet("color:#0f172a; font-weight:700; font-size:11px; background:#ffffff; border:1px solid #e2e8f0; border-radius:6px; padding:3px 6px;")
+        self.health_retention_val.setAlignment(Qt.AlignCenter)
+        grid.addWidget(self.health_retention_val, 1, 2, 1, 2)
+        # Keep dummy attribute for backward compat (no visual bar) — add QProgressBar-like no-op API
+        self.health_retention_bar = self.health_retention_val
+        # Add no-op QProgressBar API to the QLabel so external setValue calls don't crash
+        try:
+            self.health_retention_bar.setValue = lambda v: None  # type: ignore
+            self.health_retention_bar.setRange = lambda a, b: None  # type: ignore
+            self.health_retention_bar.setTextVisible = lambda v: None  # type: ignore
+            self.health_retention_bar.setFormat = lambda s: None  # type: ignore
+            self.health_retention_bar.setFixedHeight = lambda h: None  # type: ignore
+        except Exception:
+            pass
         self.health_fps = QLabel("FPS —")
         self.health_fps.setStyleSheet("color:#334155; font-size:11px; font-weight:600; background:#ffffff; border:1px solid #e2e8f0; border-radius:6px; padding:3px 6px;")
         self.health_fps.setAlignment(Qt.AlignCenter)
@@ -465,9 +502,8 @@ class DashboardPanel(QWidget):
         grid.setContentsMargins(10, 14, 10, 10)
         grid.setHorizontalSpacing(10)
         grid.setVerticalSpacing(6)
-        grid.setColumnStretch(0, 0)
+        grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
-        grid.setColumnStretch(2, 0)
         for i, (label, key, icon_label, tooltip, with_progress, progress_key) in enumerate(rows):
             lk = QLabel(label)
             lk.setStyleSheet("color:#475569; font-size:11px; font-weight:600;")
@@ -486,21 +522,8 @@ class DashboardPanel(QWidget):
                 val.setStyleSheet(_value_style())
             self.stat_labels[key] = val
             grid.addWidget(val, i, 1)
+            # Progress bars removed — with_progress ignored (kept in tuple for compat)
 
-            if with_progress:
-                bar = QProgressBar()
-                bar.setRange(0, 100)
-                bar.setValue(0)
-                bar.setTextVisible(False)
-                bar.setFixedHeight(9)
-                bar.setStyleSheet(_progress_style("#64748b"))
-                bar.setToolTip(tooltip)
-                grid.addWidget(bar, i, 2)
-                # Store by progress_key if given else by key
-                store_key = progress_key if progress_key else key
-                self.progress_bars[store_key] = bar
-            # Special alias: for backward compat, also expose fps etc without _pct suffix where needed
-            # Keep stat_labels for legacy keys already stored above.
         layout.addWidget(box)
         # Keep aliases for legacy direct access
         # Ensure expected legacy keys exist even if section uses new keys:
@@ -512,7 +535,7 @@ class DashboardPanel(QWidget):
     # ============================================================
 
     def update_from_summary(self, summary: dict, tracker_status: str, tracking_error_px: float | None = None, camera_scale_mrad: float | None = None) -> None:
-        """Update all labels, progress, and graph from PerformanceLogger summary. Real-time at ~30 Hz."""
+        """Update all labels and graph from PerformanceLogger summary. Real-time at ~30 Hz."""
         status = str(tracker_status)
         color = _status_color(status)
 
@@ -534,9 +557,8 @@ class DashboardPanel(QWidget):
                 self.health_lock_text.setText(status.upper())
                 self.health_lock_text.setStyleSheet(f"color:{color}; font-weight:800; font-size:11px; background:transparent; border:none;")
                 retention_h = float(summary.get("lock_retention_rate_pct", 0) or 0)
-                self.health_retention_bar.setValue(int(max(0, min(100, retention_h))))
-                self.health_retention_bar.setStyleSheet(_progress_style(_color_for_rate(retention_h)))
                 self.health_retention_val.setText(f"{retention_h:.1f}%")
+                self.health_retention_val.setStyleSheet(f"color:{_color_for_rate(retention_h)}; font-weight:700; font-size:11px; background:#ffffff; border:1px solid #e2e8f0; border-radius:6px; padding:3px 6px;")
                 fps_h = float(summary.get("fps", 0) or 0)
                 self.health_fps.setText(f"FPS {fps_h:.1f}")
                 self.health_fps.setStyleSheet(f"color:{_color_for_fps(fps_h)}; font-weight:700; font-size:11px; background:#ffffff; border:1px solid #e2e8f0; border-radius:6px; padding:3px 6px;")
@@ -600,10 +622,10 @@ class DashboardPanel(QWidget):
 
         # Legacy mirror: acquisition_time_s already, keep.
 
-        # --- Tracking: avg/max error % (intuitive 15px=100) ---
+        # --- Tracking: avg/max error (px / mrad — % unit removed) ---
         avg_px = summary.get("avg_tracking_error_px")
         max_px = summary.get("max_tracking_error_px")
-        # Compute % for display if summary doesn't provide _pct
+        # Compute % for legacy compat/graph but not displayed
         avg_pct = summary.get("avg_tracking_error_pct")
         max_pct = summary.get("max_tracking_error_pct")
         if avg_pct is None and avg_px is not None:
@@ -616,33 +638,47 @@ class DashboardPanel(QWidget):
                 max_pct = _error_pct_from_px(float(max_px))
             except Exception:
                 max_pct = 0
-        # Display as "34.5% (5.2 px)" for informativeness — always show, even when 0
+        # Display as "5.2 px" or "5.2 px · 0.18 mrad" — no % per user request
         if avg_px is not None:
             try:
-                txt = f"{float(avg_pct):.1f} % ({float(avg_px):.1f} px)"
+                txt = f"{float(avg_px):.1f} px"
                 if camera_scale_mrad is not None:
-                    mrad = float(avg_px) * float(camera_scale_mrad)
-                    txt = f"{float(avg_pct):.1f} % ({float(avg_px):.1f} px · {mrad:.2f} mrad)"
+                    try:
+                        mrad = float(avg_px) * float(camera_scale_mrad)
+                        txt = f"{float(avg_px):.1f} px · {mrad:.2f} mrad"
+                    except Exception:
+                        pass
                 set_val("avg_tracking_error_pct", txt, _color_for_error(float(avg_px)))
             except Exception:
-                set_val("avg_tracking_error_pct", f"{float(avg_pct):.1f} %" if avg_pct is not None else "0.0 % (0.0 px)")
+                try:
+                    set_val("avg_tracking_error_pct", f"{float(avg_px):.1f} px")
+                except Exception:
+                    set_val("avg_tracking_error_pct", "0.0 px")
         else:
-            # No error yet — show 0.0% properly, not empty
             try:
-                set_val("avg_tracking_error_pct", f"{float(avg_pct):.1f} % (0.0 px)" if avg_pct is not None else "0.0 % (0.0 px)", "#22c55e")
+                set_val("avg_tracking_error_pct", "0.0 px", "#22c55e")
             except Exception:
-                set_val("avg_tracking_error_pct", "0.0 % (0.0 px)", "#22c55e")
+                set_val("avg_tracking_error_pct", "0.0 px", "#22c55e")
         if max_px is not None:
             try:
-                txt = f"{float(max_pct):.1f} % ({float(max_px):.1f} px)"
+                txt = f"{float(max_px):.1f} px"
                 if camera_scale_mrad is not None:
-                    mrad = float(max_px) * float(camera_scale_mrad)
-                    txt = f"{float(max_pct):.1f} % ({float(max_px):.1f} px · {mrad:.2f} mrad)"
+                    try:
+                        mrad = float(max_px) * float(camera_scale_mrad)
+                        txt = f"{float(max_px):.1f} px · {mrad:.2f} mrad"
+                    except Exception:
+                        pass
                 set_val("max_tracking_error_pct", txt, _color_for_error(float(max_px)))
             except Exception:
-                set_val("max_tracking_error_pct", f"{float(max_pct):.1f} %" if max_pct is not None else "0.0 % (0.0 px)")
+                try:
+                    set_val("max_tracking_error_pct", f"{float(max_px):.1f} px")
+                except Exception:
+                    set_val("max_tracking_error_pct", "0.0 px")
         else:
-            set_val("max_tracking_error_pct", f"{float(max_pct):.1f} % (0.0 px)" if max_pct is not None else "0.0 % (0.0 px)", "#22c55e")
+            try:
+                set_val("max_tracking_error_pct", "0.0 px", "#22c55e")
+            except Exception:
+                set_val("max_tracking_error_pct", "0.0 px", "#22c55e")
         # Keep legacy px labels for compat — always display with proper unit
         if "avg_tracking_error_px" in self.stat_labels:
             self.stat_labels["avg_tracking_error_px"].setText(f"{float(avg_px):.1f} px" if avg_px is not None else "0.0 px")
@@ -651,9 +687,9 @@ class DashboardPanel(QWidget):
         if "tracking_error_pct" in self.stat_labels:
             v = summary.get("tracking_error_pct")
             if v is not None:
-                self.stat_labels["tracking_error_pct"].setText(f"{float(v):.1f} %")
+                self.stat_labels["tracking_error_pct"].setText(f"{float(v):.1f}")
             else:
-                self.stat_labels["tracking_error_pct"].setText("0.0 %")
+                self.stat_labels["tracking_error_pct"].setText("0.0")
 
         # --- Locking — proper units: Status (enum), Retention (%), Acquisitions (count) ---
         set_val("lock_status", status.upper(), color, "#f1f5f9")
@@ -680,44 +716,7 @@ class DashboardPanel(QWidget):
             except Exception:
                 set_val(key, "0.00 S")
 
-        # Progress bars — intuitive colors
-        for k, bar in self.progress_bars.items():
-            v = summary.get(k)
-            # Map special keys that are not directly in summary but derived
-            if v is None and k in ("avg_tracking_error_pct", "max_tracking_error_pct"):
-                v = avg_pct if k == "avg_tracking_error_pct" else max_pct
-            if v is None:
-                # Try legacy fallback
-                if k == "proc_time_s":
-                    v = summary.get("avg_processing_time_ms")
-                    if v is not None:
-                        try:
-                            v = float(v) / 10.0  # 100ms =100% unrealistic, but map 33ms=33%? Instead map error pct
-                            v = min(100, float(summary.get("avg_processing_time_ms",0))/33.0*100)
-                        except Exception:
-                            v = 0
-                else:
-                    bar.setValue(0)
-                    continue
-            try:
-                pct = float(v)
-                # Clamp 0-100 for progress; for FPS map 0-60 -> 0-100
-                if k == "fps":
-                    pct = min(100, pct / 60.0 * 100)
-                elif k in ("avg_tracking_error_pct", "max_tracking_error_pct"):
-                    pct = max(0, min(100, pct))
-                    bar.setValue(int(pct))
-                    bar.setStyleSheet(_progress_style(_color_for_error_pct(pct)))
-                    continue
-                pct = max(0, min(100, pct))
-                bar.setValue(int(pct))
-                # Inverted for searching (high searching bad -> red)
-                if k == "searching_rate_pct":
-                    bar.setStyleSheet(_progress_style(_color_for_error_pct(pct) if pct>30 else _color_for_rate(100-pct)))
-                else:
-                    bar.setStyleSheet(_progress_style(_color_for_rate(pct)))
-            except Exception:
-                pass
+        # Progress bars removed — no bar updates needed
 
         # Keep legacy labels that old MainWindow._reset iterates
         # Ensure all expected keys exist for stat_labels fallback

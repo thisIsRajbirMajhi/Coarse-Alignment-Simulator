@@ -163,7 +163,7 @@ class DashboardWindow(QMainWindow):
                 "  • Dashboard: FPS, Duration (S), Acquisition (S), Proc. Time (S)\n"
                 "  • Tracking: Average / Maximum Tracking Error (%) — 15px=100% (color: green<25 yellow<60 red)\n"
                 "  • Locking: Status (dot color), Retention Rate (%), Total Acquisitions\n"
-                "  • Detection / Searching / Center: Rate (%) with progress + Time (S)\n\n"
+                "  • Detection / Searching / Center: Rate (%) + Time (S)\n\n"
                 "RIGHT: Responsive graph (Simulation Time vs Value)\n"
                 "  • 6 curves: FPS (blue), Retention green, Error red, Center amber, Detection violet, Searching gray\n"
                 "  • Auto-scaling: ViewBox autoRange shows complete history without trimming\n"
