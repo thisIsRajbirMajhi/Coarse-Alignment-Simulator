@@ -235,10 +235,10 @@ class PerformanceLogger:
         # ── dashboard-exact derived metrics ──
         # Tracking error (%) — avg as % of max (how much headroom remains); 0 if no max
         tracking_error_pct = round((avg_error / max_error * 100) if max_error > 0 else 0.0, 2)
-        # Detection/Search/Center times — total time in that state = rate% * duration
-        detection_time_s = round((detection_rate / 100.0 * elapsed) if elapsed > 0 else 0.0, 3)
-        searching_time_s = round((state_pct["searching"] / 100.0 * elapsed) if elapsed > 0 else 0.0, 3)
-        center_hit_time_s = round((center_overall / 100.0 * detection_time_s) if detection_time_s else 0.0, 3)
+        # Detection/Search/Center times — total time in that state = exact frames * duration
+        detection_time_s = round((self.detection_count / total * elapsed) if self.frame_count else 0.0, 3)
+        searching_time_s = round((self.state_counts.get("searching", 0) / total * elapsed) if self.frame_count else 0.0, 3)
+        center_hit_time_s = round((self.center_hit_count / total * elapsed) if self.frame_count else 0.0, 3)
         # keep also fps-based alternative for reference (not shown in dashboard)
         return {
             # core — Timing & rate
@@ -268,7 +268,7 @@ class PerformanceLogger:
             "hitbox_hit_count": self.hitbox_hit_count,
             "hitbox_hit_rate_pct": round(hitbox_rate, 2),
             "center_hit_count": self.center_hit_count,
-            "center_hit_rate_pct": round(center_rate, 2),  # of hitbox hits
+            "center_hit_rate_pct": round((self.center_hit_count / total * 100) if self.frame_count else 0.0, 2),  # of total frames
             "center_hit_overall_pct": round(center_overall, 2),  # of detections
             "center_hit_time_s": center_hit_time_s,
             # dashboard-exact aliases

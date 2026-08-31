@@ -39,6 +39,7 @@ class GlobalPanel(QWidget):
     pauseRequested = pyqtSignal()
     resetRequested = pyqtSignal()
     exportRequested = pyqtSignal()
+    dashboardRequested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -94,6 +95,12 @@ class GlobalPanel(QWidget):
         self.export_btn.setMinimumHeight(32)
         self.export_btn.clicked.connect(self.exportRequested.emit)
         layout.addWidget(self.export_btn)
+        
+        self.dashboard_btn = QPushButton("📊 Open Dashboard Window")
+        self.dashboard_btn.setMinimumHeight(32)
+        self.dashboard_btn.setStyleSheet("background:#3b82f6; color:white; font-weight:700; border:none; border-radius:8px;")
+        self.dashboard_btn.clicked.connect(self.dashboardRequested.emit)
+        layout.addWidget(self.dashboard_btn)
 
         layout.addStretch()
 

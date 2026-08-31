@@ -50,6 +50,7 @@ from gui.panels.overlay_panel import OverlayPanel
 from gui.panels.presets_panel import PresetsPanel
 from gui.styles import APP_STYLE, FOV_SIZE, SCENE_SIZE, TICK_MS
 from gui.windows.control_window import ControlDashboardWindow
+from gui.windows.dashboard_window import DashboardWindow
 from overlay.config import OverlayConfig
 from overlay.renderer import PulseState
 from perf_log.metrics import PerformanceLogger
@@ -461,10 +462,11 @@ class MainWindow(StateMixin, QMainWindow):
         tabs.addTab(self.presets_panel, "Presets")
         self.presets_panel.presetSelected.connect(self._on_preset_selected)
 
-        # ── Dashboard Tab — Modular (DashboardPanel) ──
+        # ── Dashboard Window — Modular (DashboardPanel) ──
         self.dashboard_panel = DashboardPanel()
         self.stat_labels = self.dashboard_panel.stat_labels
-        tabs.addTab(self.dashboard_panel, "Dashboard")
+        self.dashboard_window = DashboardWindow(self, self.dashboard_panel)
+        self.dashboard_window.showMaximized()
 
         # ── Global Tab — Modular (GlobalPanel) ──
         self.global_panel = GlobalPanel()
@@ -484,6 +486,7 @@ class MainWindow(StateMixin, QMainWindow):
         self.global_panel.pauseRequested.connect(self._pause)
         self.global_panel.resetRequested.connect(self._reset)
         self.global_panel.exportRequested.connect(self._export_log)
+        self.global_panel.dashboardRequested.connect(self._show_dashboard_window)
         tabs.addTab(self.global_panel, "Global")
 
         # ── Beacons Tab — Modular (8 per-beacon + 3 multi) ──
@@ -631,6 +634,12 @@ class MainWindow(StateMixin, QMainWindow):
             self.control_window.show()
             self.control_window.raise_()
             self.control_window.activateWindow()
+
+    def _show_dashboard_window(self):
+        if hasattr(self, "dashboard_window") and self.dashboard_window:
+            self.dashboard_window.showMaximized()
+            self.dashboard_window.raise_()
+            self.dashboard_window.activateWindow()
 
     def _sync_per_beacon_xy_ranges(self):
         """Keep X/Y spin max in sync with current world size (dynamic) — modular."""

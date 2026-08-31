@@ -12,6 +12,8 @@ Notes: Modular, well-commented, HOT via update_from_summary(summary, tracker_sta
        Keeps stat_labels dict for backward compat, but new code uses progress bars and health.
 """
 
+from collections import deque
+import pyqtgraph as pg
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QFrame,
@@ -20,6 +22,8 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QProgressBar,
+    QScrollArea,
+    QSplitter,
     QVBoxLayout,
     QWidget,
 )
@@ -43,6 +47,16 @@ class DashboardPanel(QWidget):
         super().__init__(parent)
         self.stat_labels: dict[str, QLabel] = {}
         self.progress_bars: dict[str, QProgressBar] = {}
+        
+        # History buffers for the multi-metric overlay plot
+        self.time_data = []
+        self.fps_data = []
+        self.retention_data = []
+        self.error_data = []
+        self.center_hit_data = []
+        self.detection_data = []
+        self.searching_data = []
+        
         self._build_ui()
 
     # ========================================================
@@ -50,50 +64,91 @@ class DashboardPanel(QWidget):
     # ========================================================
 
     def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(10)
+        main_layout = QHBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        
+        splitter = QSplitter(Qt.Horizontal)
+        main_layout.addWidget(splitter)
+        
+        # --- LEFT PANEL: Metrics ---
+        metrics_container = QWidget()
+        metrics_layout = QVBoxLayout(metrics_container)
+        metrics_layout.setContentsMargins(8, 8, 8, 8)
+        metrics_layout.setSpacing(10)
 
         # Health header — large, at-a-glance
         self.health_card = self._build_health_header()
-        layout.addWidget(self.health_card)
+        metrics_layout.addWidget(self.health_card)
 
         # Two-column grid for 6 cards (more compact, intuitive)
-        self._make_section(layout, "Timing & Rate", [
+        self._make_section(metrics_layout, "Timing & Rate", [
             ("FPS", "fps", "📊"),
             ("Duration (s)", "simulation_duration_s", "⏱"),
             ("Acquisition (s)", "acquisition_time_s", "⚡"),
             ("Proc. Time (ms)", "avg_processing_time_ms", "⚙"),
         ], with_progress=False)
 
-        self._make_section(layout, "Tracking Error", [
+        self._make_section(metrics_layout, "Tracking Error", [
             ("Avg Error (px)", "avg_tracking_error_px", "🎯"),
             ("Max Error (px)", "max_tracking_error_px", "📈"),
             ("Error (%)", "tracking_error_pct", "📊"),
         ], with_progress=True, progress_key="tracking_error_pct")
 
-        self._make_section(layout, "Lock Status", [
+        self._make_section(metrics_layout, "Lock Status", [
             ("Status", "lock_status", "🔒"),
             ("Retention (%)", "lock_retention_rate_pct", "💚"),
             ("Acquisitions", "acquisitions", "🔁"),
         ], with_progress=True, progress_key="lock_retention_rate_pct")
 
-        self._make_section(layout, "Detection", [
+        self._make_section(metrics_layout, "Detection", [
             ("Rate (%)", "detection_rate_pct", "👁"),
             ("Time (s)", "detection_time_s", "⏱"),
         ], with_progress=True, progress_key="detection_rate_pct")
 
-        self._make_section(layout, "Searching", [
+        self._make_section(metrics_layout, "Searching", [
             ("Rate (%)", "searching_rate_pct", "🔍"),
             ("Time (s)", "searching_time_s", "⏱"),
         ], with_progress=True, progress_key="searching_rate_pct")
 
-        self._make_section(layout, "Center Hit", [
+        self._make_section(metrics_layout, "Center Hit", [
             ("Rate (%)", "center_hit_rate_pct", "🎯"),
             ("Time (s)", "center_hit_time_s", "⭐"),
         ], with_progress=True, progress_key="center_hit_rate_pct")
 
-        layout.addStretch()
+        metrics_layout.addStretch()
+        
+        metrics_scroll = QScrollArea()
+        metrics_scroll.setWidgetResizable(True)
+        metrics_scroll.setWidget(metrics_container)
+        metrics_scroll.setMinimumWidth(350)
+        metrics_scroll.setStyleSheet("QScrollArea { border: none; background: #f8fafc; }")
+        
+        splitter.addWidget(metrics_scroll)
+
+        # --- RIGHT PANEL: Graph ---
+        self.graph_box = QGroupBox("Metrics Over Time")
+        self.graph_box.setStyleSheet("QGroupBox { padding-top: 14px; font-size: 11px; }")
+        graph_layout = QVBoxLayout(self.graph_box)
+        graph_layout.setContentsMargins(10, 12, 10, 8)
+        
+        self.plot_widget = pg.PlotWidget()
+        self.plot_widget.setBackground('#ffffff')
+        self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
+        self.plot_widget.setLabel('bottom', 'Simulation Time (s)')
+        self.plot_widget.addLegend(offset=(10, 10))
+        
+        self.fps_curve = self.plot_widget.plot(pen=pg.mkPen('#3b82f6', width=2), name='FPS')
+        self.retention_curve = self.plot_widget.plot(pen=pg.mkPen('#22c55e', width=2), name='Retention (%)')
+        self.error_curve = self.plot_widget.plot(pen=pg.mkPen('#ef4444', width=2), name='Error (px)')
+        self.center_hit_curve = self.plot_widget.plot(pen=pg.mkPen('#eab308', width=2), name='Center Hit (%)')
+        self.detection_curve = self.plot_widget.plot(pen=pg.mkPen('#8b5cf6', width=2), name='Detection (%)')
+        self.searching_curve = self.plot_widget.plot(pen=pg.mkPen('#64748b', width=2), name='Searching (%)')
+        
+        graph_layout.addWidget(self.plot_widget)
+        splitter.addWidget(self.graph_box)
+        
+        # Give graph more space by default
+        splitter.setSizes([350, 900])
 
     def _build_health_header(self) -> QFrame:
         card = QFrame()
@@ -294,3 +349,48 @@ class DashboardPanel(QWidget):
                 except: pass
             else:
                 bar.setValue(0)
+
+        # Update graph data
+        t = float(summary.get("simulation_duration_s", 0) or 0)
+        fps = float(summary.get("fps", 0) or 0)
+        retention = float(summary.get("lock_retention_rate_pct", 0) or 0)
+        err = summary.get("avg_tracking_error_px", 0)
+        err = float(err) if err is not None else 0.0
+        center_hit = float(summary.get("center_hit_rate_pct", 0) or 0)
+        detection = float(summary.get("detection_rate_pct", 0) or 0)
+        searching = float(summary.get("searching_rate_pct", 0) or 0)
+        # Handle resets and pauses
+        if self.time_data:
+            if t < self.time_data[-1]:
+                # Simulation was reset (time went backwards), clear history
+                self.time_data.clear()
+                self.fps_data.clear()
+                self.retention_data.clear()
+                self.error_data.clear()
+                self.center_hit_data.clear()
+                self.detection_data.clear()
+                self.searching_data.clear()
+            elif t == self.time_data[-1]:
+                # Simulation is paused, don't append duplicate points
+                return
+        
+        self.time_data.append(t)
+        self.fps_data.append(fps)
+        self.retention_data.append(retention)
+        self.error_data.append(err)
+        self.center_hit_data.append(center_hit)
+        self.detection_data.append(detection)
+        self.searching_data.append(searching)
+        
+        # Rate limit graph rendering (update 5 times a second instead of 60)
+        # Prevents pyqtgraph from freezing the UI when plotting the complete unbounded history
+        import time
+        current_sys_time = time.time()
+        if not hasattr(self, "_last_graph_update") or (current_sys_time - getattr(self, "_last_graph_update", 0)) > 0.2:
+            self.fps_curve.setData(self.time_data, self.fps_data)
+            self.retention_curve.setData(self.time_data, self.retention_data)
+            self.error_curve.setData(self.time_data, self.error_data)
+            self.center_hit_curve.setData(self.time_data, self.center_hit_data)
+            self.detection_curve.setData(self.time_data, self.detection_data)
+            self.searching_curve.setData(self.time_data, self.searching_data)
+            self._last_graph_update = current_sys_time
