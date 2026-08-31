@@ -1734,10 +1734,23 @@ class MainWindow(StateMixin, QMainWindow):
 
     def _start(self):
         if not self._running:
-            if self.perf.start_time is None: self.perf.start()
+            # FIX: use monotonic pause offset via logger.adjust_for_pause; start fresh if never started
+            if self.perf.start_time is None and getattr(self.perf, "_start_mono", None) is None:
+                self.perf.start()
             self._last_tick_time = time.time()
-            if getattr(self, "_pause_time", None) is not None and self.perf.start_time is not None:
-                self.perf.start_time += time.time() - self._pause_time
+            if getattr(self, "_pause_time", None) is not None:
+                # adjust logger elapsed to exclude paused wall time (monotonic)
+                try:
+                    pause_dur = time.time() - self._pause_time
+                    if hasattr(self.perf, "adjust_for_pause"):
+                        self.perf.adjust_for_pause(pause_dur)
+                    else:
+                        # fallback wall adjustment
+                        self.perf.start_time += pause_dur
+                        if hasattr(self.perf, "_start_mono") and self.perf._start_mono is not None:
+                            self.perf._start_mono += pause_dur
+                except Exception:
+                    pass
                 self._pause_time = None
             self.timer.start(TICK_MS); self._running = True
             self.statusBar().showMessage("Running — tracking…", 2000)
@@ -1748,6 +1761,12 @@ class MainWindow(StateMixin, QMainWindow):
         else: self._pause_time = None
     def _reset(self):
         self.timer.stop(); self._running=False; self._pause_time=None
+        # FIX: close old logger file handle before discarding (prevents leak)
+        try:
+            if hasattr(self, "perf") and hasattr(self.perf, "close"):
+                self.perf.close()
+        except Exception:
+            pass
         cur=self.motion_combo.currentText()
         self._build_simulation()
         try:
@@ -1761,6 +1780,12 @@ class MainWindow(StateMixin, QMainWindow):
             try: b.profile = MotionProfile(cur)
             except: pass
         self.perf=PerformanceLogger(); self._camera_drift_state={}; self._last_tick_time=None
+        # FIX: reset dashboard history immediately so graph clears on reset (not lazy on next tick)
+        try:
+            if hasattr(self, "dashboard_panel") and hasattr(self.dashboard_panel, "reset_history"):
+                self.dashboard_panel.reset_history()
+        except Exception:
+            pass
         # Reset disturbance global state — fixes stale phase/velocity on fresh run (reproducibility)
         try:
             dist.reset_disturbance_state()
@@ -1904,9 +1929,9 @@ class MainWindow(StateMixin, QMainWindow):
                 # Back-compat fallback (PTZCamera without dt)
                 self.camera.move(d_pan, d_tilt)
         is_locked=self.tracker.status==LockStatus.TRACKING
-        # extended metrics for logger
-        detected_any = len(all_dets) > 0 if 'all_dets' in locals() else False
-        # hitbox/center hit based on last detection vs target
+        # extended metrics for logger — FIX: detected must be primary-target hitbox detection, not any distractor blob
+        # Previously detected_any = len(all_dets)>0 counted distractors, inflating detection_rate.
+        # Now detected = hitbox_hit (primary inside hitbox) for accurate real-time rate.
         hitbox_hit = False
         center_hit = False
         if 'detection' in locals() and detection is not None and 'primary' in locals():
@@ -1915,8 +1940,10 @@ class MainWindow(StateMixin, QMainWindow):
                 hitbox_hit = d <= primary.hitbox_radius
                 center_hit = d <= primary.center_radius
             except: pass
+        # Real-time accurate: detected = primary hitbox hit (not any distractor)
+        detected_primary = bool(hitbox_hit)
         self.perf.log_frame(is_locked, tracking_error_px, time.time()-frame_start,
-                            detected=detected_any, hitbox_hit=hitbox_hit, center_hit=center_hit,
+                            detected=detected_primary, hitbox_hit=hitbox_hit, center_hit=center_hit,
                             lock_state=self.tracker.status.value)
         self._render_viewport(fov_frame, estimate, all_dets)
         self._render_minimap(scene_frame)
@@ -1972,9 +1999,26 @@ class MainWindow(StateMixin, QMainWindow):
         self._last_rgb = rgb
         return rgb
 
+    def closeEvent(self, event):
+        # FIX: ensure logger file closed on app exit (prevents leak / data loss)
+        try:
+            if hasattr(self, "perf") and hasattr(self.perf, "close"):
+                self.perf.close()
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "timer"):
+                self.timer.stop()
+        except Exception:
+            pass
+        super().closeEvent(event)
+
     def _update_stats(self, tracking_error_px):
-        # Delegate to intuitive DashboardPanel (health header + progress, angular mrad)
-        s = self.perf.summary()
+        # Delegate to intuitive DashboardPanel (health header + progress, angular mrad) — FIX: ensure real-time even when dashboard hidden
+        try:
+            s = self.perf.summary()
+        except Exception:
+            return
         try:
             if hasattr(self, "dashboard_panel"):
                 cam_scale = None
