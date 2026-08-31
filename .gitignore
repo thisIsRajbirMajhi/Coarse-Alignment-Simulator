@@ -26,6 +26,7 @@ dist/
 # Performance logs (generated)
 perf_log/*.csv
 perf_log/*.json
+perf_log/runs/
 *.csv
 *.json
 !requirements.json

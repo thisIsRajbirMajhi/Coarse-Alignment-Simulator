@@ -11,6 +11,8 @@ import csv
 import json
 import math
 import time
+import os
+from datetime import datetime
 
 
 class PerformanceLogger:
@@ -35,6 +37,12 @@ class PerformanceLogger:
         self._lost_since: float | None = None
         # for jitter / p95
         self._first_lock_time: float | None = None
+        
+        # ml training auto-export
+        self.csv_file = None
+        self.csv_writer = None
+        self._last_csv_log_time = 0.0
+        self._run_dir = None
 
     def start(self):
         self.start_time = time.time()
@@ -54,6 +62,38 @@ class PerformanceLogger:
         self.reacquisition_times = []
         self._lost_since = None
         self._first_lock_time = None
+
+        # setup ML auto-logging folder and csv
+        try:
+            base_dir = os.path.join(os.path.dirname(__file__), "runs")
+            os.makedirs(base_dir, exist_ok=True)
+            run_name = datetime.now().strftime("run_%Y%m%d_%H%M%S")
+            self._run_dir = os.path.join(base_dir, run_name)
+            os.makedirs(self._run_dir, exist_ok=True)
+            
+            self.csv_file = open(os.path.join(self._run_dir, "timeseries.csv"), "w", newline="")
+            self.csv_writer = csv.writer(self.csv_file)
+            # Write header
+            self.csv_writer.writerow([
+                "Total Duration (S)",
+                "Acquisition (S)",
+                "Proc Time (ms)",
+                "Average Tracking Error",
+                "Max Error",
+                "Error %",
+                "Retention %",
+                "Detection Rate %",
+                "Detection Time",
+                "Searching Rate (%)",
+                "Searching Time",
+                "Center Hit Rate",
+                "Center Hit Time"
+            ])
+            self._last_csv_log_time = 0.0
+        except Exception as e:
+            print(f"Failed to setup ML log: {e}")
+            self.csv_file = None
+            self.csv_writer = None
 
     def log_frame(self, is_locked: bool, tracking_error: float | None, frame_process_time: float,
                   *, detected: bool = False, hitbox_hit: bool = False, center_hit: bool = False,
@@ -112,6 +152,31 @@ class PerformanceLogger:
             if not is_locked and self._prev_locked:
                 self.lock_losses += 1
         self._prev_locked = is_locked
+
+        # Auto-log every second
+        elapsed = (time.time() - self.start_time) if self.start_time else 0.0
+        if self.csv_writer and self.csv_file and (elapsed - self._last_csv_log_time >= 1.0):
+            # Calculate summary at this exact point to grab the requested metrics
+            s = self.summary()
+            
+            # Write row mapped exactly to user requested ML features
+            self.csv_writer.writerow([
+                s.get("simulation_duration_s", 0),
+                s.get("acquisition_time_s", 0) if s.get("acquisition_time_s") is not None else 0,
+                s.get("avg_processing_time_ms", 0),
+                s.get("avg_tracking_error_px", 0),
+                s.get("max_tracking_error_px", 0),
+                s.get("tracking_error_pct", 0),
+                s.get("lock_retention_rate_pct", 0),
+                s.get("detection_rate_pct", 0),
+                s.get("detection_time_s", 0),
+                s.get("searching_rate_pct", 0),
+                s.get("searching_time_s", 0),
+                s.get("center_hit_rate_pct", 0),
+                s.get("center_hit_time_s", 0)
+            ])
+            self.csv_file.flush()
+            self._last_csv_log_time = math.floor(elapsed)
 
     def summary(self) -> dict:
         elapsed = (time.time() - self.start_time) if self.start_time else 0.0
