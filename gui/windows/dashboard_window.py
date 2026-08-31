@@ -40,7 +40,7 @@ class DashboardWindow(QMainWindow):
         super().__init__(main_window)
         self.main_window = main_window
         self.dashboard_panel = dashboard_panel
-        self.setWindowTitle("FSOC Simulator — Dashboard & Metrics (Live, Modular)")
+        self.setWindowTitle("Dashboard")
         self.setMinimumSize(900, 650)
         self.resize(1240, 860)
         self.setStyleSheet(APP_STYLE)

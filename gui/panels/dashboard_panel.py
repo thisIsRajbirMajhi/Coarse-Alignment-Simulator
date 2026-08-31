@@ -554,25 +554,34 @@ class DashboardPanel(QWidget):
         except Exception:
             pass
 
-        # --- Dashboard group ---
+        # --- Dashboard group — proper units per spec ---
         fps = float(summary.get("fps", 0) or 0)
-        set_val("fps", f"{fps:.1f}", _color_for_fps(fps))
+        set_val("fps", f"{fps:.1f} FPS", _color_for_fps(fps))
         dur = summary.get("simulation_duration_s")
-        set_val("simulation_duration_s", f"{float(dur):.2f}" if dur is not None else "-", "#0f172a")
+        set_val("simulation_duration_s", f"{float(dur):.2f} S" if dur is not None else "-", "#0f172a")
         acq = summary.get("acquisition_time_s")
-        set_val("acquisition_time_s", f"{float(acq):.2f}" if acq is not None else "—", "#0f172a" if acq else "#64748b")
-        # Proc time: image wants (S) — convert ms -> s
+        set_val("acquisition_time_s", f"{float(acq):.2f} S" if acq is not None else "—", "#0f172a" if acq else "#64748b")
+        # Proc time: image wants (S) — convert ms -> s, keep 4 decimals for precision
         avg_ms = summary.get("avg_processing_time_ms")
-        if avg_ms is not None:
+        proc_s_val = summary.get("proc_time_s", None)  # seconds from metrics if available
+        if proc_s_val is not None:
             try:
-                s_val = float(avg_ms) / 1000.0
-                txt = f"{s_val:.4f}"
-                # Color: <0.033 green (real-time), else red
+                s_val = float(proc_s_val)
+                txt = f"{s_val:.4f} S"
                 col = "#22c55e" if s_val < 0.033 else "#ef4444" if s_val > 0.05 else "#eab308"
                 set_val("proc_time_s", txt, col)
-                # Keep legacy ms label for compat if exists
+                if "avg_processing_time_ms" in self.stat_labels and avg_ms is not None:
+                    self.stat_labels["avg_processing_time_ms"].setText(f"{float(avg_ms):.1f} ms")
+            except Exception:
+                set_val("proc_time_s", str(proc_s_val) + " S" if proc_s_val is not None else "-")
+        elif avg_ms is not None:
+            try:
+                s_val = float(avg_ms) / 1000.0
+                txt = f"{s_val:.4f} S"
+                col = "#22c55e" if s_val < 0.033 else "#ef4444" if s_val > 0.05 else "#eab308"
+                set_val("proc_time_s", txt, col)
                 if "avg_processing_time_ms" in self.stat_labels:
-                    self.stat_labels["avg_processing_time_ms"].setText(str(avg_ms))
+                    self.stat_labels["avg_processing_time_ms"].setText(f"{float(avg_ms):.1f} ms")
             except Exception:
                 set_val("proc_time_s", str(avg_ms))
         else:
@@ -633,25 +642,33 @@ class DashboardPanel(QWidget):
             if v is not None:
                 self.stat_labels["tracking_error_pct"].setText(str(v))
 
-        # --- Locking ---
+        # --- Locking — proper units: Status (enum), Retention (%), Acquisitions (count) ---
         set_val("lock_status", status.upper(), color, "#f1f5f9")
         retention = float(summary.get("lock_retention_rate_pct", 0) or 0)
-        set_val("lock_retention_rate_pct", f"{retention:.1f}%", _color_for_rate(retention))
+        set_val("lock_retention_rate_pct", f"{retention:.1f} %", _color_for_rate(retention))
         acqs = summary.get("acquisitions")
-        set_val("acquisitions", str(acqs) if acqs is not None else "0")
+        # Proper count unit: integer count
+        set_val("acquisitions", f"{int(acqs)}" if acqs is not None else "0")
 
-        # --- Detection / Searching / Center ---
+        # --- Detection / Searching / Center — proper units: Rate (%) Time (S) ---
         for key in ("detection_rate_pct", "searching_rate_pct", "center_hit_rate_pct"):
             v = summary.get(key)
             if v is not None:
                 try:
                     pct = float(v)
-                    set_val(key, f"{pct:.1f}%", _color_for_rate(pct))
+                    set_val(key, f"{pct:.1f} %", _color_for_rate(pct))
                 except Exception:
-                    set_val(key, str(v))
+                    set_val(key, str(v) + " %" if v is not None else "-")
         for key in ("detection_time_s", "searching_time_s", "center_hit_time_s"):
             v = summary.get(key)
-            set_val(key, f"{float(v):.2f}" if v is not None else "-")
+            # Proper S suffix per spec
+            if v is not None:
+                try:
+                    set_val(key, f"{float(v):.2f} S")
+                except Exception:
+                    set_val(key, str(v) + " S")
+            else:
+                set_val(key, "-")
 
         # Progress bars — intuitive colors
         for k, bar in self.progress_bars.items():
