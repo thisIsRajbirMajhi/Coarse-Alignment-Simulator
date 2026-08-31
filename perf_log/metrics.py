@@ -314,6 +314,13 @@ class PerformanceLogger:
         # dashboard-exact derived metrics — FIXED semantics documented
         # tracking_error_pct: avg as % of max (consistency); 0 if no max. Dashboard now inverts color for error.
         tracking_error_pct = round((avg_error / max_error * 100) if max_error > 1e-9 else 0.0, 2)
+        # Intuitive error % where 15px =100% (matches dashboard thresholds green<5 yellow<15 red) — for image spec
+        def _err_pct(px: float) -> float:
+            return round(max(0.0, min(100.0, float(px) / 15.0 * 100.0)), 2) if px is not None else 0.0
+        avg_tracking_error_pct = _err_pct(avg_error)
+        max_tracking_error_pct = _err_pct(max_error)
+        # Proc time in seconds for image spec (Dashboard: Proc. Time (S))
+        proc_time_s = round(float(avg_proc), 6)  # avg_proc is seconds
         # Times: proportion of wall elapsed spent in that condition (correct for dashboard)
         detection_time_s = round((self.detection_count / total * elapsed) if self.frame_count else 0.0, 3)
         searching_time_s = round((self.state_counts.get("searching", 0) / total * elapsed) if self.frame_count else 0.0, 3)
@@ -350,8 +357,11 @@ class PerformanceLogger:
             "center_hit_rate_pct": round((self.center_hit_count / total * 100) if self.frame_count else 0.0, 2),  # of total frames
             "center_hit_overall_pct": round(center_overall, 2),  # of detections
             "center_hit_time_s": center_hit_time_s,
-            # dashboard-exact aliases
+            # dashboard-exact aliases (image spec)
             "tracking_error_pct": tracking_error_pct,
+            "avg_tracking_error_pct": avg_tracking_error_pct,
+            "max_tracking_error_pct": max_tracking_error_pct,
+            "proc_time_s": proc_time_s,
             "searching_rate_pct": state_pct["searching"],
             "searching_time_s": searching_time_s,
             # extended — lock dynamics
