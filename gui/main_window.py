@@ -1,8 +1,10 @@
 # gui/main_window.py - Main application window — orchestrates video, control panels, and simulation tic
 
+import os
 import math
 import random
 import time
+from datetime import datetime 
 
 import cv2
 import numpy as np
@@ -1768,10 +1770,15 @@ class MainWindow(StateMixin, QMainWindow):
             pass
         self.statusBar().showMessage("Reset — ready", 2000)
     def _export_log(self):
-        path,_=QFileDialog.getSaveFileName(self,"Export performance log","performance_log.csv","CSV (*.csv);;JSON (*.json)")
+        log_dir = getattr(self.perf, "log_dir", "log")
+        default_name = os.path.join(log_dir, f"simulation_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+        path, _ = QFileDialog.getSaveFileName(self, "Export performance log", default_name, "CSV (*.csv);;JSON (*.json)")
         if path:
-            try: self.perf.export_report(path); QMessageBox.information(self,"Export", f"Saved to:\n{path}")
-            except Exception as e: QMessageBox.critical(self,"Export failed", str(e))
+            try:
+                self.perf.export_report(path)
+                QMessageBox.information(self, "Export", f"Saved to:\n{path}")
+            except Exception as e:
+                QMessageBox.critical(self, "Export failed", str(e))
 
     def _tick(self):
         frame_start=time.time()

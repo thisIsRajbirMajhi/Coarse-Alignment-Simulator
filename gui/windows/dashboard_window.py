@@ -1,4 +1,5 @@
-# gui/windows/dashboard_window.py - Separate, modular, responsive window hosting the live DashboardPanel + graph
+import os
+from datetime import datetime
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
@@ -120,7 +121,9 @@ class DashboardWindow(QMainWindow):
         # Delegate to main_window's perf export if available, else snaps from dashboard
         try:
             if hasattr(self.main_window, "perf"):
-                path, _ = QFileDialog.getSaveFileName(self, "Export dashboard metrics", "dashboard_metrics.csv", "CSV (*.csv);;JSON (*.json)")
+                log_dir = getattr(self.main_window.perf, "log_dir", "log")
+                default_path = os.path.join(log_dir, f"dashboard_metrics_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+                path, _ = QFileDialog.getSaveFileName(self, "Export dashboard metrics", default_path, "CSV (*.csv);;JSON (*.json)")
                 if path:
                     self.main_window.perf.export_report(path)
                     QMessageBox.information(self, "Export", f"Saved to:\n{path}")

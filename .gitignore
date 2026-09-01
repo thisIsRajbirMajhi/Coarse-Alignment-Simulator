@@ -24,6 +24,7 @@ dist/
 *.spec
 
 # Performance logs (generated)
+log/
 perf_log/*.csv
 perf_log/*.json
 perf_log/runs/
