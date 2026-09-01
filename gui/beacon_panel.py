@@ -57,7 +57,7 @@ class BeaconPanel(QGroupBox):
         self._initial = (initial or BeaconConfig(beacon_id=beacon_id)).validate()
         self._build_ui()
         self.set_config(self._initial, emit=False)
-        self.setStyleSheet("QGroupBox { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; margin-top: 8px; padding-top: 8px; } QGroupBox::title { color: #0f172a; font-size:10px; font-weight:600; }")
+        self.setStyleSheet("QGroupBox { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; margin-top: 12px; padding-top: 10px; } QGroupBox::title { color: #1e40af; font-size:10px; font-weight:800; background:#eff6ff; border:1px solid #dbeafe; border-radius:6px; padding:2px 8px; }")
 
     # ========================================================
     # SECTION: UI — Grouped rows for 8 params
@@ -299,14 +299,13 @@ class BeaconPanel(QGroupBox):
     def set_target_highlight(self, is_target: bool) -> None:
         """Highlight this panel if it's the tracked target (star)."""
         if is_target:
-            self.setStyleSheet("QGroupBox { background: #eff6ff; border: 1px solid #2563eb; border-radius: 8px; margin-top: 8px; padding-top: 8px; } QGroupBox::title { color: #1d4ed8; font-size:10px; font-weight:700; }")
+            self.setStyleSheet("QGroupBox { background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #eff6ff, stop:1 #dbeafe); border: 1.5px solid #2563eb; border-radius: 10px; margin-top: 12px; padding-top: 10px; } QGroupBox::title { color: #ffffff; font-size:10px; font-weight:800; background:#2563eb; border:none; border-radius:6px; padding:2px 8px; }")
         else:
-            # Dim if disabled, normal otherwise
             enabled = self.chk_enabled.isChecked()
             if not enabled:
-                self.setStyleSheet("QGroupBox { background: #f1f5f9; border: 1px dashed #94a3b8; border-radius: 8px; margin-top: 8px; padding-top: 8px; } QGroupBox::title { color: #64748b; font-size:10px; }")
+                self.setStyleSheet("QGroupBox { background: #f8fafc; border: 1px dashed #94a3b8; border-radius: 10px; margin-top: 12px; padding-top: 10px; } QGroupBox::title { color: #64748b; font-size:10px; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:6px; padding:2px 8px; }")
             else:
-                self.setStyleSheet("QGroupBox { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; margin-top: 8px; padding-top: 8px; } QGroupBox::title { color: #0f172a; font-size:10px; font-weight:600; }")
+                self.setStyleSheet("QGroupBox { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; margin-top: 12px; padding-top: 10px; } QGroupBox::title { color: #1e40af; font-size:10px; font-weight:800; background:#eff6ff; border:1px solid #dbeafe; border-radius:6px; padding:2px 8px; }")
 
     def _emit_config(self) -> None:
         """Emit validated config for HOT apply."""

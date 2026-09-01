@@ -69,7 +69,7 @@ class EnvironmentPanel(QWidget):
         # ----------------------------------------------------
         # World width/height drive Scene resolution; also clamp
         # FOV and beacon bounds. Step 50 for 5000-range usability.
-        world_box = QGroupBox("Set World Size  (Full 2D Scene)")
+        world_box = QGroupBox("⬢  WORLD  —  Full 2D Scene Size")
         world_grid = QGridLayout(world_box)
         world_grid.setContentsMargins(12, 18, 12, 12)
         world_grid.setHorizontalSpacing(8)
@@ -107,7 +107,7 @@ class EnvironmentPanel(QWidget):
         # ----------------------------------------------------
         # Seed drives np.random.default_rng(seed) for gradient/haze/stars.
         # Same seed → identical background (reproducibility).
-        seed_box = QGroupBox("Set Random Seed  (Reproducible Scenes)")
+        seed_box = QGroupBox("◈  SEED  —  Reproducible Scenes")
         seed_grid = QGridLayout(seed_box)
         seed_grid.setContentsMargins(12, 18, 12, 12)
         seed_grid.setHorizontalSpacing(8)
@@ -137,7 +137,7 @@ class EnvironmentPanel(QWidget):
         # ----------------------------------------------------
         # Section C: Atmosphere — Gradient + fog + vignetting
         # ----------------------------------------------------
-        atmo_box = QGroupBox("Set Atmosphere")
+        atmo_box = QGroupBox("◎  ATMOSPHERE  —  Gradient + Haze")
         atmo_grid = QGridLayout(atmo_box)
         atmo_grid.setContentsMargins(12, 18, 12, 12)
         atmo_grid.setHorizontalSpacing(8)
@@ -180,7 +180,7 @@ class EnvironmentPanel(QWidget):
         # ----------------------------------------------------
         # Section D: Starfield / Clutter
         # ----------------------------------------------------
-        stars_box = QGroupBox("Set Starfield")
+        stars_box = QGroupBox("▣  STARFIELD  •  Clutter")
         stars_grid = QGridLayout(stars_box)
         stars_grid.setContentsMargins(12, 18, 12, 12)
         stars_grid.setHorizontalSpacing(8)
@@ -209,7 +209,7 @@ class EnvironmentPanel(QWidget):
         # ----------------------------------------------------
         # Section E: Dynamics — Time-varying animation
         # ----------------------------------------------------
-        dyn_box = QGroupBox("Background Dynamics")
+        dyn_box = QGroupBox("⟡  DYNAMICS  —  Time-Varying Animation")
         dyn_grid = QGridLayout(dyn_box)
         dyn_grid.setContentsMargins(12, 18, 12, 12)
         dyn_grid.setHorizontalSpacing(8)

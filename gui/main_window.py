@@ -326,97 +326,226 @@ class MainWindow(StateMixin, QMainWindow):
         self._center_hits = 0
         self._frames_with_detections = 0
 
-    # ---------- UI layout ----------
+    # ---------- UI layout — Premium Mission-Control ----------
     def _build_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
         root = QHBoxLayout(central)
-        root.setContentsMargins(12, 12, 12, 12)
+        root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(12)
 
         main_splitter = QSplitter(Qt.Horizontal)
         main_splitter.setHandleWidth(6)
         main_splitter.setChildrenCollapsible(False)
 
-        # ——— Left: Videos and Graphs (HUD) ———
+        # ——— Left: Video Stage ———
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(10)
 
-        # Videos (FOV & God's Eye)
+        # App header — mission control banner above videos
+        header_bar = QFrame()
+        header_bar.setObjectName("appHeader")
+        header_bar.setFixedHeight(52)
+        hdr = QHBoxLayout(header_bar)
+        hdr.setContentsMargins(14, 8, 14, 8)
+        hdr.setSpacing(12)
+        # Icon block
+        icon_lbl = QLabel("◈")
+        icon_lbl.setObjectName("cameraIcon")
+        icon_lbl.setFixedSize(34, 28)
+        icon_lbl.setAlignment(Qt.AlignCenter)
+        hdr.addWidget(icon_lbl)
+        # Titles
+        title_col = QVBoxLayout()
+        title_col.setSpacing(1)
+        title_col.setContentsMargins(0, 0, 0, 0)
+        app_title = QLabel("FSOC  COARSE  ALIGNMENT")
+        app_title.setObjectName("appTitle")
+        app_sub = QLabel("VIRTUAL  PAT  SIMULATOR  •  CLOSED-LOOP  TRACKING")
+        app_sub.setObjectName("appSubtitle")
+        title_col.addWidget(app_title)
+        title_col.addWidget(app_sub)
+        hdr.addLayout(title_col)
+        hdr.addStretch()
+        # Badges — system stage
+        self._hdr_mode_badge = QLabel("STANDBY")
+        self._hdr_mode_badge.setObjectName("headerBadge")
+        self._hdr_mode_badge.setAlignment(Qt.AlignCenter)
+        hdr.addWidget(self._hdr_mode_badge)
+        self._hdr_fov_badge = QLabel(f"FOV {self._fov_size[0]}×{self._fov_size[1]}")
+        self._hdr_fov_badge.setObjectName("headerBadge")
+        hdr.addWidget(self._hdr_fov_badge)
+        self._hdr_world_badge = QLabel(f"WORLD {self._scene_size[0]}×{self._scene_size[1]}")
+        self._hdr_world_badge.setObjectName("headerBadge")
+        hdr.addWidget(self._hdr_world_badge)
+        left_layout.addWidget(header_bar)
+
+        # Videos — two premium camera cards
         video_container = QWidget()
         video_layout = QHBoxLayout(video_container)
         video_layout.setContentsMargins(0, 0, 0, 0)
         video_layout.setSpacing(10)
         video_splitter = QSplitter(Qt.Horizontal)
         video_splitter.setHandleWidth(6)
+        video_splitter.setChildrenCollapsible(False)
 
-        # FOV panel
-        fov_frame = QFrame()
-        fov_layout = QVBoxLayout(fov_frame)
-        fov_layout.setContentsMargins(8, 8, 8, 8)
-        fov_layout.setSpacing(8)
-        fov_hdr = QHBoxLayout()
-        fov_title = QLabel("▣ Camera FOV")
-        fov_hdr.addWidget(fov_title)
-        self.fov_res_lbl = QLabel(f"{self._fov_size[0]}×{self._fov_size[1]}")
-        fov_hdr.addStretch(); fov_hdr.addWidget(self.fov_res_lbl)
-        fov_layout.addLayout(fov_hdr)
-        self.viewport_label = QLabel()
-        self.viewport_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.viewport_label.setAlignment(Qt.AlignCenter)
-        self.viewport_label.setScaledContents(False)
-        fov_layout.addWidget(self.viewport_label, 1)
-        video_splitter.addWidget(fov_frame)
+        def _make_camera_card(icon_text: str, title_text: str, res_text: str, is_primary: bool):
+            card = QFrame()
+            card.setObjectName("cameraCard")
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(0, 0, 0, 0)
+            card_layout.setSpacing(0)
 
-        # God's-eye panel
-        god_frame = QFrame()
-        god_layout = QVBoxLayout(god_frame)
-        god_layout.setContentsMargins(8, 8, 8, 8)
-        god_layout.setSpacing(8)
-        god_hdr = QHBoxLayout()
-        god_title = QLabel("◉ God's-Eye")
-        god_hdr.addWidget(god_title)
-        self.god_res_lbl = QLabel(f"{self._scene_size[0]}×{self._scene_size[1]}")
-        god_hdr.addStretch(); god_hdr.addWidget(self.god_res_lbl)
-        god_layout.addLayout(god_hdr)
-        self.minimap_label = QLabel()
-        self.minimap_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.minimap_label.setAlignment(Qt.AlignCenter)
-        god_layout.addWidget(self.minimap_label, 1)
-        video_splitter.addWidget(god_frame)
+            # Header
+            card_hdr = QFrame()
+            card_hdr.setObjectName("cameraCardHeader")
+            card_hdr.setFixedHeight(40)
+            h = QHBoxLayout(card_hdr)
+            h.setContentsMargins(10, 6, 10, 6)
+            h.setSpacing(8)
+            ic = QLabel(icon_text)
+            ic.setObjectName("cameraIcon")
+            ic.setFixedSize(28, 24)
+            ic.setAlignment(Qt.AlignCenter)
+            h.addWidget(ic)
+            ttl = QLabel(title_text)
+            ttl.setObjectName("cameraTitle")
+            h.addWidget(ttl)
+            h.addStretch()
+            # Live pill — stored for runtime toggle
+            live = QLabel("● LIVE")
+            live.setObjectName("liveBadge")
+            live.setProperty("active", False)
+            # keep reference for primary/secondary distinction
+            card._live_badge = live  # type: ignore
+            h.addWidget(live)
+            # Resolution badge — will be updated via main window refs
+            res = QLabel(res_text)
+            res.setObjectName("resBadge")
+            # store for later external update if needed
+            card._res_badge = res  # type: ignore
+            h.addWidget(res)
+            card_layout.addWidget(card_hdr)
+
+            # Video viewport wrapped with inner padding for depth
+            wrap = QWidget()
+            wrap.setStyleSheet("background: transparent;")
+            wl = QVBoxLayout(wrap)
+            wl.setContentsMargins(8, 8, 8, 8)
+            wl.setSpacing(0)
+            vid = QLabel()
+            vid.setObjectName("videoFeed")
+            vid.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            vid.setAlignment(Qt.AlignCenter)
+            vid.setScaledContents(False)
+            vid.setMinimumSize(240, 180)
+            # placeholder dark shimmer while no frame
+            vid.setStyleSheet("QLabel#videoFeed { background: #020617; border: 1px solid #1e293b; border-radius: 10px; color: #334155; }")
+            wl.addWidget(vid, 1)
+            card_layout.addWidget(wrap, 1)
+
+            # Footer telemetry — per-card quick stats
+            foot = QFrame()
+            foot.setObjectName("cameraCardFooter")
+            foot.setFixedHeight(30)
+            fl = QHBoxLayout(foot)
+            fl.setContentsMargins(10, 4, 10, 4)
+            fl.setSpacing(8)
+            # small telemetry labels — will be populated by _tick / helpers
+            info = QLabel("—")
+            info.setStyleSheet("color:#94a3b8; font-size:10px; font-family:'Consolas','Courier New',monospace; background: transparent; border: none;")
+            info.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            card._footer_info = info  # type: ignore
+            fl.addWidget(info, 1)
+            # optional corner hint
+            hint = QLabel("30 FPS • REAL-TIME" if is_primary else "GOD'S EYE • OVERVIEW")
+            hint.setStyleSheet("color:#475569; font-size:9px; letter-spacing:0.4px; background: transparent;")
+            fl.addWidget(hint)
+            card_layout.addWidget(foot)
+
+            return card, vid, res, live, info, foot
+
+        # FOV primary card
+        fov_card, self.viewport_label, self.fov_res_lbl, self._fov_live_badge, self._fov_footer_info, self._fov_footer = _make_camera_card("▣", "CAMERA  FOV", f"{self._fov_size[0]}×{self._fov_size[1]}", True)
+        # God's-eye secondary card
+        god_card, self.minimap_label, self.god_res_lbl, self._god_live_badge, self._god_footer_info, self._god_footer = _make_camera_card("◉", "GOD'S-EYE", f"{self._scene_size[0]}×{self._scene_size[1]}", False)
+
+        # Ensure res badges keep expected objectName for external styling
+        self.fov_res_lbl.setObjectName("resBadge")
+        self.god_res_lbl.setObjectName("resBadge")
+
+        video_splitter.addWidget(fov_card)
+        video_splitter.addWidget(god_card)
+        video_splitter.setSizes([520, 520])
+        video_splitter.setStretchFactor(0, 1)
+        video_splitter.setStretchFactor(1, 1)
 
         video_layout.addWidget(video_splitter)
         left_layout.addWidget(video_container, 1)
 
-        # Footer stats
-        footer = QHBoxLayout()
-        footer.setSpacing(8)
+        # Telemetry strip — unified status bar below videos (mission HUD)
+        telemetry = QFrame()
+        telemetry.setObjectName("telemetryStrip")
+        telemetry.setFixedHeight(48)
+        tlay = QHBoxLayout(telemetry)
+        tlay.setContentsMargins(10, 6, 10, 6)
+        tlay.setSpacing(10)
+
+        # Lock indicator — dot + text pill
+        dot_wrap = QHBoxLayout()
+        dot_wrap.setSpacing(6)
         self.lock_dot = QLabel("●")
-        footer.addWidget(self.lock_dot)
+        self.lock_dot.setStyleSheet("color:#64748b; font-size:14px; background: transparent;")
+        self.lock_dot.setFixedWidth(14)
+        dot_wrap.addWidget(self.lock_dot)
         self.footer_lock = QLabel("SEARCHING")
-        footer.addWidget(self.footer_lock)
-        footer.addSpacing(16)
+        self.footer_lock.setStyleSheet("font-weight:800; color:#64748b; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:6px; padding:4px 10px; font-size:11px; letter-spacing:0.5px;")
+        self.footer_lock.setMinimumWidth(110)
+        self.footer_lock.setAlignment(Qt.AlignCenter)
+        dot_wrap.addWidget(self.footer_lock)
+        tlay.addLayout(dot_wrap)
+
+        # Divider
+        sep1 = QFrame()
+        sep1.setFrameShape(QFrame.VLine)
+        sep1.setStyleSheet("color:#e2e8f0;")
+        sep1.setFixedWidth(1)
+        tlay.addWidget(sep1)
+
         self.footer_fps = QLabel("FPS —")
-        footer.addWidget(self.footer_fps)
-        footer.addStretch()
+        self.footer_fps.setObjectName("telemetryValue")
+        self.footer_fps.setToolTip("Real-time render FPS — wall clock")
+        tlay.addWidget(self.footer_fps)
         self.footer_info = QLabel("Pan/Tilt —  •  Error —")
-        footer.addWidget(self.footer_info)
-        left_layout.addLayout(footer)
+        self.footer_info.setObjectName("telemetryValue")
+        self.footer_info.setToolTip("Current pan/tilt and tracking error (px / mrad)")
+        tlay.addWidget(self.footer_info, 1)
+
+        # Right-side compact controls hint
+        hint_lbl = QLabel("HOT RELOAD • NO RESTART")
+        hint_lbl.setStyleSheet("color:#2563eb; font-size:9px; font-weight:700; letter-spacing:0.6px; background:#eff6ff; border:1px solid #dbeafe; border-radius:6px; padding:4px 8px;")
+        tlay.addWidget(hint_lbl)
+
+        left_layout.addWidget(telemetry)
 
         main_splitter.addWidget(left_panel)
 
-        # ——— Right: Control Panels ———
+        # ——— Right: Control Deck ———
         self._build_control_panel_widget()
-        
+
         right_scroll = QScrollArea()
         right_scroll.setWidgetResizable(True)
         right_scroll.setWidget(self._control_widget)
-        right_scroll.setMinimumWidth(400)
-        
+        right_scroll.setMinimumWidth(420)
+        right_scroll.setMaximumWidth(520)
+        right_scroll.setStyleSheet("QScrollArea { border: none; background: #f1f5f9; }")
+
         main_splitter.addWidget(right_scroll)
-        main_splitter.setSizes([900, 400])
+        main_splitter.setSizes([920, 420])
+        main_splitter.setStretchFactor(0, 1)
+        main_splitter.setStretchFactor(1, 0)
 
         root.addWidget(main_splitter)
 
@@ -425,6 +554,10 @@ class MainWindow(StateMixin, QMainWindow):
         self.main_splitter = main_splitter
         self.video_splitter = video_splitter
         self.video_container = video_container
+        # keep refs for programmatic updates
+        self._fov_card = fov_card
+        self._god_card = god_card
+        self._telemetry_strip = telemetry
 
         self._target_speed = 60
         self._det_thresh = 200
@@ -446,27 +579,63 @@ class MainWindow(StateMixin, QMainWindow):
         Groups are clearly distinguished with icon headers and a QTabWidget:
         Dashboard | Global | Beacons | Camera | Environment | Disturbances
         """
-        # Root container for control window
+        # Root container for control deck — premium header + pill tabs
         self._control_widget = QWidget()
         cw_layout = QVBoxLayout(self._control_widget)
         cw_layout.setContentsMargins(10, 10, 10, 10)
         cw_layout.setSpacing(10)
 
-        # Title
-        title = QLabel("Control Panel")
-        title.setAlignment(Qt.AlignCenter)
-        cw_layout.addWidget(title)
+        # Premium header — command deck banner
+        ctrl_header = QFrame()
+        ctrl_header.setObjectName("controlHeader")
+        ctrl_header.setFixedHeight(62)
+        ch_lay = QHBoxLayout(ctrl_header)
+        ch_lay.setContentsMargins(14, 10, 14, 10)
+        ch_lay.setSpacing(12)
+        # Left: icon + titles
+        c_icon = QLabel("⬢")
+        c_icon.setStyleSheet("background:#0f172a; color:#38bdf8; font-size:15px; border-radius:7px; padding:4px 8px; font-weight:800;")
+        c_icon.setFixedSize(34, 30)
+        c_icon.setAlignment(Qt.AlignCenter)
+        ch_lay.addWidget(c_icon)
+        c_titles = QVBoxLayout()
+        c_titles.setSpacing(2)
+        c_titles.setContentsMargins(0, 0, 0, 0)
+        c_title = QLabel("COMMAND  DECK")
+        c_title.setObjectName("controlTitle")
+        c_sub = QLabel("HOT RELOAD  •  NO RESTART  •  ALL CHANGES LIVE")
+        c_sub.setObjectName("controlSubtitle")
+        c_titles.addWidget(c_title)
+        c_titles.addWidget(c_sub)
+        ch_lay.addLayout(c_titles)
+        ch_lay.addStretch()
+        # Right: HOT badge + status
+        hot_badge = QLabel("● HOT")
+        hot_badge.setObjectName("hotBadge")
+        hot_badge.setToolTip("Every control is HOT — changes apply on next tick without restart")
+        ch_lay.addWidget(hot_badge)
+        # Quick actions — open dashboard / pop-out
+        c_dash_btn = QPushButton("◉ DASH")
+        c_dash_btn.setToolTip("Open dashboard window (maximized, live graph)")
+        c_dash_btn.setFixedHeight(28)
+        c_dash_btn.setStyleSheet("background:#2563eb; color:white; border:none; border-radius:7px; padding:5px 12px; font-weight:800; font-size:10px;")
+        c_dash_btn.clicked.connect(self._show_dashboard_window)
+        ch_lay.addWidget(c_dash_btn)
+        cw_layout.addWidget(ctrl_header)
 
-        hint = QLabel("All changes are HOT reloaded.")
-        hint.setWordWrap(True)
-        cw_layout.addWidget(hint)
+        # Sub-hint — elegant one-liner under header
+        sub_hint = QLabel("All parameters live — tuned values stream to tracker, camera, and overlay in real-time.")
+        sub_hint.setStyleSheet("color:#64748b; font-size:10px; font-style:italic; background:transparent; padding-left:4px;")
+        sub_hint.setWordWrap(True)
+        cw_layout.addWidget(sub_hint)
 
         tabs = QTabWidget()
+        tabs.setDocumentMode(False)
         cw_layout.addWidget(tabs, 1)
 
         # ── Presets Tab — One-click entire software + auto-run (curated test cases) ──
         self.presets_panel = PresetsPanel()
-        tabs.addTab(self.presets_panel, "Presets")
+        tabs.addTab(self.presets_panel, "⬢  Presets")
         self.presets_panel.presetSelected.connect(self._on_preset_selected)
 
         # ── Dashboard Window — Modular (DashboardPanel) ──
@@ -494,7 +663,7 @@ class MainWindow(StateMixin, QMainWindow):
         self.global_panel.resetRequested.connect(self._reset)
         self.global_panel.exportRequested.connect(self._export_log)
         self.global_panel.dashboardRequested.connect(self._show_dashboard_window)
-        tabs.addTab(self.global_panel, "Global")
+        tabs.addTab(self.global_panel, "◈  Global")
 
         # ── Beacons Tab — Modular (8 per-beacon + 3 multi) ──
         # Uses MultiBeaconPanel (gui/multi_beacon_panel.py) which owns BeaconPanel per beacon.
@@ -542,7 +711,7 @@ class MainWindow(StateMixin, QMainWindow):
         self.beacon_manager.randomizePositionRequested.connect(self._randomize_single_beacon_pos)
         # Also handle per-panel randomize position via manager forwarding
         beacons_layout_outer.addStretch()
-        tabs.addTab(beacons_tab, "Beacons")
+        tabs.addTab(beacons_tab, "◉  Beacons")
 
         # ── Camera Tab — Modular (CameraPanel, 11 params) ──
         # 4 groups: A FOV/Optics, B Pan-Tilt Mechanics, C Display, D Units, E Gain
@@ -570,11 +739,11 @@ class MainWindow(StateMixin, QMainWindow):
         self._cam_gain_box = None
         # HOT wiring — debounced (single signal covers all 11 params + gain)
         self.camera_panel.configChanged.connect(lambda: self._schedule_auto("camera", self._apply_camera_hot, 420))
-        tabs.addTab(self.camera_panel, "Camera")
+        tabs.addTab(self.camera_panel, "◎  Camera")
 
         # ── Control Tab — Modular (P/PI/PID, dead zone, clamp, update rate) ──
         self.control_panel = ControlPanel(initial=self.controller_config)
-        tabs.addTab(self.control_panel, "Control")
+        tabs.addTab(self.control_panel, "⟡  Control")
         # HOT wiring — controller tuning
         self.control_panel.configChanged.connect(self._on_control_config_changed)
         # Keep camera gain in sync with control Kp (bidirectional)
@@ -584,7 +753,7 @@ class MainWindow(StateMixin, QMainWindow):
 
         # ── Overlay Tab — Modular (Crosshair / Lock / Error) ──
         self.overlay_panel = OverlayPanel(initial=self.overlay_config)
-        tabs.addTab(self.overlay_panel, "Overlay")
+        tabs.addTab(self.overlay_panel, "◐  Overlay")
         # HOT wiring
         self.overlay_panel.configChanged.connect(self._on_overlay_config_changed)
 
@@ -622,12 +791,12 @@ class MainWindow(StateMixin, QMainWindow):
             try: w.valueChanged.connect(lambda _, s="camera": self._mark_dirty(s))
             except: pass
         env_layout.addStretch()
-        tabs.addTab(env_tab, "Environment")
+        tabs.addTab(env_tab, "⬣  Environment")
 
         # ── Disturbances Tab — Modular (DisturbancesPanel) ──
         self.disturbances_panel = DisturbancesPanel()
         self.sliders = self.disturbances_panel.sliders
-        tabs.addTab(self.disturbances_panel, "Disturbances")
+        tabs.addTab(self.disturbances_panel, "⚡  Disturbances")
 
         # initial snapshots for dirty tracking (HOT) — includes control+overlay
         for sec in ["global", "beacons", "camera", "control", "overlay", "environment", "disturbances"]:
@@ -665,6 +834,34 @@ class MainWindow(StateMixin, QMainWindow):
                 else:
                     panel.set_world_bounds(self._scene_size)
             except: pass
+
+    def _update_live_indicators(self):
+        """Update LIVE badges + header mode badge for mission-control feel."""
+        running = bool(getattr(self, "_running", False))
+        mode = "TRACKING" if running else "STANDBY"
+        color_bg = "#10b981" if running else "#334155"
+        try:
+            if hasattr(self, "_hdr_mode_badge"):
+                self._hdr_mode_badge.setText(f"● {mode}")
+                self._hdr_mode_badge.setStyleSheet(
+                    f"background:{color_bg}; color:#ffffff; border:none; border-radius:6px; padding:4px 10px; font-weight:800; font-size:10px; letter-spacing:0.6px;"
+                )
+            for badge in [getattr(self, "_fov_live_badge", None), getattr(self, "_god_live_badge", None)]:
+                if badge is not None:
+                    badge.setProperty("active", running)
+                    badge.style().unpolish(badge); badge.style().polish(badge)
+                    badge.setStyleSheet(
+                        "background:%s; color:#ffffff; font-weight:800; font-size:9px; letter-spacing:0.6px; border-radius:4px; padding:3px 7px;" % (color_bg if running else "#334155")
+                    )
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "_hdr_fov_badge"):
+                self._hdr_fov_badge.setText(f"FOV {self._fov_size[0]}×{self._fov_size[1]}")
+            if hasattr(self, "_hdr_world_badge"):
+                self._hdr_world_badge.setText(f"WORLD {self._scene_size[0]}×{self._scene_size[1]}")
+        except Exception:
+            pass
 
     def _add_slider_row(self, layout, label, vmin, vmax, vinit, callback, key):
         # Deprecated — GlobalPanel now owns slider rows (modular). Kept for backward compat.
@@ -1760,14 +1957,20 @@ class MainWindow(StateMixin, QMainWindow):
                     pass
                 self._pause_time = None
             self.timer.start(TICK_MS); self._running = True
+            try: self._update_live_indicators()
+            except: pass
             self.statusBar().showMessage("Running — tracking…", 2000)
     def _pause(self):
         if self._running:
             self.timer.stop(); self._running = False; self._pause_time = time.time()
+            try: self._update_live_indicators()
+            except: pass
             self.statusBar().showMessage("Paused", 2000)
         else: self._pause_time = None
     def _reset(self):
         self.timer.stop(); self._running=False; self._pause_time=None
+        try: self._update_live_indicators()
+        except: pass
         # FIX: close old logger file handle before discarding (prevents leak)
         try:
             if hasattr(self, "perf") and hasattr(self.perf, "close"):
@@ -2087,30 +2290,50 @@ class MainWindow(StateMixin, QMainWindow):
                     self.stat_labels["lock_status"].setText(self.tracker.status.value)
         except: pass
 
-        # Footer + statusBar — now with angular units (px/mrad/µrad) via camera scale + overlay
+        # Footer + statusBar — premium telemetry with angular units
         try:
-            col={"tracking":"#22c55e","acquired":"#06b6d4","lost":"#ef4444","searching":"#64748b"}[self.tracker.status.value]
-            self.lock_dot.setStyleSheet(f"color:{col}; font-size:16px;")
+            col_map = {"tracking":"#22c55e","acquired":"#06b6d4","lost":"#ef4444","searching":"#64748b"}
+            col = col_map.get(self.tracker.status.value, "#64748b")
+            self.lock_dot.setStyleSheet(f"color:{col}; font-size:16px; background: transparent;")
             self.footer_lock.setText(self.tracker.status.value.upper())
-            self.footer_lock.setStyleSheet(f"color:{col}; font-weight:700;")
-            self.footer_fps.setText(f"FPS {s['fps']}  •  {s['frame_count']} frames  •  Det {s['detection_rate_pct']}%")
+            self.footer_lock.setStyleSheet(
+                f"color:{col}; font-weight:800; background:#f1f5f9; border:1px solid {col}40; border-radius:6px; padding:4px 10px; font-size:11px; letter-spacing:0.5px;"
+            )
+            # FPS pill — color-code
+            fps_val = float(s.get('fps', 0) or 0)
+            fps_col = "#22c55e" if fps_val >= 25 else "#eab308" if fps_val >= 15 else "#ef4444"
+            self.footer_fps.setText(f"FPS {s['fps']}")
+            self.footer_fps.setStyleSheet(f"background:#ffffff; border:1px solid #e2e8f0; border-left: 3px solid {fps_col}; border-radius:6px; padding:4px 10px; font-weight:800; color:{fps_col}; font-family:'Consolas','Courier New',monospace; font-size:11px;")
             pan,tilt=self.camera.pan,self.camera.tilt
-            # Error label respects overlay error_units and camera pixel_scale
-            err_label = "-"
+            err_label = "—"
             if tracking_error_px is not None:
                 try:
                     units = getattr(getattr(self, "overlay_config", None), "error_units", "px")
                     scale = float(getattr(getattr(self.camera, "config", None), "pixel_scale_mrad", 0.035))
                     if units == "mrad":
-                        err_label = f"{tracking_error_px*scale:.3f}mrad"
+                        err_label = f"{tracking_error_px*scale:.3f} mrad"
                     elif units == "urad":
-                        err_label = f"{tracking_error_px*scale*1000:.0f}µrad"
+                        err_label = f"{tracking_error_px*scale*1000:.0f} µrad"
                     elif units == "px+mrad":
-                        err_label = f"{tracking_error_px:.1f}px {tracking_error_px*scale:.2f}mrad"
+                        err_label = f"{tracking_error_px:.1f}px · {tracking_error_px*scale:.2f} mrad"
                     else:
-                        err_label = f"{tracking_error_px:.1f}px"
+                        err_label = f"{tracking_error_px:.1f} px"
                 except:
-                    err_label = f"{tracking_error_px:.1f}px"
-            self.footer_info.setText(f"Pan {pan:.0f} Tilt {tilt:.0f}  •  Err {err_label}  •  RMS {s['rms_tracking_error_px']}  •  Jit {s['jitter_ms']}ms" if tracking_error_px is not None else f"Pan {pan:.0f} Tilt {tilt:.0f}  •  No lock  •  Jit {s['jitter_ms']}ms")
+                    err_label = f"{tracking_error_px:.1f} px"
+                # color error pill by threshold
+                err_col = "#22c55e" if tracking_error_px < 5 else "#eab308" if tracking_error_px < 15 else "#ef4444"
+                self.footer_info.setStyleSheet(f"background:#ffffff; border:1px solid #e2e8f0; border-left:3px solid {err_col}; border-radius:6px; padding:4px 10px; font-weight:700; color:{err_col}; font-family:'Consolas','Courier New',monospace; font-size:11px;")
+            else:
+                self.footer_info.setStyleSheet("background:#f8fafc; border:1px dashed #cbd5e1; border-radius:6px; padding:4px 10px; font-weight:600; color:#64748b; font-family:'Consolas','Courier New',monospace; font-size:11px;")
+            self.footer_info.setText(f"PAN {pan:.0f}  TILT {tilt:.0f}  •  ERR {err_label}  •  RMS {s.get('rms_tracking_error_px','—')}  •  JIT {s.get('jitter_ms','—')}ms" if tracking_error_px is not None else f"PAN {pan:.0f}  TILT {tilt:.0f}  •  NO LOCK  •  JIT {s.get('jitter_ms','—')}ms")
+            # Per-card footers — keep in sync
+            try:
+                if hasattr(self, "_fov_footer_info"):
+                    self._fov_footer_info.setText(f"PAN {pan:.0f} TILT {tilt:.0f} • {err_label}")
+                if hasattr(self, "_god_footer_info"):
+                    # God view shows scene coverage
+                    cov = f"{self._scene_size[0]}×{self._scene_size[1]}"
+                    self._god_footer_info.setText(f"SCENE {cov} • {self.tracker.status.value.upper()}")
+            except: pass
             self.statusBar().showMessage(f"{self.tracker.status.value.upper()}  •  FPS {s['fps']}  •  Err {err_label}  •  Det {s['detection_rate_pct']}%" if tracking_error_px is not None else f"{self.tracker.status.value.upper()}  •  FPS {s['fps']}  •  Det {s['detection_rate_pct']}%", 1500)
         except: pass

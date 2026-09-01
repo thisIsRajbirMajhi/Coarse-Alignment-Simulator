@@ -40,9 +40,9 @@ class DashboardWindow(QMainWindow):
         super().__init__(main_window)
         self.main_window = main_window
         self.dashboard_panel = dashboard_panel
-        self.setWindowTitle("Dashboard")
-        self.setMinimumSize(900, 650)
-        self.resize(1240, 860)
+        self.setWindowTitle("◉ FSOC — Mission Dashboard  •  Live Telemetry")
+        self.setMinimumSize(960, 680)
+        self.resize(1280, 880)
         self.setStyleSheet(APP_STYLE)
         # Allow prominent title + resizable
         self.setWindowFlags(self.windowFlags() | Qt.Window)
@@ -59,11 +59,11 @@ class DashboardWindow(QMainWindow):
         tb = QToolBar("Dashboard Tools")
         tb.setMovable(False)
         tb.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        tb.setStyleSheet("QToolBar { background:#ffffff; border-bottom:1px solid #e2e8f0; spacing:8px; padding:4px; }")
+        tb.setStyleSheet("QToolBar { background:#ffffff; border-bottom:1px solid #e2e8f0; spacing:8px; padding:6px 8px; } QToolBar QToolButton { background:#f8fafc; border:1px solid #e2e8f0; border-radius:7px; padding:5px 12px; font-weight:700; } QToolBar QToolButton:hover { background:#eff6ff; border-color:#93c5fd; color:#1e40af; }")
         self.addToolBar(Qt.TopToolBarArea, tb)
 
         act_fit = QAction("◎ Auto-fit", self)
-        act_fit.setToolTip("Auto-scale graph to show complete history (no trimming) — responsive")
+        act_fit.setToolTip("Auto-scale graph to show complete history (no trimming) — responsive, shows full mission timeline")
         act_fit.triggered.connect(self._on_autofit)
         tb.addAction(act_fit)
 
@@ -79,7 +79,7 @@ class DashboardWindow(QMainWindow):
         act_export.triggered.connect(self._on_export)
         tb.addAction(act_export)
 
-        act_help = QAction("? Help", self)
+        act_help = QAction("◐ Help", self)
         act_help.setToolTip("Dashboard: left = live values, right = responsive auto-scaling graph with complete picture")
         act_help.triggered.connect(self._on_help)
         tb.addAction(act_help)

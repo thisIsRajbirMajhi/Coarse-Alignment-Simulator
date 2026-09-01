@@ -71,7 +71,7 @@ class CameraPanel(QWidget):
         # ----------------------------------------------------
         # Group A: Field of View / Optics
         # ----------------------------------------------------
-        fov_box = QGroupBox("A — Field of View / Optics")
+        fov_box = QGroupBox("⬢  A  —  FIELD OF VIEW  •  OPTICS")
         fov_grid = QGridLayout(fov_box)
         fov_grid.setContentsMargins(12, 18, 12, 12)
         fov_grid.setHorizontalSpacing(8)
@@ -89,7 +89,7 @@ class CameraPanel(QWidget):
         # ----------------------------------------------------
         # Group B: Pan-Tilt Mechanics
         # ----------------------------------------------------
-        mech_box = QGroupBox("B — Pan-Tilt Mechanics")
+        mech_box = QGroupBox("◈  B  —  PAN-TILT MECHANICS")
         mech_grid = QGridLayout(mech_box)
         mech_grid.setContentsMargins(12, 18, 12, 12)
         mech_grid.setHorizontalSpacing(8)
@@ -142,7 +142,7 @@ class CameraPanel(QWidget):
         # ----------------------------------------------------
         # Group C: Display — viewport / God view on-screen sizes
         # ----------------------------------------------------
-        disp_box = QGroupBox("C — Display (On-screen Rendering)")
+        disp_box = QGroupBox("▣  C  —  DISPLAY  •  ON-SCREEN RENDERING")
         disp_grid = QGridLayout(disp_box)
         disp_grid.setContentsMargins(12, 18, 12, 12)
         disp_grid.setHorizontalSpacing(8)
@@ -167,7 +167,7 @@ class CameraPanel(QWidget):
         # ----------------------------------------------------
         # Group D: Units / Reporting — pixel → angle
         # ----------------------------------------------------
-        units_box = QGroupBox("D — Units / Reporting (Pixel → Angle)")
+        units_box = QGroupBox("◎  D  —  UNITS  •  PIXEL → ANGLE")
         units_grid = QGridLayout(units_box)
         units_grid.setContentsMargins(12, 18, 12, 12)
         units_grid.setHorizontalSpacing(8)
@@ -183,7 +183,7 @@ class CameraPanel(QWidget):
         # ----------------------------------------------------
         # Group E: Control Gain (kept here for cohesion)
         # ----------------------------------------------------
-        gain_box = QGroupBox("E — Controller Gain")
+        gain_box = QGroupBox("⟡  E  —  CONTROLLER GAIN")
         gain_box.setStyleSheet("QGroupBox { padding-top: 14px; }")
         gain_layout = QVBoxLayout(gain_box)
         gain_layout.setContentsMargins(10, 14, 10, 10)
@@ -220,8 +220,9 @@ class CameraPanel(QWidget):
 
     def _label(self, text: str) -> QLabel:
         lbl = QLabel(text)
-        lbl.setStyleSheet("color:#334155; font-size:11px;")
+        lbl.setStyleSheet("color:#334155; font-size:11px; font-weight:600;")
         return lbl
+
 
     # ========================================================
     # Wiring — emit on any change (HOT, debounced in MainWindow)

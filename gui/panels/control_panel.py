@@ -61,7 +61,7 @@ class ControlPanel(QWidget):
         # ----------------------------------------------------
         # Group A: Controller Type
         # ----------------------------------------------------
-        type_box = QGroupBox("A — Controller Type")
+        type_box = QGroupBox("⟡  A  —  CONTROLLER  TYPE")
         type_layout = QGridLayout(type_box)
         type_layout.setContentsMargins(12, 18, 12, 12)
         type_layout.setHorizontalSpacing(8)
@@ -85,7 +85,7 @@ class ControlPanel(QWidget):
         # ----------------------------------------------------
         # Group B: Gains — Kp, Ki, Kd
         # ----------------------------------------------------
-        gains_box = QGroupBox("B — Gains")
+        gains_box = QGroupBox("⬢  B  —  GAINS  •  Kp / Ki / Kd")
         gains_grid = QGridLayout(gains_box)
         gains_grid.setContentsMargins(12, 18, 12, 12)
         gains_grid.setHorizontalSpacing(8)
@@ -135,7 +135,7 @@ class ControlPanel(QWidget):
         # ----------------------------------------------------
         # Group C: Timing & Limits — update rate, dead zone, clamp
         # ----------------------------------------------------
-        limits_box = QGroupBox("C — Timing & Limits")
+        limits_box = QGroupBox("◎  C  —  TIMING  &  LIMITS")
         limits_grid = QGridLayout(limits_box)
         limits_grid.setContentsMargins(12, 18, 12, 12)
         limits_grid.setHorizontalSpacing(8)

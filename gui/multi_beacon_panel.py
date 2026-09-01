@@ -70,7 +70,7 @@ class MultiBeaconPanel(QWidget):
         # Header: Beacon Count + Target Index + Randomize All
         # ----------------------------------------------------
         # Multi-beacon controls — grouped in one QGroupBox for clear separation
-        header_box = QGroupBox("Multi-Beacon — Count & Target")
+        header_box = QGroupBox("⬢  MULTI-BEACON  —  COUNT & TARGET")
         header_grid = QGridLayout(header_box)
         header_grid.setContentsMargins(12, 18, 12, 12)
         header_grid.setHorizontalSpacing(8)
@@ -121,7 +121,7 @@ class MultiBeaconPanel(QWidget):
         # Per-Beacon scroll area — one BeaconPanel per beacon
         # ----------------------------------------------------
         # Each BeaconPanel exposes 8 per-beacon params (toggle, profile, seed, speed, brightness, radius, hitbox, center)
-        self.per_beacon_box = QGroupBox("Per-Beacon — Every Parameter Dynamic (Live)")
+        self.per_beacon_box = QGroupBox("◈  PER-BEACON  —  Every Parameter Live")
         per_outer = QVBoxLayout(self.per_beacon_box)
         per_outer.setContentsMargins(8, 14, 8, 8)
         per_outer.setSpacing(6)

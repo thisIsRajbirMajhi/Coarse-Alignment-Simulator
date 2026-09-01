@@ -63,7 +63,7 @@ class OverlayPanel(QWidget):
         # ----------------------------------------------------
         # Group A: Crosshair / Tracking Overlay
         # ----------------------------------------------------
-        cross_box = QGroupBox("A — Crosshair / Tracking Overlay")
+        cross_box = QGroupBox("◈  A  —  CROSSHAIR  •  TRACKING OVERLAY")
         cross_grid = QGridLayout(cross_box)
         cross_grid.setContentsMargins(12, 18, 12, 12)
         cross_grid.setHorizontalSpacing(8)
@@ -126,7 +126,7 @@ class OverlayPanel(QWidget):
         # ----------------------------------------------------
         # Group B: Lock Status Indication
         # ----------------------------------------------------
-        lock_box = QGroupBox("B — Lock Status Indication")
+        lock_box = QGroupBox("◎  B  —  LOCK  STATUS")
         lock_grid = QGridLayout(lock_box)
         lock_grid.setContentsMargins(12, 18, 12, 12)
         lock_grid.setHorizontalSpacing(8)
@@ -192,7 +192,7 @@ class OverlayPanel(QWidget):
         # ----------------------------------------------------
         # Group C: Error Visualization
         # ----------------------------------------------------
-        err_box = QGroupBox("C — Error Visualization")
+        err_box = QGroupBox("⬢  C  —  ERROR  VISUALIZATION")
         err_grid = QGridLayout(err_box)
         err_grid.setContentsMargins(12, 18, 12, 12)
         err_grid.setHorizontalSpacing(8)

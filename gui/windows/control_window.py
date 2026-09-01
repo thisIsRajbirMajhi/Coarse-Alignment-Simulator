@@ -27,21 +27,22 @@ class ControlDashboardWindow(QMainWindow):
     def __init__(self, main_window, control_widget: QWidget):
         super().__init__(main_window)
         self.main_window = main_window
-        self.setWindowTitle("FSOC Control Panel — Live Dashboard & All Controls (Separate Window)")
-        self.setMinimumSize(440, 760)
-        self.resize(480, 920)
+        self.setWindowTitle("⬢ FSOC — Command Deck  •  Live Controls (HOT)")
+        self.setMinimumSize(460, 780)
+        self.resize(520, 960)
         self.setStyleSheet(APP_STYLE)
 
-        # Central scroll — makes long tab content responsive
+        # Central scroll — makes long tab content responsive with subtle outer bg
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea { border: none; background: #f8fafc; }")
+        scroll.setStyleSheet("QScrollArea { border: none; background: #f1f5f9; } QScrollBar:vertical { background:#e2e8f0; width:8px; }")
         scroll.setWidget(control_widget)
         self.setCentralWidget(scroll)
 
-        # Status bar — hints that controls are HOT
+        # Status bar — hints that controls are HOT with pill badge feel
         sb = QStatusBar()
-        sb.showMessage("Control Panel — all parameters live, no restart required")
+        sb.setStyleSheet("QStatusBar { background:#ffffff; border-top:1px solid #e2e8f0; } QStatusBar QLabel { color:#475569; }")
+        sb.showMessage("⬢ COMMAND DECK  •  all parameters live (HOT)  •  no restart required  •  drag to resize, tabs = mission presets")
         self.setStatusBar(sb)
 
         # Keep as normal top-level window (not modal)
