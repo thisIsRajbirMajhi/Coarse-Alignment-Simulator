@@ -116,21 +116,26 @@ class PTZCamera:
         res = float(self.config.resolution)
         if res <= 1e-6:
             return float(delta)
-        # Quantize to nearest resolution step (preserves sign)
         steps = round(delta / res)
         return float(steps * res)
 
-    def _slew_limit(self, delta: float, dt: float) -> float:
-        max_rate = float(self.config.max_slew_rate)
+    def _slew_limit(self, delta: float, dt: float, is_pan: bool = True) -> float:
+        # Use deg/sec limits converted to px/s via pixel_scale
+        try:
+            deg = float(self.config.max_pan_speed_deg if is_pan else self.config.max_tilt_speed_deg)
+            # deg to mrad to px
+            px_per_deg = 17.453292519943295 / max(1e-6, float(self.config.pixel_scale_mrad))
+            max_rate = deg * px_per_deg
+        except:
+            max_rate = float(self.config.max_slew_rate)
         if max_rate <= 1e-6:
             return float(delta)
         max_delta = max_rate * float(dt)
         return float(np.clip(delta, -max_delta, max_delta))
 
     def _apply_delta(self, d_pan: float, d_tilt: float, dt: float) -> None:
-        # Slew limit then quantize
-        d_pan = self._slew_limit(d_pan, dt)
-        d_tilt = self._slew_limit(d_tilt, dt)
+        d_pan = self._slew_limit(d_pan, dt, is_pan=True)
+        d_tilt = self._slew_limit(d_tilt, dt, is_pan=False)
         d_pan = self._quantize(d_pan)
         d_tilt = self._quantize(d_tilt)
         self.pan += float(d_pan)

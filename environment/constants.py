@@ -8,8 +8,8 @@ MIN_RES: int = 50
 
 # Canonical defaults — match original Scene behaviour before modularisation.
 DEFAULTS: dict = {
-    "world_width": 1000,          # px, 50..5000
-    "world_height": 1000,         # px, 50..5000
+    "world_width": 5000,          # px, fixed 5000 God View
+    "world_height": 5000,         # px, fixed 5000 God View
     "seed": 42,                   # int 0..999999, None means random
     "bg_top": 12,                 # int 0..60  — zenith (top) gradient color
     "bg_bottom": 22,              # int 0..80  — horizon (bottom) gradient color
@@ -21,11 +21,10 @@ DEFAULTS: dict = {
     "dynamic_speed": 1.0,         # float 0.1..5.0 — animation time multiplier
 }
 
-# Each entry: (min, max) for validation via EnvironmentConfig.validate().
-# Used by GUI spinbox ranges and Scene clamping — single definition avoids drift.
+# God View fixed 5000x5000, Camera Screen Size 2000-5000 configurable
 LIMITS: dict[str, tuple[float, float]] = {
-    "world_width": (MIN_RES, MAX_RES),
-    "world_height": (MIN_RES, MAX_RES),
+    "world_width": (5000, 5000),
+    "world_height": (5000, 5000),
     "seed": (0, 999999),
     "bg_top": (0, 60),
     "bg_bottom": (0, 80),

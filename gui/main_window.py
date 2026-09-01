@@ -22,7 +22,6 @@ from disturbance import disturbances as dist
 from environment.config import EnvironmentConfig
 from environment.constants import MAX_RES, MIN_RES
 from environment.scene import Scene
-from gui.beacon_panel import BeaconPanel
 from gui.core.renderer import Renderer
 from gui.environment_panel import EnvironmentPanel
 from gui.mixins.state_mixin import StateMixin
@@ -32,16 +31,11 @@ from gui.panels.control_panel import ControlPanel
 from gui.panels.dashboard_panel import DashboardPanel
 from gui.panels.disturbances_panel import DisturbancesPanel
 from gui.panels.global_panel import GlobalPanel
-from gui.panels.overlay_panel import OverlayPanel
-from gui.panels.presets_panel import PresetsPanel
 from gui.styles import APP_STYLE, FOV_SIZE, SCENE_SIZE, TICK_MS
 from gui.windows.control_window import ControlDashboardWindow
 from gui.windows.dashboard_window import DashboardWindow
-from overlay.config import OverlayConfig
-from overlay.renderer import PulseState
 from perf_log.metrics import PerformanceLogger
-from presets.applier import apply_preset
-from target.config import BeaconConfig, MultiBeaconConfig
+from target.config import MultiBeaconConfig
 from target.motion import MotionProfile, Target, create_beacons
 from tracking.tracker import LockStatus, Tracker
 
@@ -54,19 +48,17 @@ class MainWindow(StateMixin, QMainWindow):
         self.setStyleSheet(APP_STYLE)
 
         self._camera_drift_state: dict = {}
+        self._platform_motion_state: dict = {}
+        self._jitter_state: dict = {}
         self._scene_size = SCENE_SIZE
         self._fov_size = FOV_SIZE
         self._viewport_display_size = (400, 300)
         self._god_display_size = (400, 300)
-        # Beacon/Target — immediate migration: typed MultiBeaconConfig (8 per-beacon params + 3 multi)
-        self.beacon_config = MultiBeaconConfig(
-            beacon_count=1, target_index=0,
-            beacons=[BeaconConfig(beacon_id=0, speed=60, brightness=255, radius=5, hitbox_radius=14, center_radius=2, profile="curved", position_seed=42)].copy()
-        ).validate()
-        # Legacy mirror attrs for back-compat fallback
+        # Beacon/Target — simplified: only count and target index, fixed defaults
+        self.beacon_config = MultiBeaconConfig(beacon_count=1, target_index=0).validate()
         self._beacon_count = int(self.beacon_config.beacon_count)
-        self._hitbox_radius = int(self.beacon_config.beacons[0].hitbox_radius)
-        self._center_radius = int(self.beacon_config.beacons[0].center_radius)
+        self._hitbox_radius = 14
+        self._center_radius = 2
         self._target_beacon_id = int(self.beacon_config.target_index)
         # Global tuning defaults — now fully configurable
         self._tracker_smoothing = 0.4
@@ -85,17 +77,17 @@ class MainWindow(StateMixin, QMainWindow):
             viewport_width=self._viewport_display_size[0], viewport_height=self._viewport_display_size[1],
             god_width=self._god_display_size[0], god_height=self._god_display_size[1],
         ).validate(self._scene_size)
-        # Overlay — crosshair / lock / error (modular, intuitive)
-        self.overlay_config = OverlayConfig().validate()
-        self._overlay_pulse = PulseState()
         # Controller — P/PI/PID, dead zone, clamp, update rate (robust, modular)
         self.controller_config = ControllerConfig().validate()
+        # Disturbance & Noise — full spec suite (Image Noise, Jitter, Atmosphere, Platform Motion)
+        from disturbance.config import DisturbanceConfig as _DC
+        self.disturbance_config = _DC().validate()
         self._last_viewport_frame = None
         self._last_god_frame = None
-        # Dirty tracking for HOT Apply per-section (now auto-HOT, but kept for Master confirm)
+        # Dirty tracking for Apply per-section (now auto-, but kept for Master confirm)
         self._dirty_tabs: set[str] = set()
         self._applied_snapshot: dict = {}
-        # Debounced auto-HOT timers per section (so every single spin is HOT without spamming)
+        # Debounced auto- timers per section (so every single spin is without spamming)
         self._auto_timers: dict[str, QTimer] = {}
         self._build_simulation()
         self._build_ui()
@@ -112,10 +104,16 @@ class MainWindow(StateMixin, QMainWindow):
         sb.showMessage("Ready — configure scene/viewport (up to 5000×5000) then Start")
         self.setStatusBar(sb)
 
-        # Initial dashboard populate so no field appears empty ("-" -> "0.00 S")
+        # Initial dashboard populate so no field appears empty ("-" -> "— S")
         try:
             if hasattr(self, "dashboard_panel"):
-                self.dashboard_panel.update_from_summary(self.perf.summary(), self.tracker.status.value, None, camera_scale_mrad=getattr(getattr(self, "camera", None), "config", None) and getattr(self.camera.config, "pixel_scale_mrad", 0.035))
+                cam_scale = 0.035
+                try:
+                    if hasattr(self, "camera") and hasattr(self.camera, "config") and getattr(self.camera.config, "pixel_scale_mrad", None) is not None:
+                        cam_scale = float(self.camera.config.pixel_scale_mrad)
+                except Exception:
+                    pass
+                self.dashboard_panel.update_from_summary(self.perf.summary(), self.tracker.status.value, None, camera_scale_mrad=cam_scale)
         except Exception:
             pass
 
@@ -152,6 +150,13 @@ class MainWindow(StateMixin, QMainWindow):
             profile = MotionProfile(self.motion_combo.currentText())  # type: ignore
         except Exception:
             profile = MotionProfile.CURVED
+        # Disturbances — collect validated DisturbanceConfig if panel available (single source)
+        try:
+            if hasattr(self, "disturbances_panel") and self.disturbances_panel is not None:
+                dcfg = self.disturbances_panel.collect_config().validate()
+                self.disturbance_config = dcfg
+        except Exception:
+            pass
         # Environment — collect validated config (panel if available, else env_config)
         try:
             if hasattr(self, "env_panel") and self.env_panel is not None:
@@ -185,84 +190,63 @@ class MainWindow(StateMixin, QMainWindow):
         cam_cfg.fov_width = int(fov_w); cam_cfg.fov_height = int(fov_h)
         self.camera_config = cam_cfg
 
-        # Build scene via typed config (preferred) — keeps gradient/haze/star modularity
+        # Build scene via typed config
         self.scene = Scene(config=cfg)
-        # Multi-beacon — collect validated MultiBeaconConfig (8 per-beacon + 3 multi)
+        # Beacons — single panel, all beacons share same rules
         beacon_count = int(getattr(self, "_beacon_count", 1))
-        hb = int(getattr(self, "_hitbox_radius", 14))
-        cr = int(getattr(self, "_center_radius", 2))
+        hb = 14
+        cr = 2
         tgt_id = int(getattr(self, "_target_beacon_id", 0))
-        # Prefer manager's live config if UI already built (immediate migration)
+        shape = "square"
+        size_w = 10
+        size_h = 10
+        blinking = False
+        speed_random = False
+        tgt_x = None
+        tgt_y = None
         try:
             if hasattr(self, "beacon_manager") and self.beacon_manager is not None:
                 multi_cfg = self.beacon_manager.collect_multi_config().validate()
                 self.beacon_config = multi_cfg
                 beacon_count = int(multi_cfg.beacon_count)
                 tgt_id = int(multi_cfg.target_index)
-                # Use per-beacon configs for creation if available
-                if multi_cfg.beacons and len(multi_cfg.beacons) == beacon_count:
-                    # Keep global hb/cr for fallback but per-beacon will overlay
-                    hb = int(multi_cfg.beacons[0].hitbox_radius)
-                    cr = int(multi_cfg.beacons[0].center_radius)
+                shape = str(getattr(multi_cfg, "shape", "square"))
+                size_w = int(getattr(multi_cfg, "size_w", 10))
+                size_h = int(getattr(multi_cfg, "size_h", 10))
+                blinking = bool(getattr(multi_cfg, "blinking", False))
+                speed_random = bool(getattr(multi_cfg, "speed_random", False))
+                tgt_x = float(getattr(multi_cfg, "x", 2500))
+                tgt_y = float(getattr(multi_cfg, "y", 2500))
+                try:
+                    profile = multi_cfg.profile
+                except: pass
+                speed = float(getattr(multi_cfg, "speed", speed))
             elif hasattr(self, "beacon_config"):
                 multi_cfg = self.beacon_config.validate()
                 beacon_count = int(multi_cfg.beacon_count)
                 tgt_id = int(multi_cfg.target_index)
-            else:
-                multi_cfg = None
+                shape = str(getattr(multi_cfg, "shape", shape))
+                size_w = int(getattr(multi_cfg, "size_w", size_w))
+                size_h = int(getattr(multi_cfg, "size_h", size_h))
+                blinking = bool(getattr(multi_cfg, "blinking", blinking))
+                speed_random = bool(getattr(multi_cfg, "speed_random", speed_random))
+                tgt_x = float(getattr(multi_cfg, "x", 2500)) if beacon_count == 1 else None
+                tgt_y = float(getattr(multi_cfg, "y", 2500)) if beacon_count == 1 else None
         except Exception:
-            multi_cfg = None
-        # Legacy fallback: spins (only before manager exists, e.g., first _build_simulation in __init__)
-        try:
-            # Only use spins if manager not yet created (first init)
-            if not hasattr(self, "beacon_manager"):
-                beacon_count = int(self.beacon_count_spin.value())  # type: ignore
-                hb = int(self.hitbox_spin.value())  # type: ignore
-                cr = int(self.center_spin.value())  # type: ignore
-                tgt_id = int(self.target_beacon_spin.value())  # type: ignore
-        except:
             pass
-        # Offset seed per reset to vary placement but keep primary deterministic
         base_seed = int(cfg.seed) + int(self.perf.frame_count if hasattr(self, "perf") else 0) % 997 if 'cfg' in locals() else 42
-        # Factory — respects global profile/speed but per-beacon overlay follows
         self.beacons: list[Target] = create_beacons(beacon_count, (scene_w, scene_h), profile, speed,
                                                      seed=base_seed, hitbox_radius=hb, center_radius=cr,
-                                                     brightness=g_bright, radius=g_radius)
-        # Overlay per-beacon configs (8 params) if available — HOT, preserves positions etc.
-        try:
-            if hasattr(self, "beacon_manager") and self.beacon_manager is not None:
-                multi_cfg = self.beacon_manager.collect_multi_config().validate()
-                for i, b_cfg in enumerate(multi_cfg.beacons):
-                    if i < len(self.beacons):
-                        try:
-                            b_cfg.beacon_id = int(i)
-                            b_cfg.apply_to_target(self.beacons[i])
-                            # Position already clamped via apply_to_target
-                        except Exception:
-                            pass
-                tgt_id = int(multi_cfg.target_index)
-        except Exception:
-            pass
+                                                     brightness=g_bright, radius=g_radius,
+                                                     shape=shape, size_w=size_w, size_h=size_h, blinking=blinking,
+                                                     x=tgt_x if beacon_count == 1 else None, y=tgt_y if beacon_count == 1 else None,
+                                                     speed_random=speed_random)
         tgt_id = int(np.clip(int(tgt_id), 0, max(0, len(self.beacons)-1)))
         self._target_beacon_id = int(tgt_id)
         self._beacon_count = int(beacon_count)
         self._hitbox_radius = int(hb); self._center_radius = int(cr)
-        # Sync beacon_config to reflect live beacons
-        try:
-            from target.config import BeaconConfig as _BC
-            live_cfgs = [_BC.from_target(b).validate() for b in self.beacons]
-            from target.config import MultiBeaconConfig as _MBC
-            self.beacon_config = _MBC(beacon_count=len(self.beacons), target_index=int(tgt_id), beacons=live_cfgs).validate()
-        except Exception:
-            pass
+        self.beacon_config = MultiBeaconConfig(beacon_count=len(self.beacons), target_index=int(tgt_id), shape=shape, size_w=size_w, size_h=size_h, x=float(tgt_x) if tgt_x is not None else 2500, y=float(tgt_y) if tgt_y is not None else 2500, profile=str(profile) if isinstance(profile, str) else profile.value if hasattr(profile, 'value') else "curved", speed=float(speed), blinking=bool(blinking), speed_random=bool(speed_random)).validate()
         self.target = self.beacons[tgt_id] if self.beacons else self.beacons[0]
-        # Keep hitbox sync (redundant after per-beacon apply, but ensures consistency)
-        for b in self.beacons:
-            try:
-                if hasattr(self, "beacon_manager"):
-                    continue
-                b.set_hitbox(int(hb), int(cr))
-            except: pass
         # Camera — full mechanics (slew, resolution, latency, ranges, home, optics)
         self.camera = PTZCamera(config=cam_cfg, scene_bounds=(scene_w, scene_h))
         self.detector = BeaconDetector(brightness_threshold=thresh, min_area=min_area)
@@ -300,10 +284,6 @@ class MainWindow(StateMixin, QMainWindow):
         if not hasattr(self, "perf"):
             self.perf = PerformanceLogger()
         self._camera_drift_state = {}
-        # stats for multi
-        self._hitbox_hits = 0
-        self._center_hits = 0
-        self._frames_with_detections = 0
 
     def _build_ui(self):
         central = QWidget()
@@ -322,40 +302,32 @@ class MainWindow(StateMixin, QMainWindow):
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(10)
 
-        # App header — mission control banner above videos
+        # App header — simple light banner
         header_bar = QFrame()
         header_bar.setObjectName("appHeader")
-        header_bar.setFixedHeight(52)
+        header_bar.setFixedHeight(48)
         hdr = QHBoxLayout(header_bar)
-        hdr.setContentsMargins(14, 8, 14, 8)
+        hdr.setContentsMargins(12, 8, 12, 8)
         hdr.setSpacing(12)
-        # Icon block
-        icon_lbl = QLabel("◈")
-        icon_lbl.setObjectName("cameraIcon")
-        icon_lbl.setFixedSize(34, 28)
-        icon_lbl.setAlignment(Qt.AlignCenter)
-        hdr.addWidget(icon_lbl)
-        # Titles
         title_col = QVBoxLayout()
         title_col.setSpacing(1)
         title_col.setContentsMargins(0, 0, 0, 0)
-        app_title = QLabel("FSOC  COARSE  ALIGNMENT")
+        app_title = QLabel("FSOC Coarse Alignment")
         app_title.setObjectName("appTitle")
-        app_sub = QLabel("VIRTUAL  PAT  SIMULATOR  •  CLOSED-LOOP  TRACKING")
+        app_sub = QLabel("Virtual PAT Simulator — Closed-Loop Tracking")
         app_sub.setObjectName("appSubtitle")
         title_col.addWidget(app_title)
         title_col.addWidget(app_sub)
         hdr.addLayout(title_col)
         hdr.addStretch()
-        # Badges — system stage
         self._hdr_mode_badge = QLabel("STANDBY")
         self._hdr_mode_badge.setObjectName("headerBadge")
         self._hdr_mode_badge.setAlignment(Qt.AlignCenter)
         hdr.addWidget(self._hdr_mode_badge)
-        self._hdr_fov_badge = QLabel(f"FOV {self._fov_size[0]}×{self._fov_size[1]}")
+        self._hdr_fov_badge = QLabel(f"FOV {self._fov_size[0]}x{self._fov_size[1]}")
         self._hdr_fov_badge.setObjectName("headerBadge")
         hdr.addWidget(self._hdr_fov_badge)
-        self._hdr_world_badge = QLabel(f"WORLD {self._scene_size[0]}×{self._scene_size[1]}")
+        self._hdr_world_badge = QLabel(f"WORLD {self._scene_size[0]}x{self._scene_size[1]}")
         self._hdr_world_badge.setObjectName("headerBadge")
         hdr.addWidget(self._hdr_world_badge)
         left_layout.addWidget(header_bar)
@@ -369,86 +341,83 @@ class MainWindow(StateMixin, QMainWindow):
         video_splitter.setHandleWidth(6)
         video_splitter.setChildrenCollapsible(False)
 
-        def _make_camera_card(icon_text: str, title_text: str, res_text: str, is_primary: bool):
+        def _make_camera_card(title_text: str, res_text: str, is_primary: bool):
             card = QFrame()
             card.setObjectName("cameraCard")
             card_layout = QVBoxLayout(card)
             card_layout.setContentsMargins(0, 0, 0, 0)
             card_layout.setSpacing(0)
 
-            # Header
+            # Header — refined light with monochrome type hint
             card_hdr = QFrame()
             card_hdr.setObjectName("cameraCardHeader")
-            card_hdr.setFixedHeight(40)
+            card_hdr.setFixedHeight(42)
             h = QHBoxLayout(card_hdr)
-            h.setContentsMargins(10, 6, 10, 6)
+            h.setContentsMargins(12, 8, 12, 8)
             h.setSpacing(8)
-            ic = QLabel(icon_text)
-            ic.setObjectName("cameraIcon")
-            ic.setFixedSize(28, 24)
-            ic.setAlignment(Qt.AlignCenter)
-            h.addWidget(ic)
+            title_col = QVBoxLayout()
+            title_col.setSpacing(1)
             ttl = QLabel(title_text)
             ttl.setObjectName("cameraTitle")
-            h.addWidget(ttl)
+            title_col.addWidget(ttl)
+            sub = QLabel("Monochrome Focal Plane Array" if is_primary else "Fixed 5000 x 5000  •  Overview")
+            sub.setStyleSheet("color:#6b7280; font-size:9px; background: transparent;")
+            title_col.addWidget(sub)
+            h.addLayout(title_col)
             h.addStretch()
-            # Live pill — stored for runtime toggle
-            live = QLabel("● LIVE")
+            live = QLabel("LIVE")
             live.setObjectName("liveBadge")
             live.setProperty("active", False)
-            # keep reference for primary/secondary distinction
             card._live_badge = live  # type: ignore
             h.addWidget(live)
-            # Resolution badge — will be updated via main window refs
+            # Resolution badge hidden per spec — keep for compat but not visible
             res = QLabel(res_text)
             res.setObjectName("resBadge")
-            # store for later external update if needed
+            res.hide()
             card._res_badge = res  # type: ignore
-            h.addWidget(res)
             card_layout.addWidget(card_hdr)
 
-            # Video viewport wrapped with inner padding for depth
-            wrap = QWidget()
-            wrap.setStyleSheet("background: transparent;")
+            # Video viewport — pitch black with thin monochrome frame
+            wrap = QFrame()
+            wrap.setObjectName("videoFrameWrap")
+            wrap.setStyleSheet("QFrame#videoFrameWrap { background: #000000; border: 1px solid #1f2937; border-radius: 4px; }")
             wl = QVBoxLayout(wrap)
-            wl.setContentsMargins(8, 8, 8, 8)
+            wl.setContentsMargins(1, 1, 1, 1)
             wl.setSpacing(0)
             vid = QLabel()
             vid.setObjectName("videoFeed")
             vid.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             vid.setAlignment(Qt.AlignCenter)
             vid.setScaledContents(False)
-            vid.setMinimumSize(240, 180)
-            # placeholder dark shimmer while no frame
-            vid.setStyleSheet("QLabel#videoFeed { background: #020617; border: 1px solid #1e293b; border-radius: 10px; color: #334155; }")
+            vid.setMinimumSize(260, 260)
+            vid.setStyleSheet("QLabel#videoFeed { background: #000000; border: none; color: #6b7280; }")
             wl.addWidget(vid, 1)
             card_layout.addWidget(wrap, 1)
 
-            # Footer telemetry — per-card quick stats
+            # Footer — minimal, hidden per spec (no in-screen details)
             foot = QFrame()
             foot.setObjectName("cameraCardFooter")
-            foot.setFixedHeight(30)
+            foot.setFixedHeight(22)
             fl = QHBoxLayout(foot)
             fl.setContentsMargins(10, 4, 10, 4)
             fl.setSpacing(8)
-            # small telemetry labels — will be populated by _tick / helpers
             info = QLabel("—")
-            info.setStyleSheet("color:#94a3b8; font-size:10px; font-family:'Consolas','Courier New',monospace; background: transparent; border: none;")
+            info.setStyleSheet("color:#6b7280; font-size:10px; font-family:'Consolas','Courier New',monospace; background: transparent; border: none;")
             info.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             card._footer_info = info  # type: ignore
             fl.addWidget(info, 1)
-            # optional corner hint
-            hint = QLabel("30 FPS • REAL-TIME" if is_primary else "GOD'S EYE • OVERVIEW")
-            hint.setStyleSheet("color:#475569; font-size:9px; letter-spacing:0.4px; background: transparent;")
+            hint = QLabel("30 Hz" if is_primary else "5000 x 5000")
+            hint.setStyleSheet("color:#9ca3af; font-size:9px; background: transparent;")
             fl.addWidget(hint)
+            foot.hide()
             card_layout.addWidget(foot)
 
             return card, vid, res, live, info, foot
 
-        # FOV primary card
-        fov_card, self.viewport_label, self.fov_res_lbl, self._fov_live_badge, self._fov_footer_info, self._fov_footer = _make_camera_card("▣", "CAMERA  FOV", f"{self._fov_size[0]}×{self._fov_size[1]}", True)
-        # God's-eye secondary card
-        god_card, self.minimap_label, self.god_res_lbl, self._god_live_badge, self._god_footer_info, self._god_footer = _make_camera_card("◉", "GOD'S-EYE", f"{self._scene_size[0]}×{self._scene_size[1]}", False)
+        # Camera (monochrome) — 640x640 default, FOV 4x3 deg
+        fov_card, self.viewport_label, self.fov_res_lbl, self._fov_live_badge, self._fov_footer_info, self._fov_footer = _make_camera_card("Camera", f"{self._fov_size[0]}x{self._fov_size[1]}", True)
+        # God View fixed 5000x5000
+        god_card, self.minimap_label, self.god_res_lbl, self._god_live_badge, self._god_footer_info, self._god_footer = _make_camera_card("God View", "5000x5000", False)
 
         # Ensure res badges keep expected objectName for external styling
         self.fov_res_lbl.setObjectName("resBadge")
@@ -463,49 +432,40 @@ class MainWindow(StateMixin, QMainWindow):
         video_layout.addWidget(video_splitter)
         left_layout.addWidget(video_container, 1)
 
-        # Telemetry strip — unified status bar below videos (mission HUD)
         telemetry = QFrame()
         telemetry.setObjectName("telemetryStrip")
-        telemetry.setFixedHeight(48)
+        telemetry.setFixedHeight(42)
         tlay = QHBoxLayout(telemetry)
         tlay.setContentsMargins(10, 6, 10, 6)
         tlay.setSpacing(10)
-
-        # Lock indicator — dot + text pill
         dot_wrap = QHBoxLayout()
         dot_wrap.setSpacing(6)
-        self.lock_dot = QLabel("●")
-        self.lock_dot.setStyleSheet("color:#64748b; font-size:14px; background: transparent;")
-        self.lock_dot.setFixedWidth(14)
+        self.lock_dot = QLabel("")
+        self.lock_dot.setFixedWidth(8)
+        self.lock_dot.setStyleSheet("background: #9ca3af; border-radius: 4px;")
         dot_wrap.addWidget(self.lock_dot)
         self.footer_lock = QLabel("SEARCHING")
-        self.footer_lock.setStyleSheet("font-weight:800; color:#64748b; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:6px; padding:4px 10px; font-size:11px; letter-spacing:0.5px;")
+        self.footer_lock.setStyleSheet("font-weight:600; color:#374151; background:#f9fafb; border:1px solid #e5e7eb; border-radius:4px; padding:4px 10px; font-size:11px;")
         self.footer_lock.setMinimumWidth(110)
         self.footer_lock.setAlignment(Qt.AlignCenter)
         dot_wrap.addWidget(self.footer_lock)
         tlay.addLayout(dot_wrap)
-
-        # Divider
         sep1 = QFrame()
         sep1.setFrameShape(QFrame.VLine)
-        sep1.setStyleSheet("color:#e2e8f0;")
+        sep1.setStyleSheet("color:#e5e7eb;")
         sep1.setFixedWidth(1)
         tlay.addWidget(sep1)
-
         self.footer_fps = QLabel("FPS —")
         self.footer_fps.setObjectName("telemetryValue")
-        self.footer_fps.setToolTip("Real-time render FPS — wall clock")
+        self.footer_fps.setToolTip("Real-time render FPS")
         tlay.addWidget(self.footer_fps)
-        self.footer_info = QLabel("Pan/Tilt —  •  Error —")
+        self.footer_info = QLabel("Pan/Tilt —  Error —")
         self.footer_info.setObjectName("telemetryValue")
-        self.footer_info.setToolTip("Current pan/tilt and tracking error (px / mrad)")
+        self.footer_info.setToolTip("Current pan/tilt and tracking error")
         tlay.addWidget(self.footer_info, 1)
-
-        # Right-side compact controls hint
-        hint_lbl = QLabel("HOT RELOAD • NO RESTART")
-        hint_lbl.setStyleSheet("color:#2563eb; font-size:9px; font-weight:700; letter-spacing:0.6px; background:#eff6ff; border:1px solid #dbeafe; border-radius:6px; padding:4px 8px;")
+        hint_lbl = QLabel("No restart required")
+        hint_lbl.setStyleSheet("color:#6b7280; font-size:10px; background:#f9fafb; border:1px solid #e5e7eb; border-radius:4px; padding:4px 8px;")
         tlay.addWidget(hint_lbl)
-
         left_layout.addWidget(telemetry)
 
         main_splitter.addWidget(left_panel)
@@ -517,7 +477,7 @@ class MainWindow(StateMixin, QMainWindow):
         right_scroll_dashboard.setWidget(self.dashboard_panel)
         right_scroll_dashboard.setMinimumWidth(420)
         right_scroll_dashboard.setMaximumWidth(520)
-        right_scroll_dashboard.setStyleSheet("QScrollArea { border: none; background: #f1f5f9; }")
+        right_scroll_dashboard.setStyleSheet("QScrollArea { border: none; background: #f9fafb; }")
         main_splitter.addWidget(right_scroll_dashboard)
         main_splitter.setSizes([920, 420])
         main_splitter.setStretchFactor(0, 1)
@@ -606,8 +566,7 @@ class MainWindow(StateMixin, QMainWindow):
     def _build_control_panel_widget(self):
         """Build the entire control panel as a separate widget
         that will be hosted in the detached ControlDashboardWindow.
-        Groups are clearly distinguished with icon headers and a QTabWidget:
-        Presets | Global | Beacons | Camera | Control | Overlay | Environment | Disturbances
+        Tabs: Global | Beacons | Camera | Control | Environment | Disturbances
         Dashboard is now in MainWindow, not here.
         """
         # Root container for control deck — premium header + pill tabs
@@ -616,58 +575,11 @@ class MainWindow(StateMixin, QMainWindow):
         cw_layout.setContentsMargins(10, 10, 10, 10)
         cw_layout.setSpacing(10)
 
-        # Premium header — command deck banner
-        ctrl_header = QFrame()
-        ctrl_header.setObjectName("controlHeader")
-        ctrl_header.setFixedHeight(62)
-        ch_lay = QHBoxLayout(ctrl_header)
-        ch_lay.setContentsMargins(14, 10, 14, 10)
-        ch_lay.setSpacing(12)
-        # Left: icon + titles
-        c_icon = QLabel("⬢")
-        c_icon.setStyleSheet("background:#0f172a; color:#38bdf8; font-size:15px; border-radius:7px; padding:4px 8px; font-weight:800;")
-        c_icon.setFixedSize(34, 30)
-        c_icon.setAlignment(Qt.AlignCenter)
-        ch_lay.addWidget(c_icon)
-        c_titles = QVBoxLayout()
-        c_titles.setSpacing(2)
-        c_titles.setContentsMargins(0, 0, 0, 0)
-        c_title = QLabel("COMMAND  DECK")
-        c_title.setObjectName("controlTitle")
-        c_sub = QLabel("HOT RELOAD  •  NO RESTART  •  ALL CHANGES LIVE")
-        c_sub.setObjectName("controlSubtitle")
-        c_titles.addWidget(c_title)
-        c_titles.addWidget(c_sub)
-        ch_lay.addLayout(c_titles)
-        ch_lay.addStretch()
-        # Right: HOT badge + status
-        hot_badge = QLabel("● HOT")
-        hot_badge.setObjectName("hotBadge")
-        hot_badge.setToolTip("Every control is HOT — changes apply on next tick without restart")
-        ch_lay.addWidget(hot_badge)
-        # Quick actions — dashboard now in MainWindow (graph removed), this button focuses main
-        c_dash_btn = QPushButton("◉ DASH in Main")
-        c_dash_btn.setToolTip("Dashboard now lives in MainWindow right side (metrics only, graph removed)")
-        c_dash_btn.setFixedHeight(28)
-        c_dash_btn.setStyleSheet("background:#2563eb; color:white; border:none; border-radius:7px; padding:5px 12px; font-weight:800; font-size:10px;")
-        c_dash_btn.clicked.connect(lambda: (self.show(), self.raise_(), self.activateWindow()))
-        ch_lay.addWidget(c_dash_btn)
-        cw_layout.addWidget(ctrl_header)
-
-        # Sub-hint — elegant one-liner under header
-        sub_hint = QLabel("All parameters live — tuned values stream to tracker, camera, and overlay in real-time.")
-        sub_hint.setStyleSheet("color:#64748b; font-size:10px; font-style:italic; background:transparent; padding-left:4px;")
-        sub_hint.setWordWrap(True)
-        cw_layout.addWidget(sub_hint)
+        # Control Deck header removed per user request
 
         tabs = QTabWidget()
         tabs.setDocumentMode(False)
         cw_layout.addWidget(tabs, 1)
-
-        # ── Presets Tab — One-click entire software + auto-run (curated test cases) ──
-        self.presets_panel = PresetsPanel()
-        tabs.addTab(self.presets_panel, "⬢  Presets")
-        self.presets_panel.presetSelected.connect(self._on_preset_selected)
 
         # ── Global Tab — Modular (GlobalPanel) ──
         self.global_panel = GlobalPanel()
@@ -679,7 +591,7 @@ class MainWindow(StateMixin, QMainWindow):
         self.pause_btn = self.global_panel.pause_btn
         self.reset_btn = self.global_panel.reset_btn
         self.export_btn = self.global_panel.export_btn
-        # Wire global signals — HOT
+        # Wire global signals — 
         self.global_panel.motionChanged.connect(self._on_motion_change)
         self.global_panel.speed_slider.valueChanged.connect(self._on_speed_change)
         self.global_panel.thresh_slider.valueChanged.connect(self._on_thresh_change)
@@ -688,55 +600,34 @@ class MainWindow(StateMixin, QMainWindow):
         self.global_panel.resetRequested.connect(self._reset)
         self.global_panel.exportRequested.connect(self._export_log)
         self.global_panel.dashboardRequested.connect(self._show_dashboard_window)
-        tabs.addTab(self.global_panel, "◈  Global")
+        tabs.addTab(self.global_panel, "Global")
 
-        # ── Beacons Tab — Modular (8 per-beacon + 3 multi) ──
-        # Uses MultiBeaconPanel (gui/multi_beacon_panel.py) which owns BeaconPanel per beacon.
-        # Immediate migration: self.beacon_config: MultiBeaconConfig is single source.
+        # ── Beacons Tab — Simplified: only count, target, randomize motion ──
         beacons_tab = QWidget()
         beacons_layout_outer = QVBoxLayout(beacons_tab)
         beacons_layout_outer.setContentsMargins(8, 8, 8, 8)
         beacons_layout_outer.setSpacing(10)
-        # Create manager with current beacon_config + world bounds
         self.beacon_manager = MultiBeaconPanel(initial=self.beacon_config, world_bounds=self._scene_size)
         beacons_layout_outer.addWidget(self.beacon_manager)
-        # Back-compat aliases — legacy code (and external tests) may reference these attrs
-        # They now proxy into the manager's internal widgets.
         self.beacon_count_spin = self.beacon_manager.spin_beacon_count
         self.target_beacon_spin = self.beacon_manager.spin_target_index
-        # Hitbox/center global proxies — map to first beacon's hitbox/center for legacy reads
-        # Provide dummy spins that sync to first beacon if legacy code writes to them.
-        # We expose read-through properties via helper methods, but alias to first panel for now.
-        # After manager is built, panels exist — alias hitbox/center to first panel's spins.
-        try:
-            first_panel = self.beacon_manager.get_per_beacon_panels()[0] if self.beacon_manager.get_per_beacon_panels() else None
-            if first_panel:
-                self.hitbox_spin = first_panel.spin_hitbox
-                self.center_spin = first_panel.spin_center
-            else:
-                self.hitbox_spin = QSpinBox(); self.hitbox_spin.setRange(3,80); self.hitbox_spin.setValue(self._hitbox_radius)
-                self.center_spin = QSpinBox(); self.center_spin.setRange(1,10); self.center_spin.setValue(self._center_radius)
-        except Exception:
-            self.hitbox_spin = QSpinBox(); self.hitbox_spin.setRange(3,80); self.hitbox_spin.setValue(self._hitbox_radius)
-            self.center_spin = QSpinBox(); self.center_spin.setRange(1,10); self.center_spin.setValue(self._center_radius)
-        # Additional aliases for legacy per-beacon container access
-        self.per_beacon_scroll = self.beacon_manager.scroll
-        self.per_beacon_container = self.beacon_manager.container
-        self.per_beacon_layout = self.beacon_manager.container_layout
-        # per_beacon_panels was list[dict] legacy — now expose as list[BeaconPanel] via property
-        # Keep legacy list for handlers that expect dicts: create shim that maps BeaconPanel
-        self.per_beacon_panels = self.beacon_manager.get_per_beacon_panels()  # type: ignore
         self.beacon_count_label = self.beacon_manager.lbl_status
         self.per_randomize_btn = self.beacon_manager.btn_randomize_all
-        self.per_beacon_box = self.beacon_manager.per_beacon_box
-        # Wire manager signals — HOT, immediate
+        self.per_beacon_panels = []
         self.beacon_manager.multiConfigChanged.connect(self._on_multi_beacon_config_changed)
         self.beacon_manager.targetChanged.connect(self._on_target_beacon_change)
         self.beacon_manager.randomizeAllRequested.connect(self._randomize_all_beacons)
-        self.beacon_manager.randomizePositionRequested.connect(self._randomize_single_beacon_pos)
-        # Also handle per-panel randomize position via manager forwarding
+        self.beacon_manager.randomizeMotionRequested.connect(self._randomize_beacon_motion)
+        # Tuning: threshold in beacon panel controls detector
+        try:
+            self.beacon_manager.threshChanged.connect(self._on_thresh_change)
+            # Keep global hidden thresh in sync for compat
+            self.beacon_manager.threshChanged.connect(lambda v: (self.thresh_slider.blockSignals(True), self.thresh_slider.setValue(int(v)), self.thresh_slider.blockSignals(False)))
+            # Also sync global motion/speed to beacon motion for single-panel consistency
+            self.beacon_manager.multiConfigChanged.connect(self._sync_beacon_to_global)
+        except: pass
         beacons_layout_outer.addStretch()
-        tabs.addTab(beacons_tab, "◉  Beacons")
+        tabs.addTab(beacons_tab, "Beacons")
 
         # ── Camera Tab — Modular (CameraPanel, 11 params) ──
         # 4 groups: A FOV/Optics, B Pan-Tilt Mechanics, C Display, D Units, E Gain
@@ -758,29 +649,26 @@ class MainWindow(StateMixin, QMainWindow):
         self.home_pan_spin = self.camera_panel.home_pan_spin
         self.home_tilt_spin = self.camera_panel.home_tilt_spin
         self.slew_spin = self.camera_panel.slew_spin
+        self.pan_speed_deg_spin = getattr(self.camera_panel, 'pan_speed_deg_spin', self.slew_spin)
+        self.tilt_speed_deg_spin = getattr(self.camera_panel, 'tilt_speed_deg_spin', self.slew_spin)
+        self.update_rate_spin = getattr(self.camera_panel, 'update_rate_spin', None)
         self.res_spin = self.camera_panel.res_spin
         self.latency_spin = self.camera_panel.latency_spin
         self.scale_spin = self.camera_panel.scale_spin
         self._cam_gain_box = None
-        # HOT wiring — debounced (single signal covers all 11 params + gain)
+        # wiring — debounced (single signal covers all 11 params + gain)
         self.camera_panel.configChanged.connect(lambda: self._schedule_auto("camera", self._apply_camera_hot, 420))
-        tabs.addTab(self.camera_panel, "◎  Camera")
+        tabs.addTab(self.camera_panel, "Camera")
 
         # ── Control Tab — Modular (P/PI/PID, dead zone, clamp, update rate) ──
         self.control_panel = ControlPanel(initial=self.controller_config)
-        tabs.addTab(self.control_panel, "⟡  Control")
-        # HOT wiring — controller tuning
+        tabs.addTab(self.control_panel, "Control")
+        # wiring — controller tuning
         self.control_panel.configChanged.connect(self._on_control_config_changed)
         # Keep camera gain in sync with control Kp (bidirectional)
         self.control_panel.kp_spin.valueChanged.connect(lambda v: self._sync_control_gain_to_camera(v))
         self.camera_panel.gain_spin.valueChanged.connect(lambda v: self._sync_camera_gain_to_control(v))
         self.camera_panel.gain_slider.valueChanged.connect(lambda v: self._sync_camera_gain_to_control(v/100.0))
-
-        # ── Overlay Tab — Modular (Crosshair / Lock / Error) ──
-        self.overlay_panel = OverlayPanel(initial=self.overlay_config)
-        tabs.addTab(self.overlay_panel, "◐  Overlay")
-        # HOT wiring
-        self.overlay_panel.configChanged.connect(self._on_overlay_config_changed)
 
         # ── Environment Tab — Grouped, Modular (10 params) ──
         # Uses EnvironmentPanel (gui/environment_panel.py) — grouped into 5 sections
@@ -809,22 +697,32 @@ class MainWindow(StateMixin, QMainWindow):
         self.env_dynamic_speed_spin = self.env_panel.env_dynamic_speed_spin
         # Wire Randomize button
         self.env_panel.randomizeRequested.connect(self._randomize_seed)
-        # Panel's configChanged is throttled HOT — keep dirty tracking + auto-HOT
+        # Panel's configChanged is throttled — keep dirty tracking + auto-
         self.env_panel.configChanged.connect(lambda cfg: self._on_env_config_changed(cfg))
         # Also keep camera dirty when world size changes (affects FOV clamping)
         for w in [self.scene_w_spin, self.scene_h_spin]:
             try: w.valueChanged.connect(lambda _, s="camera": self._mark_dirty(s))
             except: pass
         env_layout.addStretch()
-        tabs.addTab(env_tab, "⬣  Environment")
+        tabs.addTab(env_tab, "Environment")
 
-        # ── Disturbances Tab — Modular (DisturbancesPanel) ──
-        self.disturbances_panel = DisturbancesPanel()
+        # ── Disturbances Tab — Modular (DisturbancesPanel, full spec) ──
+        # Image Noise (S&P 10%, Gaussian, Poisson multi) + Max StdDev 20+User + Jitter ±20 + Atmosphere 6 presets + Platform 7 profiles
+        try:
+            from disturbance.config import DisturbanceConfig as _DC2
+            init_dc = getattr(self, "disturbance_config", _DC2().validate())
+        except:
+            init_dc = None
+        self.disturbances_panel = DisturbancesPanel(initial=init_dc)
         self.sliders = self.disturbances_panel.sliders
-        tabs.addTab(self.disturbances_panel, "⚡  Disturbances")
+        # Wire configChanged → disturbance dirty + auto (debounced)
+        try:
+            self.disturbances_panel.configChanged.connect(self._on_disturbance_config_changed)
+        except: pass
+        tabs.addTab(self.disturbances_panel, "Disturbances")
 
-        # initial snapshots for dirty tracking (HOT) — includes control+overlay
-        for sec in ["global", "beacons", "camera", "control", "overlay", "environment", "disturbances"]:
+        # initial snapss for dirty tracking ()
+        for sec in ["global", "beacons", "camera", "control", "environment", "disturbances"]:
             try: self._snapshot_section(sec)
             except: pass
 
@@ -929,7 +827,7 @@ class MainWindow(StateMixin, QMainWindow):
         slider.setTickPosition(QSlider.TicksBelow); slider.setTickInterval(max(1, (vmax-vmin)//5))
         slider.setMinimumHeight(18)
         val = QLabel(str(vinit)); val.setFixedWidth(36); val.setAlignment(Qt.AlignCenter)
-        val.setStyleSheet("color:#2563eb; font-weight:700; background:#eff6ff; border:1px solid #dbeafe; border-radius:6px; padding:2px;")
+        val.setStyleSheet("color:#111827; font-weight:600; background:#f9fafb; border:1px solid #e5e7eb; border-radius:4px; padding:2px;")
         slider.valueChanged.connect(lambda v, l=val: l.setText(str(v)))
         slider.valueChanged.connect(callback)
         h.addWidget(slider, 1); h.addWidget(val)
@@ -1035,7 +933,7 @@ class MainWindow(StateMixin, QMainWindow):
     def _randomize_seed(self): self.seed_spin.setValue(random.randint(0, 999999))
 
     def _on_env_config_changed(self, cfg):
-        """Immediate HOT handler — panel emitted a validated EnvironmentConfig."""
+        """Immediate handler — panel emitted a validated EnvironmentConfig."""
         try:
             cfg = cfg.validate()
             self.env_config = cfg
@@ -1043,36 +941,52 @@ class MainWindow(StateMixin, QMainWindow):
         except Exception:
             pass
         self._mark_dirty("environment")
-        # Debounced HOT apply (520ms) — every single spin is HOT without spamming
+        # Debounced apply (520ms) — every single spin is without spamming
         self._schedule_auto("environment", self._apply_scene_settings_hot, 520)
 
-    def _on_overlay_config_changed(self, cfg):
-        """HOT handler — OverlayPanel emitted validated OverlayConfig."""
+    def _on_disturbance_config_changed(self, cfg):
+        """Immediate handler — DisturbancesPanel emitted validated DisturbanceConfig (full spec)."""
         try:
-            cfg = cfg.validate()
-            self.overlay_config = cfg
+            cfg = cfg.validate() if hasattr(cfg, "validate") else cfg
+            self.disturbance_config = cfg
         except Exception:
             pass
-        self._mark_dirty("overlay")
-        # Overlay is pure rendering — no heavy rebuild, instant next tick
-        self._schedule_auto("overlay", self._apply_overlay_hot, 80)
+        self._mark_dirty("disturbances")
+        self._schedule_auto("disturbances", self._apply_disturbances_hot, 120)
 
-    def _apply_overlay_hot(self):
-        """Apply overlay config — lightweight, just clear dirty and snapshot."""
+    def _apply_disturbances_hot(self):
+        """Apply disturbances — , validates, snapss, no rebuild needed."""
         try:
-            # Already stored in self.overlay_config via _on_overlay_config_changed
-            # Re-collect to ensure panel and config in sync (handles color pickers)
-            if hasattr(self, "overlay_panel"):
-                cfg = self.overlay_panel.collect_config().validate()
-                self.overlay_config = cfg
-            self._clear_dirty("overlay")
-            self._snapshot_section("overlay")
-            self.statusBar().showMessage(f"Overlay HOT — {self.overlay_config.crosshair_style} gap {self.overlay_config.crosshair_gap} lock {self.overlay_config.lock_circle_radius} {self.overlay_config.error_units}", 2000)
+            if hasattr(self, "disturbances_panel"):
+                cfg = self.disturbances_panel.collect_config().validate()
+                self.disturbance_config = cfg
+            else:
+                cfg = self.disturbance_config.validate()
+            self._clear_dirty("disturbances")
+            self._snapshot_section("disturbances")
+            # Summary for status bar
+            parts = []
+            if cfg.turbulence or cfg.vibration or cfg.camera_motion or cfg.noise:
+                parts.append(f"Legacy T{cfg.turbulence} V{cfg.vibration} C{cfg.camera_motion} N{cfg.noise}")
+            if cfg.image_noise_enabled():
+                en = []
+                if cfg.enable_salt_pepper: en.append(f"S&P{cfg.salt_pepper_density*100:.0f}%")
+                if cfg.enable_gaussian: en.append(f"Gaussσ{cfg.gaussian_sigma:.0f}")
+                if cfg.enable_poisson: en.append("Poisson")
+                parts.append("Img: " + "+".join(en) + f" maxσ{cfg.gaussian_sigma_max:.0f}")
+            if cfg.camera_jitter > 0:
+                parts.append(f"Jitter±{cfg.camera_jitter:.1f}px")
+            if str(cfg.atmospheric_preset) != "Clear":
+                parts.append(f"Atmo {cfg.atmospheric_preset} C{cfg.atmospheric_contrast:.0f}% B{cfg.atmospheric_brightness:.0f}%")
+            if cfg.platform_speed > 0:
+                parts.append(f"Plat {cfg.platform_profile} {cfg.platform_speed:.1f}px/f")
+            msg = "Disturbances — " + " • ".join(parts) if parts else "Disturbances — pristine (Clear)"
+            self.statusBar().showMessage(msg, 2500)
         except Exception as e:
-            QMessageBox.warning(self, "Overlay", f"Failed: {e}")
+            QMessageBox.warning(self, "Disturbances", f"Failed: {e}")
 
     def _on_control_config_changed(self, cfg):
-        """HOT handler — ControlPanel emitted validated ControllerConfig."""
+        """ handler — ControlPanel emitted validated ControllerConfig."""
         try:
             cfg = cfg.validate()
             self.controller_config = cfg
@@ -1085,7 +999,7 @@ class MainWindow(StateMixin, QMainWindow):
         self._schedule_auto("control", self._apply_control_hot, 80)
 
     def _apply_control_hot(self):
-        """Apply controller config — HOT, validates, syncs gain alias, snapshots."""
+        """Apply controller config — , validates, syncs gain alias, snapss."""
         try:
             if hasattr(self, "control_panel"):
                 cfg = self.control_panel.collect_config().validate()
@@ -1105,7 +1019,7 @@ class MainWindow(StateMixin, QMainWindow):
             except: pass
             self._clear_dirty("control")
             self._snapshot_section("control")
-            self.statusBar().showMessage(f"Control HOT — {cfg.controller_type} Kp {cfg.kp:.3f} Ki {cfg.ki:.3f} Kd {cfg.kd:.3f} dead {cfg.dead_zone:.1f}px clamp {cfg.output_clamp:.0f}px rate {cfg.update_rate_hz:.0f}Hz", 2000)
+            self.statusBar().showMessage(f"Control — {cfg.controller_type} Kp {cfg.kp:.3f} Ki {cfg.ki:.3f} Kd {cfg.kd:.3f} dead {cfg.dead_zone:.1f}px clamp {cfg.output_clamp:.0f}px rate {cfg.update_rate_hz:.0f}Hz", 2000)
         except Exception as e:
             QMessageBox.warning(self, "Control", f"Failed: {e}")
 
@@ -1136,48 +1050,20 @@ class MainWindow(StateMixin, QMainWindow):
                 if hasattr(self, "controller"):
                     self.controller.config.kp = float(v)
         except: pass
-        # Mark dirty for HOT
+        # Mark dirty for 
         self._mark_dirty("control")
         self._schedule_auto("control", self._apply_control_hot, 80)
-
-    def _on_preset_selected(self, preset):
-        """Presets — one-click configure entire software + auto-run."""
-        try:
-            apply_preset(self, preset, auto_run=True)
-            # Snapshot all sections for dirty tracking after preset
-            for sec in ["environment", "camera", "beacons", "control", "overlay", "disturbances", "global"]:
-                try:
-                    self._snapshot_section(sec)
-                except: pass
-            self._dirty_tabs.clear()
-            self.statusBar().showMessage(f"Preset '{preset.name}' applied — running: {preset.goal}", 5000)
-        except Exception as e:
-            QMessageBox.warning(self, "Preset", f"Failed to apply preset '{getattr(preset, 'name', 'Unknown')}': {e}")
 
     def _update_beacon_count_label(self, v: int):
         try:
             tgt = int(getattr(self, "target_beacon_spin", self).value()) if hasattr(self, "target_beacon_spin") else int(getattr(self, "_target_beacon_id", 0))
-            self.beacon_count_label.setText(f"{v} beacon{'s' if v!=1 else ''}  •  Target #{tgt}  •  hitbox {self.hitbox_spin.value()}px  center {self.center_spin.value()}px")
+            self.beacon_count_label.setText(f"{v} beacon{'s' if v!=1 else ''}, Target #{tgt}")
         except:
-            try: self.beacon_count_label.setText(f"{v} beacon{'s' if v!=1 else ''}  •  hitbox {self.hitbox_spin.value()}px  center {self.center_spin.value()}px")
+            try: self.beacon_count_label.setText(f"{v} beacon{'s' if v!=1 else ''}")
             except: pass
 
     def _on_hitbox_change(self, _v=None):
-        # live update hitbox/center radii for all beacons without full rebuild
-        try:
-            hb = int(self.hitbox_spin.value())
-            cr = int(self.center_spin.value())
-            self._hitbox_radius = hb; self._center_radius = cr
-            for b in getattr(self, "beacons", []):
-                b.set_hitbox(hb, cr)
-            self._update_beacon_count_label(int(self.beacon_count_spin.value()))
-            # keep target spin max in sync
-            try:
-                self.target_beacon_spin.setMaximum(max(0, int(self.beacon_count_spin.value()) - 1))
-                if self.target_beacon_spin.value() >= int(self.beacon_count_spin.value()):
-                    self.target_beacon_spin.setValue(int(self.beacon_count_spin.value()) - 1)
-            except: pass
-        except: pass
+        pass
 
     def _on_beacon_count_changed(self, v: int):
         try:
@@ -1188,11 +1074,9 @@ class MainWindow(StateMixin, QMainWindow):
         except: pass
 
     def _on_target_beacon_change(self, idx: int):
-        """Target index changed — update tracked beacon + highlight panels (modular)."""
         try:
             idx = int(np.clip(int(idx), 0, max(0, len(getattr(self, "beacons", [])) - 1)))
             self._target_beacon_id = idx
-            # Keep beacon_config in sync (immediate migration)
             try:
                 self.beacon_config.target_index = int(idx)
                 if hasattr(self, "beacon_manager"):
@@ -1203,159 +1087,83 @@ class MainWindow(StateMixin, QMainWindow):
                 pass
             if hasattr(self, "beacons") and 0 <= idx < len(self.beacons):
                 self.target = self.beacons[idx]
-                # Highlight per-beacon panels — supports both legacy dict and new BeaconPanel
-                for i, panel in enumerate(getattr(self, "per_beacon_panels", [])):
-                    try:
-                        is_tgt = (i == idx)
-                        if isinstance(panel, dict):
-                            panel["box"].setStyleSheet(
-                                "QGroupBox { background: %s; border: 1px solid %s; border-radius: 8px; margin-top: 8px; padding-top: 8px; } QGroupBox::title { color: %s; font-size:10px; font-weight:%s; }"
-                                % ("#eff6ff" if is_tgt else "#f8fafc", "#2563eb" if is_tgt else "#e2e8f0", "#1d4ed8" if is_tgt else "#0f172a", "700" if is_tgt else "600")
-                            )
-                            b = self.beacons[i]
-                            panel["box"].setTitle(f"Beacon #{b.beacon_id} {'★ TARGET' if is_tgt else '— ON' if b.enabled else '— OFF'}")
-                        else:
-                            # New BeaconPanel object
-                            try:
-                                panel.set_target_highlight(is_tgt)
-                                b = self.beacons[i]
-                                suffix = " ★ TARGET" if is_tgt else (" — OFF" if not b.enabled else " — ON")
-                                panel.setTitle(f"Beacon #{b.beacon_id}{suffix}")
-                            except Exception:
-                                pass
-                    except Exception:
-                        pass
-                # Also delegate to manager if it has highlight helper
-                try:
-                    if hasattr(self, "beacon_manager") and hasattr(self.beacon_manager, "_update_target_highlight"):
-                        self.beacon_manager._update_target_highlight()
-                except Exception:
-                    pass
                 try: self.tracker = Tracker(smoothing=0.4, miss_limit=5)
                 except: pass
-                self.statusBar().showMessage(f"Target → Beacon #{idx}", 2500)
-                # Update status label via manager or legacy
+                self.statusBar().showMessage(f"Target -> Beacon #{idx}", 2500)
                 try:
                     if hasattr(self, "beacon_manager"):
                         self.beacon_manager._update_status()
-                    else:
-                        self._update_beacon_count_label(int(self.beacon_count_spin.value()))
-                except Exception:
-                    pass
+                except: pass
         except: pass
 
     def _on_multi_beacon_config_changed(self, cfg):
-        """
-        HOT handler for MultiBeaconPanel — 8 per-beacon + 3 multi params.
-
-        - If beacon_count changed → schedule rebuild via _apply_beacons_hot (debounced)
-        - Else per-beacon fields (profile/speed/brightness/radius/hitbox/center/heading/seed/x/y/enabled)
-          are hot-applied directly onto live Target objects via BeaconConfig.apply_to_target.
-        """
         try:
-            # Validate and store as single source
-            try:
-                cfg = cfg.validate() if hasattr(cfg, "validate") else cfg
-            except Exception:
-                pass
+            cfg = cfg.validate() if hasattr(cfg, "validate") else cfg
             self.beacon_config = cfg
             self._beacon_count = int(cfg.beacon_count)
             self._target_beacon_id = int(cfg.target_index)
-            # Mirror legacy attrs for snapshot/dirty
-            try:
-                if cfg.beacons:
-                    self._hitbox_radius = int(cfg.beacons[0].hitbox_radius)
-                    self._center_radius = int(cfg.beacons[0].center_radius)
-            except Exception:
-                pass
             self._mark_dirty("beacons")
-            # If count differs from live beacons, need factory rebuild (debounced)
-            live_n = len(getattr(self, "beacons", []))
-            if live_n != int(cfg.beacon_count):
-                self._schedule_auto("beacons", self._apply_beacons_hot, 500)
-            else:
-                # Per-beacon hot-apply without rebuild — immediate, no pause
-                self._schedule_auto("beacons", self._apply_beacon_configs_hot, 120)
-                # Also schedule a quick highlight refresh
-                try:
-                    self._schedule_auto("beacons_highlight", lambda: self._on_target_beacon_change(int(cfg.target_index)), 80)
-                except Exception:
-                    pass
-        except Exception as e:
-            # Fallback to full rebuild
+            self._schedule_auto("beacons", self._apply_beacons_hot, 400)
             try:
-                self._schedule_auto("beacons", self._apply_beacons_hot, 500)
+                self._schedule_auto("beacons_highlight", lambda: self._on_target_beacon_change(int(cfg.target_index)), 80)
             except: pass
+        except:
+            try: self._schedule_auto("beacons", self._apply_beacons_hot, 400)
+            except: pass
+
+    def _sync_beacon_to_global(self, cfg):
+        try:
+            # Keep hidden global motion/speed in sync with beacon panel (single source)
+            cfg = cfg.validate() if hasattr(cfg, "validate") else cfg
+            # Map beacon profile to global MotionProfile string
+            rev = {"linear": "linear", "curved": "curved", "figure_eight": "figure_eight", "spiral": "spiral", "sinusoidal": "sinusoidal", "zigzag": "zigzag", "random": "curved"}
+            prof = rev.get(str(getattr(cfg, "profile", "curved")).lower(), "curved")
+            if hasattr(self, "motion_combo"):
+                self.motion_combo.blockSignals(True)
+                idx = self.motion_combo.findText(prof)
+                if idx >= 0:
+                    self.motion_combo.setCurrentIndex(idx)
+                else:
+                    self.motion_combo.setCurrentText(prof)
+                self.motion_combo.blockSignals(False)
+            if hasattr(self, "speed_slider"):
+                self.speed_slider.blockSignals(True)
+                self.speed_slider.setValue(int(getattr(cfg, "speed", 60)))
+                if hasattr(self.speed_slider, "_value_label"):
+                    self.speed_slider._value_label.setText(str(int(getattr(cfg, "speed", 60))))
+                self.speed_slider.blockSignals(False)
+        except: pass
 
     def _apply_beacon_configs_hot(self):
-        """HOT per-beacon apply — no factory rebuild, just BeaconConfig → Target."""
         try:
-            cfg = self.beacon_manager.collect_multi_config().validate() if hasattr(self, "beacon_manager") else self.beacon_config.validate()
-            self.beacon_config = cfg
-            # Ensure per_beacon_panels alias stays in sync with manager
-            try:
-                self.per_beacon_panels = self.beacon_manager.get_per_beacon_panels()  # type: ignore
-            except Exception:
-                pass
-            # Apply each BeaconConfig onto live Target (preserves velocity, t, etc.)
-            for i, beacon_cfg in enumerate(cfg.beacons):
-                if i < len(getattr(self, "beacons", [])):
-                    try:
-                        beacon_cfg.apply_to_target(self.beacons[i])
-                    except Exception:
-                        # Fallback: direct field copy
-                        try:
-                            t = self.beacons[i]
-                            t.enabled = bool(beacon_cfg.enabled)
-                            t.brightness = int(beacon_cfg.brightness)
-                            t.radius = int(beacon_cfg.radius)
-                            t.hitbox_radius = int(beacon_cfg.hitbox_radius)
-                            t.center_radius = int(beacon_cfg.center_radius)
-                            t.speed = float(beacon_cfg.speed)
-                        except: pass
-                    # Sync X/Y and heading for immediate visual (position seed already handled via apply)
-                    try:
-                        # World bounds clamp for X/Y
-                        w, h = self._scene_size
-                        self.beacons[i].x = float(max(0, min(beacon_cfg.x, w)))
-                        self.beacons[i].y = float(max(0, min(beacon_cfg.y, h)))
-                    except: pass
-            # Update target alias
-            tid = int(np.clip(int(cfg.target_index), 0, max(0, len(self.beacons)-1)))
-            self._target_beacon_id = tid
-            if 0 <= tid < len(getattr(self, "beacons", [])):
-                self.target = self.beacons[tid]
             self._clear_dirty("beacons")
             self._snapshot_section("beacons")
-        except Exception as e:
-            # On failure, fallback to factory
-            try: self._apply_beacons_hot()
-            except: pass
+        except: pass
 
     def _apply_beacons(self):
-        # Modular path via manager (8 per-beacon + 3 multi) if available
         if hasattr(self, "beacon_manager") and self.beacon_manager is not None:
             try:
                 multi_cfg = self.beacon_manager.collect_multi_config().validate()
                 self.beacon_config = multi_cfg
                 was_running = getattr(self, "_running", False)
                 if was_running: self._pause()
-                # Rebuild via factory then overlay per-beacon configs
-                try: profile = MotionProfile(self.motion_combo.currentText())
-                except: profile = self.target.profile if hasattr(self, "target") else MotionProfile.CURVED
-                speed = float(getattr(self, "_target_speed", 60))
+                profile = str(getattr(multi_cfg, "profile", "curved"))
+                speed = float(getattr(multi_cfg, "speed", 60))
+                shape = str(getattr(multi_cfg, "shape", "square"))
+                size_w = int(getattr(multi_cfg, "size_w", 10))
+                size_h = int(getattr(multi_cfg, "size_h", 10))
+                blinking = bool(getattr(multi_cfg, "blinking", False))
+                speed_random = bool(getattr(multi_cfg, "speed_random", False))
+                tgt_x = float(getattr(multi_cfg, "x", 2500)) if multi_cfg.beacon_count == 1 else None
+                tgt_y = float(getattr(multi_cfg, "y", 2500)) if multi_cfg.beacon_count == 1 else None
                 scene_w, scene_h = self._scene_size
-                seed = int(self.seed_spin.value()) + int(time.time()) % 1000 if hasattr(self, "seed_spin") else int(multi_cfg.beacons[0].position_seed) if multi_cfg.beacons else 42
+                seed = int(self.seed_spin.value()) + int(time.time()) % 1000 if hasattr(self, "seed_spin") else 42
                 self.beacons = create_beacons(int(multi_cfg.beacon_count), (scene_w, scene_h), profile, speed,
-                                               seed=seed, hitbox_radius=int(multi_cfg.beacons[0].hitbox_radius) if multi_cfg.beacons else 14, center_radius=int(multi_cfg.beacons[0].center_radius) if multi_cfg.beacons else 2)
-                for i, b_cfg in enumerate(multi_cfg.beacons):
-                    if i < len(self.beacons):
-                        try: b_cfg.apply_to_target(self.beacons[i])
-                        except: pass
+                                               seed=seed, hitbox_radius=14, center_radius=2, shape=shape, size_w=size_w, size_h=size_h, blinking=blinking, x=tgt_x, y=tgt_y, speed_random=speed_random)
                 tid = int(np.clip(int(multi_cfg.target_index), 0, max(0, len(self.beacons)-1)))
                 self._target_beacon_id = tid; self._beacon_count = int(multi_cfg.beacon_count)
                 self.target = self.beacons[tid] if self.beacons else self.beacons[0]
-                self.statusBar().showMessage(f"Beacons: {self._beacon_count}  Target #{tid} (manager, 8 params)", 3000)
+                self.statusBar().showMessage(f"Beacons: {self._beacon_count} Target #{tid} {shape} {size_w}x{size_h}", 3000)
                 try: self.tracker = Tracker(smoothing=0.4, miss_limit=5)
                 except: pass
                 self._rebuild_per_beacon_panels()
@@ -1365,11 +1173,8 @@ class MainWindow(StateMixin, QMainWindow):
                 return
             except Exception:
                 pass
-        # Legacy path
         try:
             self._beacon_count = int(self.beacon_count_spin.value())
-            self._hitbox_radius = int(self.hitbox_spin.value())
-            self._center_radius = int(self.center_spin.value())
         except: return
         was_running = getattr(self, "_running", False)
         if was_running: self._pause()
@@ -1398,29 +1203,25 @@ class MainWindow(StateMixin, QMainWindow):
         if was_running: self._start()
 
     def _apply_beacons_hot(self):
-        """HOT — rebuild via factory but preserve per-beacon 8 params from manager (modular)."""
-        # Prefer manager-driven path (8 per-beacon params + 3 multi)
         try:
             if hasattr(self, "beacon_manager") and self.beacon_manager is not None:
                 multi_cfg = self.beacon_manager.collect_multi_config().validate()
                 self.beacon_config = multi_cfg
                 self._beacon_count = int(multi_cfg.beacon_count)
-                self._hitbox_radius = int(multi_cfg.beacons[0].hitbox_radius) if multi_cfg.beacons else 14
-                self._center_radius = int(multi_cfg.beacons[0].center_radius) if multi_cfg.beacons else 2
                 tid = int(multi_cfg.target_index)
-                # Factory with global profile/speed but per-beacon overlay follows
-                try: profile = MotionProfile(self.motion_combo.currentText())
-                except: profile = self.target.profile if hasattr(self, "target") else MotionProfile.CURVED
-                speed = float(getattr(self, "_target_speed", 60))
+                profile = str(getattr(multi_cfg, "profile", "curved"))
+                speed = float(getattr(multi_cfg, "speed", 60))
+                shape = str(getattr(multi_cfg, "shape", "square"))
+                size_w = int(getattr(multi_cfg, "size_w", 10))
+                size_h = int(getattr(multi_cfg, "size_h", 10))
+                blinking = bool(getattr(multi_cfg, "blinking", False))
+                speed_random = bool(getattr(multi_cfg, "speed_random", False))
+                tgt_x = float(getattr(multi_cfg, "x", 2500)) if multi_cfg.beacon_count == 1 else None
+                tgt_y = float(getattr(multi_cfg, "y", 2500)) if multi_cfg.beacon_count == 1 else None
                 scene_w, scene_h = self._scene_size
-                seed = int(self.seed_spin.value()) + int(time.time()) % 1000 if hasattr(self, "seed_spin") else int(multi_cfg.beacons[0].position_seed) if multi_cfg.beacons else 42
+                seed = int(self.seed_spin.value()) + int(time.time()) % 1000 if hasattr(self, "seed_spin") else 42
                 self.beacons = create_beacons(self._beacon_count, (scene_w, scene_h), profile, speed,
-                                               seed=seed, hitbox_radius=self._hitbox_radius, center_radius=self._center_radius)
-                # Overlay per-beacon configs (keeps user-edited brightness/radius/seed etc.)
-                for i, b_cfg in enumerate(multi_cfg.beacons):
-                    if i < len(self.beacons):
-                        try: b_cfg.apply_to_target(self.beacons[i])
-                        except: pass
+                                               seed=seed, hitbox_radius=14, center_radius=2, shape=shape, size_w=size_w, size_h=size_h, blinking=blinking, x=tgt_x, y=tgt_y, speed_random=speed_random)
                 tid = int(np.clip(int(tid), 0, max(0, len(self.beacons)-1)))
                 self._target_beacon_id = tid
                 self.target = self.beacons[tid] if self.beacons else self.beacons[0]
@@ -1429,17 +1230,14 @@ class MainWindow(StateMixin, QMainWindow):
                 self._rebuild_per_beacon_panels()
                 try: self._on_target_beacon_change(tid)
                 except: pass
-                self.statusBar().showMessage(f"Beacons HOT — {self._beacon_count} beacons Target #{tid} (manager, 8 params)", 2000)
+                self.statusBar().showMessage(f"Beacons — {self._beacon_count} {shape} {size_w}x{size_h} Target #{tid}", 2000)
                 try: self._snapshot_section("beacons"); self._clear_dirty("beacons")
                 except: pass
                 return
         except Exception:
             pass
-        # Legacy fallback (no manager yet, e.g., first init)
         try:
             self._beacon_count = int(self.beacon_count_spin.value())
-            self._hitbox_radius = int(self.hitbox_spin.value())
-            self._center_radius = int(self.center_spin.value())
         except: return
         try: profile = MotionProfile(self.motion_combo.currentText())
         except: profile = self.target.profile if hasattr(self, "target") else MotionProfile.CURVED
@@ -1458,292 +1256,107 @@ class MainWindow(StateMixin, QMainWindow):
         self._rebuild_per_beacon_panels()
         try: self._on_target_beacon_change(tid)
         except: pass
-        self.statusBar().showMessage(f"Beacons HOT — {self._beacon_count} beacons Target #{tid} (auto)", 2000)
+        self.statusBar().showMessage(f"Beacons — {self._beacon_count} beacons Target #{tid} (auto)", 2000)
         try: self._snapshot_section("beacons"); self._clear_dirty("beacons")
         except: pass
 
-    # ── Per-Beacon dynamic — every parameter live (modular) ──
     def _rebuild_per_beacon_panels(self):
-        """Rebuild per-beacon panels — delegates to MultiBeaconPanel if available, else legacy."""
-        # New modular path: sync MultiBeaconPanel from live beacons
-        if hasattr(self, "beacon_manager") and self.beacon_manager is not None:
-            try:
-                # Build MultiBeaconConfig from current live beacons (preserves per-beacon 8 params)
-                cfgs = []
-                for b in getattr(self, "beacons", []):
-                    try:
-                        cfgs.append(BeaconConfig.from_target(b).validate())
-                    except Exception:
-                        cfgs.append(BeaconConfig(beacon_id=getattr(b, "beacon_id", len(cfgs)), speed=getattr(b, "speed", 60)).validate())
-                # Ensure count matches
-                n_beacons = len(getattr(self, "beacons", [])) or int(getattr(self, "_beacon_count", 1))
-                tid = int(getattr(self, "_target_beacon_id", 0))
-                multi = MultiBeaconConfig(beacon_count=n_beacons, target_index=tid, beacons=cfgs).validate()
-                self.beacon_config = multi
-                self.beacon_manager.set_config(multi, emit=False)
-                # Keep alias for legacy handlers
-                self.per_beacon_panels = self.beacon_manager.get_per_beacon_panels()  # type: ignore
-                # Update world bounds for X/Y clamping
-                try:
-                    self.beacon_manager.set_world_bounds(self._scene_size)
-                except: pass
-                return
-            except Exception as e:
-                # Fallback to legacy
-                pass
-        # Legacy fallback — clear old dict-based panels
+        # Single panel — no per-beacon rebuild needed, keep current beacon config
         try:
-            while self.per_beacon_layout.count():
-                item = self.per_beacon_layout.takeAt(0)
-                w = item.widget()
-                if w is not None:
-                    w.deleteLater()
-        except Exception:
-            return
-        self.per_beacon_panels = []
-        beacons = getattr(self, "beacons", [])
-        if not beacons:
-            lbl = QLabel("No beacons — click Apply Beacons")
-            lbl.setStyleSheet("color:#94a3b8; font-style:italic;")
-            try:
-                self.per_beacon_layout.addWidget(lbl)
-            except: pass
-            return
-        for idx, b in enumerate(beacons):
-            panel = self._create_single_beacon_panel(idx, b)
-            try:
-                self.per_beacon_layout.addWidget(panel)
-            except: pass
-        n = len(beacons)
-        try:
-            self.per_beacon_scroll.setMaximumHeight(min(420, 86 + n * 118))
-            self.per_beacon_scroll.setMinimumHeight(min(220, 86 + n * 118))
+            if hasattr(self, "beacon_manager"):
+                self.beacon_manager._update_status()
         except: pass
 
-    def _create_single_beacon_panel(self, idx: int, beacon) -> QGroupBox:
-        box = QGroupBox(f"Beacon #{beacon.beacon_id} — {'ON' if beacon.enabled else 'OFF'}")
-        box.setStyleSheet("QGroupBox { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; margin-top: 8px; padding-top: 8px; } QGroupBox::title { color: #0f172a; font-size:10px; }")
-        grid = QGridLayout(box)
-        grid.setContentsMargins(8, 12, 8, 8)
-        grid.setHorizontalSpacing(6)
-        grid.setVerticalSpacing(6)
-        grid.setColumnStretch(1, 1)
-        grid.setColumnStretch(3, 1)
+    def _create_single_beacon_panel(self, idx, beacon):
+        return QGroupBox(f"Beacon #{idx}")
 
-        # Row 0: Enabled | Profile
-        chk = QCheckBox("Enabled"); chk.setChecked(bool(beacon.enabled)); chk.setStyleSheet("font-size:11px;")
-        grid.addWidget(chk, 0, 0)
-        # Profile combo per beacon
-        prof_combo = QComboBox(); prof_combo.addItems([p.value for p in MotionProfile]); prof_combo.setCurrentText(beacon.profile.value); prof_combo.setMinimumHeight(24)
-        grid.addWidget(QLabel("Profile"), 0, 1); grid.addWidget(prof_combo, 0, 2, 1, 2)
-
-        # Row 1: Speed | Brightness | Radius
-        grid.addWidget(QLabel("Speed"), 1, 0)
-        sp_speed = QSpinBox(); sp_speed.setRange(5, 300); sp_speed.setValue(int(beacon.speed)); sp_speed.setSuffix(" px/s"); sp_speed.setMinimumHeight(24)
-        grid.addWidget(sp_speed, 1, 1)
-        grid.addWidget(QLabel("Bright"), 1, 2)
-        sp_bright = QSpinBox(); sp_bright.setRange(50, 255); sp_bright.setValue(int(beacon.brightness)); sp_bright.setMinimumHeight(24)
-        grid.addWidget(sp_bright, 1, 3)
-
-        grid.addWidget(QLabel("Radius"), 2, 0)
-        sp_radius = QSpinBox(); sp_radius.setRange(1, 15); sp_radius.setValue(int(beacon.radius)); sp_radius.setSuffix(" px"); sp_radius.setMinimumHeight(24)
-        grid.addWidget(sp_radius, 2, 1)
-        grid.addWidget(QLabel("Hitbox"), 2, 2)
-        sp_hit = QSpinBox(); sp_hit.setRange(3, 80); sp_hit.setValue(int(beacon.hitbox_radius)); sp_hit.setSuffix(" px"); sp_hit.setMinimumHeight(24)
-        grid.addWidget(sp_hit, 2, 3)
-
-        grid.addWidget(QLabel("Center"), 3, 0)
-        sp_center = QSpinBox(); sp_center.setRange(1, 10); sp_center.setValue(int(beacon.center_radius)); sp_center.setSuffix(" px"); sp_center.setMinimumHeight(24)
-        grid.addWidget(sp_center, 3, 1)
-        grid.addWidget(QLabel("Heading"), 3, 2)
-        sp_head = QSpinBox(); sp_head.setRange(0, 360); sp_head.setValue(int(math.degrees(beacon._heading)) % 360); sp_head.setSuffix("°"); sp_head.setMinimumHeight(24)
-        grid.addWidget(sp_head, 3, 3)
-
-        # Row 4: X | Y
-        grid.addWidget(QLabel("X"), 4, 0)
-        sp_x = QSpinBox(); sp_x.setRange(0, self._scene_size[0]); sp_x.setValue(int(beacon.x)); sp_x.setMinimumHeight(24)
-        grid.addWidget(sp_x, 4, 1)
-        grid.addWidget(QLabel("Y"), 4, 2)
-        sp_y = QSpinBox(); sp_y.setRange(0, self._scene_size[1]); sp_y.setValue(int(beacon.y)); sp_y.setMinimumHeight(24)
-        grid.addWidget(sp_y, 4, 3)
-
-        # Row 5: Random Position — live, auto-HOT (no Apply needed)
-        btn_rand = QPushButton("↻ Random Position"); btn_rand.setMinimumHeight(24); btn_rand.setStyleSheet("font-size:10px; padding:4px; background:#f1f5f9; border:1px solid #cbd5e1; border-radius:4px;")
-        grid.addWidget(btn_rand, 5, 0, 1, 4)
-
-        # Wire live updates — capture idx via default arg (live + dirty for HOT confirmation)
-        chk.toggled.connect(lambda checked, i=idx: self._on_per_beacon_enabled(i, checked))
-        chk.toggled.connect(lambda _, s="beacons": self._mark_dirty(s))
-        prof_combo.currentTextChanged.connect(lambda txt, i=idx: self._on_per_beacon_profile(i, txt))
-        prof_combo.currentTextChanged.connect(lambda _, s="beacons": self._mark_dirty(s))
-        sp_speed.valueChanged.connect(lambda v, i=idx: self._on_per_beacon_speed(i, v))
-        sp_speed.valueChanged.connect(lambda _, s="beacons": self._mark_dirty(s))
-        sp_bright.valueChanged.connect(lambda v, i=idx: self._on_per_beacon_brightness(i, v))
-        sp_bright.valueChanged.connect(lambda _, s="beacons": self._mark_dirty(s))
-        sp_radius.valueChanged.connect(lambda v, i=idx: self._on_per_beacon_radius(i, v))
-        sp_radius.valueChanged.connect(lambda _, s="beacons": self._mark_dirty(s))
-        sp_hit.valueChanged.connect(lambda v, i=idx: self._on_per_beacon_hitbox(i, v))
-        sp_hit.valueChanged.connect(lambda _, s="beacons": self._mark_dirty(s))
-        sp_center.valueChanged.connect(lambda v, i=idx: self._on_per_beacon_center(i, v))
-        sp_center.valueChanged.connect(lambda _, s="beacons": self._mark_dirty(s))
-        sp_x.valueChanged.connect(lambda v, i=idx: self._on_per_beacon_x(i, v))
-        sp_x.valueChanged.connect(lambda _, s="beacons": self._mark_dirty(s))
-        sp_y.valueChanged.connect(lambda v, i=idx: self._on_per_beacon_y(i, v))
-        sp_y.valueChanged.connect(lambda _, s="beacons": self._mark_dirty(s))
-        sp_head.valueChanged.connect(lambda v, i=idx: self._on_per_beacon_heading(i, v))
-        sp_head.valueChanged.connect(lambda _, s="beacons": self._mark_dirty(s))
-        btn_rand.clicked.connect(lambda _, i=idx: self._randomize_single_beacon_pos(i))
-
-        # store refs for external updates (e.g., after scene resize)
-        panel_ref = {"box": box, "chk": chk, "prof": prof_combo, "speed": sp_speed, "bright": sp_bright,
-                     "radius": sp_radius, "hitbox": sp_hit, "center": sp_center, "x": sp_x, "y": sp_y, "heading": sp_head}
-        self.per_beacon_panels.append(panel_ref)
-        return box
-
-    def _on_per_beacon_enabled(self, idx: int, checked: bool):
-        try:
-            b = self.beacons[idx]; b.enabled = bool(checked)
-            self.per_beacon_panels[idx]["box"].setTitle(f"Beacon #{b.beacon_id} — {'ON' if checked else 'OFF'}")
-        except: pass
-
-    def _on_per_beacon_profile(self, idx: int, txt: str):
-        try: self.beacons[idx].profile = MotionProfile(txt)
-        except: pass
-
-    def _on_per_beacon_speed(self, idx: int, v: int):
-        try: self.beacons[idx].speed = float(v)
-        except: pass
-
-    def _on_per_beacon_brightness(self, idx: int, v: int):
-        try: self.beacons[idx].brightness = int(v); self.beacons[idx].current_brightness = float(v)
-        except: pass
-
-    def _on_per_beacon_radius(self, idx: int, v: int):
-        try: self.beacons[idx].radius = int(v)
-        except: pass
-
-    def _on_per_beacon_hitbox(self, idx: int, v: int):
-        try: self.beacons[idx].hitbox_radius = int(v)
-        except: pass
-
-    def _on_per_beacon_center(self, idx: int, v: int):
-        try: self.beacons[idx].center_radius = int(v)
-        except: pass
-
-    def _on_per_beacon_x(self, idx: int, v: int):
-        try: self.beacons[idx].x = float(np.clip(v, 0, self._scene_size[0]))
-        except: pass
-
-    def _on_per_beacon_y(self, idx: int, v: int):
-        try: self.beacons[idx].y = float(np.clip(v, 0, self._scene_size[1]))
-        except: pass
-
-    def _on_per_beacon_heading(self, idx: int, deg: int):
-        try: self.beacons[idx]._heading = math.radians(int(deg) % 360)
-        except: pass
-        try:
-            # keep panel display in sync if heading wrapped
-            panel = self.per_beacon_panels[idx]
-            # no extra
-            pass
-        except: pass
-
-    def _randomize_single_beacon_pos(self, idx: int):
-        """Randomize single beacon position — seed-driven, HOT (modular)."""
-        try:
-            b = self.beacons[idx]
-            import random as rnd
-            # Use modular Target.randomize_position if available (seed-driven)
-            try:
-                b.randomize_position(seed=int(rnd.randint(0, 999999)))
-            except Exception:
-                b.x = float(rnd.uniform(60, self._scene_size[0]-60))
-                b.y = float(rnd.uniform(60, self._scene_size[1]-60))
-            # Reflect in UI — supports both legacy dict and new BeaconPanel
-            panel = self.per_beacon_panels[idx] if idx < len(getattr(self, "per_beacon_panels", [])) else None
-            if panel is None:
-                return
-            if isinstance(panel, dict):
-                panel["x"].blockSignals(True); panel["x"].setValue(int(b.x)); panel["x"].blockSignals(False)
-                panel["y"].blockSignals(True); panel["y"].setValue(int(b.y)); panel["y"].blockSignals(False)
-            else:
-                # BeaconPanel — update via seed + x/y
-                try:
-                    panel.spin_seed.blockSignals(True); panel.spin_seed.setValue(int(getattr(b, "_seed", 42) or 42)); panel.spin_seed.blockSignals(False)
-                except: pass
-                try:
-                    panel.spin_x.blockSignals(True); panel.spin_x.setValue(int(b.x)); panel.spin_x.blockSignals(False)
-                    panel.spin_y.blockSignals(True); panel.spin_y.setValue(int(b.y)); panel.spin_y.blockSignals(False)
-                except: pass
-                # Also sync manager's per-beacon config store
-                try:
-                    if hasattr(self, "beacon_manager"):
-                        self.beacon_manager.get_per_beacon_panels()[idx].spin_x.setValue(int(b.x))
-                except: pass
-        except: pass
-
+    def _on_per_beacon_enabled(self, idx, checked): pass
+    def _on_per_beacon_profile(self, idx, txt): pass
+    def _on_per_beacon_speed(self, idx, v): pass
+    def _on_per_beacon_brightness(self, idx, v): pass
+    def _on_per_beacon_radius(self, idx, v): pass
+    def _on_per_beacon_hitbox(self, idx, v): pass
+    def _on_per_beacon_center(self, idx, v): pass
+    def _on_per_beacon_x(self, idx, v): pass
+    def _on_per_beacon_y(self, idx, v): pass
+    def _on_per_beacon_heading(self, idx, deg): pass
+    def _randomize_single_beacon_pos(self, idx): pass
     def _randomize_all_beacons(self):
-        """Randomize All — reroll every per-beacon parameter (8 + motion) for all beacons."""
-        # Modular path: use Target.randomize_all (covers all 8 params + profile/seed)
-        if hasattr(self, "beacon_manager") and self.beacon_manager is not None:
-            try:
-                import random as _rnd
-                for i, b in enumerate(getattr(self, "beacons", [])):
+        try:
+            import random
+            # Randomize all beacon parameters via panel
+            if hasattr(self, "beacon_manager"):
+                bm = self.beacon_manager
+                # Random shape
+                try:
+                    bm.combo_shape.setCurrentIndex(random.randint(0, bm.combo_shape.count()-1))
+                except: pass
+                try:
+                    bm.spin_size_w.setValue(random.randint(5, 20))
+                    bm.spin_size_h.setValue(random.randint(2, 20))
+                except: pass
+                try:
+                    bm.spin_x.setValue(random.randint(200, 4800))
+                    bm.spin_y.setValue(random.randint(200, 4800))
+                except: pass
+                try:
+                    bm.combo_motion.setCurrentIndex(random.randint(0, bm.combo_motion.count()-1))
+                except: pass
+                try:
+                    bm.spin_speed.setValue(random.randint(20, 150))
+                    bm.chk_random_speed.setChecked(random.choice([True, False]))
+                except: pass
+                try:
+                    bm.chk_blinking.setChecked(random.choice([True, False]))
+                except: pass
+                self.statusBar().showMessage(f"Randomized parameters for {len(getattr(self,'beacons',[]))} beacons", 2500)
+                return
+            # Fallback: randomize live beacons directly
+            import random as _rnd
+            for b in getattr(self, "beacons", []):
+                try:
+                    b.profile = _rnd.choice(list(MotionProfile))
+                except: pass
+                try:
+                    b.shape = _rnd.choice(["square", "circle"])
+                    b.size_w = _rnd.randint(5, 20)
+                    b.size_h = _rnd.randint(2, 20)
+                    b.speed = float(_rnd.randint(20, 150))
+                    b.blinking = _rnd.choice([True, False])
+                    b.randomize_position(seed=int(_rnd.randint(0, 999999)))
+                except:
                     try:
-                        b.randomize_all(seed=int(_rnd.randint(0, 999999)))
-                    except Exception:
-                        # Fallback manual
-                        b.speed = float(np.clip(b.speed * _rnd.uniform(0.7, 1.3), 8, 250))
                         b.x = float(_rnd.uniform(60, self._scene_size[0]-60))
                         b.y = float(_rnd.uniform(60, self._scene_size[1]-60))
-                # Sync manager panels from live beacons
-                self._rebuild_per_beacon_panels()
-                # Also push to beacon_config
-                try:
-                    self.beacon_config = self.beacon_manager.collect_multi_config().validate()
-                except: pass
-                self.statusBar().showMessage(f"Randomized {len(self.beacons)} beacons (all 8 params)", 2500)
-                return
-            except Exception:
-                pass
-        # Legacy fallback
-        for i in range(len(getattr(self, "beacons", []))):
-            self._randomize_single_beacon_pos(i)
-            import random as rnd
-            b = self.beacons[i]
-            b.speed = float(np.clip(b.speed * rnd.uniform(0.7, 1.3), 8, 250))
-            try:
-                panel = self.per_beacon_panels[i]
-                if isinstance(panel, dict):
-                    panel["speed"].blockSignals(True); panel["speed"].setValue(int(b.speed)); panel["speed"].blockSignals(False)
-                else:
-                    panel.spin_speed.blockSignals(True); panel.spin_speed.setValue(int(b.speed)); panel.spin_speed.blockSignals(False)
-            except: pass
-        self.statusBar().showMessage(f"Randomized {len(self.beacons)} beacons", 2500)
-
-    def _on_per_beacon_apply(self, idx: int):
-        """Per-panel Apply — both live (already applied) + explicit confirmation (HOT)."""
-        try:
-            b = self.beacons[idx]
-            self.statusBar().showMessage(f"Beacon #{b.beacon_id} applied — {b.profile.value} {int(b.speed)}px/s hb {b.hitbox_radius}px (HOT, next tick)", 2500)
-            # flash the panel border to confirm
-            box = self.per_beacon_panels[idx]["box"]
-            orig = box.styleSheet()
-            box.setStyleSheet(orig + " QGroupBox { border: 1px solid #22c55e; }")
-            from PyQt5.QtCore import QTimer as _QTimer
-            _QTimer.singleShot(700, lambda: box.setStyleSheet(orig))
-            # per-panel Apply also confirms the whole Beacons section (HOT)
-            self._clear_dirty("beacons")
-            self._snapshot_section("beacons")
+                    except: pass
+            self.statusBar().showMessage(f"Randomized parameters for {len(self.beacons)} beacons", 2500)
         except: pass
 
-    # ── Per-section HOT Apply / Discard + Master ──
-    # NOTE: State handling (dirty/HOT/snapshot) delegated to gui.mixins.state_mixin.StateMixin
+    def _randomize_beacon_motion(self):
+        try:
+            import random
+            if hasattr(self, "beacon_manager"):
+                bm = self.beacon_manager
+                bm.combo_motion.setCurrentIndex(random.randint(0, bm.combo_motion.count()-1))
+                self.statusBar().showMessage(f"Randomized motion for {len(getattr(self,'beacons',[]))} beacons", 2500)
+                return
+            import random as _rnd
+            for b in getattr(self, "beacons", []):
+                try:
+                    b.profile = _rnd.choice(list(MotionProfile))
+                    b.randomize_position(seed=int(_rnd.randint(0, 999999)))
+                except: pass
+            self.statusBar().showMessage(f"Randomized motion for {len(self.beacons)} beacons", 2500)
+        except: pass
+    def _on_per_beacon_apply(self, idx): pass
+
+    # ── Per-section Apply / Discard + Master ──
+    # NOTE: State handling (dirty//snaps) delegated to gui.mixins.state_mixin.StateMixin
     # Methods inherited: _mark_dirty, _clear_dirty, _apply_section, _discard_section,
-    # _master_apply_all, _master_discard_all, _snapshot_section, _schedule_auto
+    # _master_apply_all, _master_discard_all, _snaps_section, _schedule_auto
 
     def _apply_scene_settings_hot(self):
-        """HOT — applies Environment from EnvironmentPanel + EnvironmentConfig (modular, no pause)."""
+        """ — applies Environment from EnvironmentPanel + EnvironmentConfig (modular, no pause)."""
         # Collect validated EnvironmentConfig (single source of truth)
         try:
             cfg = self.env_panel.collect_config().validate() if hasattr(self, "env_panel") else self.env_config.validate()
@@ -1832,15 +1445,15 @@ class MainWindow(StateMixin, QMainWindow):
                     panel.spin_x.blockSignals(True); panel.spin_x.setValue(int(b.x)); panel.spin_x.blockSignals(False)
                     panel.spin_y.blockSignals(True); panel.spin_y.setValue(int(b.y)); panel.spin_y.blockSignals(False)
         except: pass
-        self._snapshot_section("environment"); self._snapshot_section("camera")
+        self._snapshot_section("environment"); self._snaps_section("camera")
         try:
             cam_scale = float(self.camera_config.pixel_scale_mrad)
-            self.statusBar().showMessage(f"Environment/Camera HOT — world {sw}x{sh} FOV {self.camera_config.fov_width}x{self.camera_config.fov_height} pan {self.camera_config.pan_min}:{self.camera_config.pan_max} scale {cam_scale:.3f}mrad/px", 3000)
+            self.statusBar().showMessage(f"Environment/Camera — world {sw}x{sh} FOV {self.camera_config.fov_width}x{self.camera_config.fov_height} pan {self.camera_config.pan_min}:{self.camera_config.pan_max} scale {cam_scale:.3f}mrad/px", 3000)
         except:
-            self.statusBar().showMessage(f"Environment/Camera HOT applied — world {sw}x{sh} FOV {fw}x{fh}", 3000)
+            self.statusBar().showMessage(f"Environment/Camera applied — world {sw}x{sh} FOV {fw}x{fh}", 3000)
 
     def _apply_camera_hot(self):
-        """HOT — apply full CameraConfig (11 params: FOV, mechanics, display, units + gain)."""
+        """ — apply full CameraConfig (11 params: FOV, mechanics, display, units + gain)."""
         try:
             # Collect validated camera config (all 11 params) against current scene
             sw, sh = self._scene_size
@@ -1890,7 +1503,7 @@ class MainWindow(StateMixin, QMainWindow):
             self._snapshot_section("camera")
             # Report includes angular scale for units verification
             scale = float(cam_cfg.pixel_scale_mrad)
-            self.statusBar().showMessage(f"Camera HOT — FOV {fw}x{fh} pan [{int(cam_cfg.pan_min or 0)}:{int(cam_cfg.pan_max or sw)}] slew {cam_cfg.max_slew_rate:.0f}px/s lat {cam_cfg.latency_ms}ms scale {scale:.3f}mrad/px gain {self.controller.gain:.2f}", 3000)
+            self.statusBar().showMessage(f"Camera — FOV {fw}x{fh} pan [{int(cam_cfg.pan_min or 0)}:{int(cam_cfg.pan_max or sw)}] slew {cam_cfg.max_slew_rate:.0f}px/s lat {cam_cfg.latency_ms}ms scale {scale:.3f}mrad/px gain {self.controller.gain:.2f}", 3000)
         except Exception as e:
             QMessageBox.warning(self, "Camera Apply", f"Failed: {e}")
 
@@ -2023,25 +1636,90 @@ class MainWindow(StateMixin, QMainWindow):
         self.timer.stop(); self._running=False; self._pause_time=None
         try: self._update_live_indicators()
         except: pass
-        # FIX: close old logger file handle before discarding (prevents leak)
         try:
             if hasattr(self, "perf") and hasattr(self.perf, "close"):
                 self.perf.close()
-        except Exception:
-            pass
-        cur=self.motion_combo.currentText()
+        except: pass
+        # Reset all panels to defaults
+        try:
+            from environment.config import EnvironmentConfig as _EC
+            from camera.config import CameraConfig as _CC
+            from target.config import MultiBeaconConfig as _MBC
+            from control.config import ControllerConfig as _CtrlC
+            # Environment to defaults (world fixed 5000)
+            if hasattr(self, "env_panel"):
+                self.env_panel.set_config(_EC().validate(), emit=False)
+                self.env_config = _EC().validate()
+                self._scene_size = (5000, 5000)
+            # Camera to defaults (640x640, 4x3 deg, viewport 2000, god 5000, centre locked, 30Hz)
+            if hasattr(self, "camera_panel"):
+                self.camera_panel.set_config(_CC().validate((5000, 5000)), emit=False)
+                self.camera_config = _CC().validate((5000, 5000))
+            # Beacons to defaults (1, square 10x10, Circular, 60, threshold 200, no blink, no random, centre 2500)
+            if hasattr(self, "beacon_manager"):
+                self.beacon_manager.set_config(_MBC(beacon_count=1, target_index=0, shape="square", size_w=10, size_h=10, x=2500, y=2500, profile="curved", speed=60, blinking=False, speed_random=False).validate(), emit=False)
+                self.beacon_config = _MBC(beacon_count=1, target_index=0, shape="square", size_w=10, size_h=10, x=2500, y=2500, profile="curved", speed=60, blinking=False, speed_random=False).validate()
+                self._beacon_count = 1; self._target_beacon_id = 0
+                try:
+                    self.beacon_manager.spin_thresh.setValue(200)
+                except: pass
+            # Disturbances to 0 — full spec reset (all new modules to Clear/Off)
+            try:
+                from disturbance.config import DisturbanceConfig as _DCReset
+                _dc_default = _DCReset().validate()
+                self.disturbance_config = _dc_default
+                if hasattr(self, "disturbances_panel") and hasattr(self.disturbances_panel, "set_config"):
+                    self.disturbances_panel.set_config(_dc_default, emit=False)
+                    # keep legacy alias in sync
+                    try:
+                        self.sliders = self.disturbances_panel.sliders
+                    except: pass
+            except:
+                if hasattr(self, "sliders"):
+                    for s in self.sliders.values():
+                        try:
+                            s.blockSignals(True); s.setValue(0); s.blockSignals(False)
+                        except: pass
+                if hasattr(self, "disturbances_panel"):
+                    for s in self.disturbances_panel.sliders.values():
+                        try:
+                            s.blockSignals(True); s.setValue(0); s.blockSignals(False)
+                        except: pass
+            # Clear per-instance platform/jitter states
+            try:
+                if hasattr(self, "_platform_motion_state"): self._platform_motion_state.clear()
+                if hasattr(self, "_jitter_state"): self._jitter_state.clear()
+            except: pass
+            # Control to defaults (P, kp 0.15, 30Hz fixed)
+            if hasattr(self, "control_panel"):
+                self.control_panel.set_config(_CtrlC().validate(), emit=False)
+                self.controller_config = _CtrlC().validate()
+            # Global hidden tuning to defaults (motion curved, speed 60, thresh 200)
+            if hasattr(self, "motion_combo"):
+                self.motion_combo.blockSignals(True); self.motion_combo.setCurrentText("curved"); self.motion_combo.blockSignals(False)
+            if hasattr(self, "speed_slider"):
+                self.speed_slider.blockSignals(True); self.speed_slider.setValue(60); self.speed_slider.blockSignals(False)
+                try: self.speed_slider._value_label.setText("60")
+                except: pass
+            if hasattr(self, "thresh_slider"):
+                self.thresh_slider.blockSignals(True); self.thresh_slider.setValue(200); self.thresh_slider.blockSignals(False)
+                try: self.thresh_slider._value_label.setText("200")
+                except: pass
+            self._target_speed = 60; self._det_thresh = 200; self._ctrl_gain = 0.15
+            self._tracker_smoothing = 0.4; self._tracker_miss_limit = 5; self._detector_min_area = 2; self._sim_speed = 1.0; self._global_brightness = 255; self._global_radius = 5
+            self._hitbox_radius = 14; self._center_radius = 2
+            # Clear dirty
+            try:
+                self._dirty_tabs.clear(); self._applied_snapshot.clear()
+            except: pass
+        except Exception as e:
+            print(f"Reset defaults error: {e}")
         self._build_simulation()
         try:
             self._rebuild_per_beacon_panels()
             self._sync_per_beacon_xy_ranges()
         except: pass
-        self.motion_combo.blockSignals(True); self.motion_combo.setCurrentText(cur); self.motion_combo.blockSignals(False)
-        try: self.target.profile=MotionProfile(cur)
-        except: pass
-        for b in getattr(self, "beacons", []):
-            try: b.profile = MotionProfile(cur)
-            except: pass
-        self.perf=PerformanceLogger(); self._camera_drift_state={}; self._last_tick_time=None
+        self.perf=PerformanceLogger(); self._camera_drift_state={}; self._platform_motion_state={}; self._jitter_state={}; self._last_tick_time=None
         # FIX: reset dashboard history immediately so graph clears on reset (not lazy on next tick)
         try:
             if hasattr(self, "dashboard_panel") and hasattr(self.dashboard_panel, "reset_history"):
@@ -2051,8 +1729,10 @@ class MainWindow(StateMixin, QMainWindow):
         # Reset disturbance global state — fixes stale phase/velocity on fresh run (reproducibility)
         try:
             dist.reset_disturbance_state()
-            # Also clear per-instance drift dict (already {}) and any module globals
+            # Also clear per-instance drift / platform / jitter dicts (already {}) and any module globals
             self._camera_drift_state.clear()
+            if hasattr(self, "_platform_motion_state"): self._platform_motion_state.clear()
+            if hasattr(self, "_jitter_state"): self._jitter_state.clear()
         except Exception:
             pass
         # Proper reset: show initial 0 values with correct units (not "-") so no field appears empty
@@ -2061,7 +1741,13 @@ class MainWindow(StateMixin, QMainWindow):
                 # tracker is newly created via _build_simulation, use its status
                 init_status = getattr(getattr(self, "tracker", None), "status", None)
                 init_status = init_status.value if hasattr(init_status, "value") else "searching"
-                self.dashboard_panel.update_from_summary(self.perf.summary(), init_status, None, camera_scale_mrad=getattr(getattr(self, "camera", None), "config", None) and getattr(self.camera.config, "pixel_scale_mrad", 0.035))
+                cam_scale = 0.035
+                try:
+                    if hasattr(self, "camera") and hasattr(self.camera, "config") and getattr(self.camera.config, "pixel_scale_mrad", None) is not None:
+                        cam_scale = float(self.camera.config.pixel_scale_mrad)
+                except Exception:
+                    pass
+                self.dashboard_panel.update_from_summary(self.perf.summary(), init_status, None, camera_scale_mrad=cam_scale)
         except Exception:
             # Fallback: set labels to 0 with units
             for lbl in self.stat_labels.values():
@@ -2135,16 +1821,99 @@ class MainWindow(StateMixin, QMainWindow):
         except: pass
         scene_frame=self.scene.get_frame()
         self._draw_targets(scene_frame)
-        # Platform disturbances — dt_eff ensures sim-speed lockstep (fixes wall-clock decoupling)
-        # All four disturbances now evolve with same sim-speed-scaled dt
-        pan_vib, tilt_vib = dist.apply_platform_vibration(self.camera.pan, self.camera.tilt, self.sliders["Vibration"].value(), dt=dt_eff)
-        pan_dist, tilt_dist = dist.apply_camera_motion_with_state(pan_vib, tilt_vib, self.sliders["Camera Motion"].value(), self._camera_drift_state, dt=dt_eff)
-        rp, rt = self.camera.pan, self.camera.tilt
-        self.camera.pan, self.camera.tilt = pan_dist, tilt_dist
-        fov_frame=self.camera.capture(scene_frame)
-        self.camera.pan, self.camera.tilt = rp, rt
-        fov_frame=dist.apply_turbulence(fov_frame, self.sliders["Turbulence"].value(), dt=dt_eff)
-        fov_frame=dist.apply_sensor_noise(fov_frame, self.sliders["Noise"].value())
+        # ── Disturbances (full spec) — dt_eff ensures sim-speed lockstep ──
+        # Order positional: Vibration (harmonic) → Platform Motion (Linear default + 6 optional, ±20px/f) → Jitter (±20) → Drift (OU 6s)
+        # Order image: Turbulence → Atmospheric (Clear/Haze/Fog/Rain/Low Light + User contrast/brightness) → Sensor → Image Noise (S&P 10% + Gaussian σ 20+User + Poisson)
+        # Try to use DisturbanceConfig as single source; fallback to legacy sliders if not available
+        try:
+            dc = getattr(self, "disturbance_config", None)
+            if dc is not None:
+                dc = dc.validate() if hasattr(dc, "validate") else dc
+        except:
+            dc = None
+        # Fallback if panel never initialized but sliders exist → build minimal dc from sliders
+        if dc is None and hasattr(self, "sliders") and self.sliders:
+            try:
+                from disturbance.config import DisturbanceConfig as _FallbackDC
+                # Build minimal legacy-only dc
+                dc = _FallbackDC(
+                    turbulence=int(self.sliders["Turbulence"].value()) if "Turbulence" in self.sliders else 0,
+                    vibration=int(self.sliders["Vibration"].value()) if "Vibration" in self.sliders else 0,
+                    camera_motion=int(self.sliders["Camera Motion"].value()) if "Camera Motion" in self.sliders else 0,
+                    noise=int(self.sliders["Noise"].value()) if "Noise" in self.sliders else 0,
+                ).validate()
+            except:
+                dc = None
+        if dc is not None:
+            # Ensure per-instance states exist
+            if not hasattr(self, "_platform_motion_state") or self._platform_motion_state is None:
+                self._platform_motion_state = {}
+            if not hasattr(self, "_camera_drift_state") or self._camera_drift_state is None:
+                self._camera_drift_state = {}
+            # 1) Vibration (legacy harmonic)
+            pan_a, tilt_a = dist.apply_platform_vibration(self.camera.pan, self.camera.tilt, int(getattr(dc, "vibration", 0)), dt=dt_eff)
+            # 2) Platform Motion — Linear mandatory default + Circular/Random/Spiral/Figure 8/Sin/Zig-Zag, ±20 px/frame MAX user configurable
+            if float(getattr(dc, "platform_speed", 0.0)) > 1e-9:
+                pan_b, tilt_b = dist.apply_platform_motion(
+                    pan_a, tilt_a,
+                    profile=str(getattr(dc, "platform_profile", "Linear")),
+                    speed_px_per_frame=float(getattr(dc, "platform_speed", 0.0)),
+                    dt=dt_eff,
+                    state=self._platform_motion_state,
+                    bounds=self._scene_size,
+                )
+            else:
+                pan_b, tilt_b = pan_a, tilt_a
+            # 3) Camera Jitter — uniform ±20 px/frame user configurable
+            if float(getattr(dc, "camera_jitter", 0.0)) > 1e-9:
+                pan_c, tilt_c = dist.apply_camera_jitter(pan_b, tilt_b, jitter_px=float(getattr(dc, "camera_jitter")))
+            else:
+                pan_c, tilt_c = pan_b, tilt_b
+            # 4) Camera Drift — OU thermal/mount
+            pan_dist, tilt_dist = dist.apply_camera_motion_with_state(
+                pan_c, tilt_c, int(getattr(dc, "camera_motion", 0)), self._camera_drift_state, dt=dt_eff
+            )
+            rp, rt = self.camera.pan, self.camera.tilt
+            self.camera.pan, self.camera.tilt = pan_dist, tilt_dist
+            fov_frame = self.camera.capture(scene_frame)
+            self.camera.pan, self.camera.tilt = rp, rt
+            # Image: Turbulence
+            fov_frame = dist.apply_turbulence(fov_frame, int(getattr(dc, "turbulence", 0)), dt=dt_eff)
+            # Atmospheric — Clear/Haze/Fog/Rain/Low Light/User Defined (contrast/brightness reduction)
+            preset = str(getattr(dc, "atmospheric_preset", "Clear"))
+            contrast = float(getattr(dc, "atmospheric_contrast", 0.0))
+            brightness = float(getattr(dc, "atmospheric_brightness", 0.0))
+            if preset != "Clear" or contrast > 1e-9 or brightness > 1e-9:
+                fov_frame = dist.apply_atmospheric_disturbance(
+                    fov_frame, preset=preset, contrast_reduction=contrast, brightness_reduction=brightness
+                )
+            # Sensor noise — legacy
+            if int(getattr(dc, "noise", 0)) > 0:
+                fov_frame = dist.apply_sensor_noise(fov_frame, int(getattr(dc, "noise")))
+            # Image Noise — S&P (density + ratio) + Gaussian (σ max 20 + User to 50) + Poisson (scale+peak) — one or more at once, only visible params apply
+            if bool(getattr(dc, "enable_salt_pepper", False) or getattr(dc, "enable_gaussian", False) or getattr(dc, "enable_poisson", False)):
+                fov_frame = dist.apply_image_noise(
+                    fov_frame,
+                    enable_salt_pepper=bool(getattr(dc, "enable_salt_pepper", False)),
+                    enable_gaussian=bool(getattr(dc, "enable_gaussian", False)),
+                    enable_poisson=bool(getattr(dc, "enable_poisson", False)),
+                    salt_pepper_density=float(getattr(dc, "salt_pepper_density", 0.10)),
+                    salt_pepper_ratio=float(getattr(dc, "salt_pepper_ratio", 0.50)),
+                    gaussian_sigma=float(getattr(dc, "gaussian_sigma", 8.0)),
+                    gaussian_sigma_max=float(getattr(dc, "gaussian_sigma_max", 20.0)),
+                    poisson_scale=float(getattr(dc, "poisson_scale", 1.0)),
+                    poisson_peak=float(getattr(dc, "poisson_peak", 100.0)),
+                )
+        else:
+            # Legacy fallback (no config) — original 4 impairments only
+            pan_vib, tilt_vib = dist.apply_platform_vibration(self.camera.pan, self.camera.tilt, self.sliders["Vibration"].value(), dt=dt_eff)
+            pan_dist, tilt_dist = dist.apply_camera_motion_with_state(pan_vib, tilt_vib, self.sliders["Camera Motion"].value(), self._camera_drift_state, dt=dt_eff)
+            rp, rt = self.camera.pan, self.camera.tilt
+            self.camera.pan, self.camera.tilt = pan_dist, tilt_dist
+            fov_frame = self.camera.capture(scene_frame)
+            self.camera.pan, self.camera.tilt = rp, rt
+            fov_frame = dist.apply_turbulence(fov_frame, self.sliders["Turbulence"].value(), dt=dt_eff)
+            fov_frame = dist.apply_sensor_noise(fov_frame, self.sliders["Noise"].value())
         # ── Target-only realtime check (not hardcoded, hitbox-gated) ──
         all_dets = self.detector.detect_all(fov_frame)
         self._last_all_detections = all_dets
@@ -2163,6 +1932,8 @@ class MainWindow(StateMixin, QMainWindow):
                 -primary.hitbox_radius <= proj_x <= self.camera.fov_width + primary.hitbox_radius and
                 -primary.hitbox_radius <= proj_y <= self.camera.fov_height + primary.hitbox_radius
             )
+            hitbox_hit = False
+            center_hit = False
             if not target_in_fov:
                 # Target leaves viewport — do NOT bother with distractors, report miss
                 detection = None
@@ -2170,24 +1941,15 @@ class MainWindow(StateMixin, QMainWindow):
                 # Target is in viewport — look ONLY for a detection inside its hitbox (realtime, per-beacon radius)
                 # No hardcoded 40px or brightest fallback; purely hitbox-gated and distance-sorted
                 detection = None
-                best_hit = None
                 min_dist = float("inf")
                 for d in all_dets:
                     dist_c = math.hypot(d["x"] - proj_x, d["y"] - proj_y)
                     if dist_c <= primary.hitbox_radius and dist_c < min_dist:
                         min_dist = dist_c
-                        best_hit = d
                         detection = (d["x"], d["y"])
-                # Stats: hitbox vs perfect center (for analysis)
                 if detection is not None:
-                    if min_dist <= primary.hitbox_radius:
-                        self._hitbox_hits += 1
-                    if min_dist <= primary.center_radius:
-                        self._center_hits += 1
-                    self._frames_with_detections += 1
-                else:
-                    # Target in FOV but no blob inside its hitbox → true miss (even if distractors visible, ignore them)
-                    detection = None
+                    hitbox_hit = True
+                    center_hit = min_dist <= primary.center_radius
         estimate=self.tracker.update(detection)
         tracking_error_px=None
         # Error to perfect center (not hitbox edge) for precision metrics
@@ -2195,7 +1957,6 @@ class MainWindow(StateMixin, QMainWindow):
             cx, cy = self.camera.fov_width/2, self.camera.fov_height/2
             err_x, err_y = estimate[0]-cx, estimate[1]-cy
             tracking_error_px=float(np.hypot(err_x, err_y))
-            # Also compute to perfect center
             # Control — PID with dead zone, output clamp respecting camera slew, update rate (robust)
             # Pass dt and camera max slew for clamp → controller respects actuator limits, no double-define
             try:
@@ -2212,21 +1973,9 @@ class MainWindow(StateMixin, QMainWindow):
                 # Back-compat fallback (PTZCamera without dt)
                 self.camera.move(d_pan, d_tilt)
         is_locked=self.tracker.status==LockStatus.TRACKING
-        # extended metrics for logger — FIX: detected must be primary-target hitbox detection, not any distractor blob
-        # Previously detected_any = len(all_dets)>0 counted distractors, inflating detection_rate.
-        # Now detected = hitbox_hit (primary inside hitbox) for accurate real-time rate.
-        hitbox_hit = False
-        center_hit = False
-        if 'detection' in locals() and detection is not None and 'primary' in locals():
-            try:
-                d = math.hypot(detection[0] - (primary.x - fov_x0), detection[1] - (primary.y - fov_y0))
-                hitbox_hit = d <= primary.hitbox_radius
-                center_hit = d <= primary.center_radius
-            except: pass
         # Real-time accurate: detected = primary hitbox hit (not any distractor)
-        detected_primary = bool(hitbox_hit)
         self.perf.log_frame(is_locked, tracking_error_px, time.time()-frame_start,
-                            detected=detected_primary, hitbox_hit=hitbox_hit, center_hit=center_hit,
+                            detected=hitbox_hit, hitbox_hit=hitbox_hit, center_hit=center_hit,
                             lock_state=self.tracker.status.value)
         # Rendering must not block dashboard — ensure _update_stats always runs
         try:
@@ -2266,18 +2015,13 @@ class MainWindow(StateMixin, QMainWindow):
         return Renderer.draw_corner_brackets(img, margin, length, color, thickness)
 
     def _render_viewport(self, fov_frame: np.ndarray, estimate, all_dets: list[dict] | None = None):
-        # Overlay-aware — pulse animation + error units + camera scale
-        pulse = 0.0
-        try:
-            pulse = self._overlay_pulse.update(self.tracker.status.value, getattr(self.overlay_config, "pulse_enabled", True), getattr(self.overlay_config, "pulse_duration_ms", 300))
-        except: pass
+        # Standard crosshair only — no overlay configuration
         pixel_scale = 0.035
         try:
             pixel_scale = float(getattr(getattr(self, "camera", None).config, "pixel_scale_mrad", 0.035))
         except: pass
         try:
-            overlay = getattr(self, "overlay_config", None)
-            display = Renderer.render_viewport(fov_frame, self.camera, getattr(self, "beacons", [self.target]), self.target, self.tracker, all_dets, overlay=overlay, pulse_progress=pulse, pixel_scale_mrad=pixel_scale)
+            display = Renderer.render_viewport(fov_frame, self.camera, getattr(self, "beacons", [self.target]), self.target, self.tracker, all_dets, pixel_scale_mrad=pixel_scale)
         except Exception:
             display = Renderer.render_viewport(fov_frame, self.camera, getattr(self, "beacons", [self.target]), self.target, self.tracker, all_dets)
         self._last_viewport_frame = display
@@ -2329,7 +2073,7 @@ class MainWindow(StateMixin, QMainWindow):
             except Exception:
                 s["live_pixel_scale"] = float(getattr(self.camera_config, "pixel_scale_mrad", 0.035)) if hasattr(self, "camera_config") else 0.035
             s["live_error_px"] = float(tracking_error_px) if tracking_error_px is not None else None
-            # Config snapshot — entire system (for dashboard G, dashboard-only)
+            # Config snaps — entire system (for dashboard G, dashboard-only)
             try:
                 s["config_haze_pct"] = int(getattr(self.env_config, "haze_pct", 0)) if hasattr(self, "env_config") else 0
                 s["config_star_count"] = int(getattr(self.env_config, "star_count", 0)) if hasattr(self, "env_config") else 0
@@ -2344,11 +2088,29 @@ class MainWindow(StateMixin, QMainWindow):
                 except Exception:
                     s["config_beacon_profile"] = "—"
                 try:
-                    turb = self.sliders["Turbulence"].value() if hasattr(self, "sliders") and "Turbulence" in self.sliders else 0
-                    vib = self.sliders["Vibration"].value() if hasattr(self, "sliders") and "Vibration" in self.sliders else 0
-                    cam = self.sliders["Camera Motion"].value() if hasattr(self, "sliders") and "Camera Motion" in self.sliders else 0
-                    noise = self.sliders["Noise"].value() if hasattr(self, "sliders") and "Noise" in self.sliders else 0
-                    s["config_disturbances"] = f"T{turb} V{vib} C{cam} N{noise}"
+                    if hasattr(self, "disturbance_config") and self.disturbance_config is not None:
+                        dc = self.disturbance_config
+                        parts = [f"T{int(getattr(dc,'turbulence',0))} V{int(getattr(dc,'vibration',0))} C{int(getattr(dc,'camera_motion',0))} N{int(getattr(dc,'noise',0))}"]
+                        if bool(getattr(dc,'enable_salt_pepper',False) or getattr(dc,'enable_gaussian',False) or getattr(dc,'enable_poisson',False)):
+                            en=[]
+                            if getattr(dc,'enable_salt_pepper',False): en.append(f"S&P{getattr(dc,'salt_pepper_density',0)*100:.0f}%")
+                            if getattr(dc,'enable_gaussian',False): en.append(f"Gσ{getattr(dc,'gaussian_sigma',0):.0f}")
+                            if getattr(dc,'enable_poisson',False): en.append("Poisson")
+                            parts.append("+".join(en) + f"/max{getattr(dc,'gaussian_sigma_max',20):.0f}")
+                        if float(getattr(dc,'camera_jitter',0))>0:
+                            parts.append(f"J±{float(getattr(dc,'camera_jitter',0)):.1f}px")
+                        preset = str(getattr(dc,'atmospheric_preset','Clear'))
+                        if preset!="Clear":
+                            parts.append(f"Atmo{preset[:4]} C{int(getattr(dc,'atmospheric_contrast',0))} B{int(getattr(dc,'atmospheric_brightness',0))}")
+                        if float(getattr(dc,'platform_speed',0))>0:
+                            parts.append(f"Plat{str(getattr(dc,'platform_profile','Lin'))[:4]} {float(getattr(dc,'platform_speed',0)):.0f}px/f")
+                        s["config_disturbances"] = " • ".join(parts)
+                    else:
+                        turb = self.sliders["Turbulence"].value() if hasattr(self, "sliders") and "Turbulence" in self.sliders else 0
+                        vib = self.sliders["Vibration"].value() if hasattr(self, "sliders") and "Vibration" in self.sliders else 0
+                        cam = self.sliders["Camera Motion"].value() if hasattr(self, "sliders") and "Camera Motion" in self.sliders else 0
+                        noise = self.sliders["Noise"].value() if hasattr(self, "sliders") and "Noise" in self.sliders else 0
+                        s["config_disturbances"] = f"T{turb} V{vib} C{cam} N{noise}"
                 except Exception:
                     s["config_disturbances"] = "—"
                 try:

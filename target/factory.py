@@ -25,6 +25,13 @@ def create_beacons(
     center_radius: int = 2,
     brightness: int = 255,
     radius: int = 5,
+    shape: str = "square",
+    size_w: int = 10,
+    size_h: int = 10,
+    blinking: bool = False,
+    x: float | None = None,
+    y: float | None = None,
+    speed_random: bool = False,
 ) -> list[Target]:
     """
     Factory to create one or more beacons spread across world.
@@ -36,37 +43,89 @@ def create_beacons(
 
     Back-compat signature — tests and legacy app call this.
     """
-    # Normalize profile
+    # Normalize profile — handle display names
+    def _norm_profile(p):
+        mapping = {
+            "straight line": "linear",
+            "straight_line": "linear",
+            "circular": "curved",
+            "figure 8": "figure_eight",
+            "figure8": "figure_eight",
+            "spiral": "spiral",
+            "sin": "sinusoidal",
+            "sinusoidal": "sinusoidal",
+            "zig-zag": "zigzag",
+            "zigzag": "zigzag",
+            "random": "random",
+        }
+        s = str(p).lower().strip()
+        s = mapping.get(s, s)
+        if s == "random":
+            return "random"
+        try:
+            return MotionProfile(s)
+        except:
+            return MotionProfile.CURVED
+
+    is_random_profile = str(profile).lower().strip() in ("random", "random walk", "random_motion")
+    # Also check normalized
     try:
-        prof = profile if isinstance(profile, MotionProfile) else MotionProfile(str(profile).lower())
-    except Exception:
-        prof = MotionProfile.CURVED
+        norm = _norm_profile(profile)
+        is_random_profile = (norm == "random")
+        prof_base = norm if not is_random_profile else None
+    except:
+        is_random_profile = False
+        prof_base = MotionProfile.CURVED
+
+    # Normalize shape
+    shape_norm = str(shape).lower() if shape else "square"
+    is_random_shape = shape_norm == "random"
+    shape_base = shape_norm if not is_random_shape else "square"
 
     rng = np.random.default_rng(seed)
     beacons: list[Target] = []
     w, h = bounds
-    n = int(np.clip(int(count), 1, 16))
+    n = int(np.clip(int(count), 1, 5))
+    # Derive radius from size for backward compat
+    radius_from_size = int(max(size_w, size_h) / 2) if size_w and size_h else int(radius)
+    radius_from_size = int(np.clip(radius_from_size, 1, 15))
     for i in range(n):
-        # Stratified placement
-        x = float(rng.uniform(w*0.18, w*0.82))
-        y = float(rng.uniform(h*0.18, h*0.82))
-        for _ in range(6):
-            too_close = any(math.hypot(x - b.x, y - b.y) < hitbox_radius*2.2 for b in beacons)
-            if not too_close:
-                break
-            x = float(rng.uniform(w*0.15, w*0.85))
-            y = float(rng.uniform(h*0.15, h*0.85))
-        # Speed jitter for distractors
-        sp = float(np.clip(rng.normal(speed, speed*0.12), speed*0.55, speed*1.45)) if n > 1 else float(speed)
-        # Profile staggering
-        prof_i = prof if i == 0 else rng.choice(list(MotionProfile))
+        # Placement: if single beacon and x,y provided, use it; else stratified random
+        if n == 1 and x is not None and y is not None:
+            xi, yi = float(x), float(y)
+        elif i == 0 and x is not None and y is not None and n == 1:
+            xi, yi = float(x), float(y)
+        else:
+            xi = float(rng.uniform(w*0.18, w*0.82))
+            yi = float(rng.uniform(h*0.18, h*0.82))
+            for _ in range(6):
+                too_close = any(math.hypot(xi - b.x, yi - b.y) < hitbox_radius*2.2 for b in beacons)
+                if not too_close:
+                    break
+                xi = float(rng.uniform(w*0.15, w*0.85))
+                yi = float(rng.uniform(h*0.15, h*0.85))
+        # Speed
+        if speed_random:
+            sp = float(rng.uniform(20, 150))
+        else:
+            sp = float(speed)
+            if n > 1:
+                sp = float(np.clip(rng.normal(speed, speed*0.12), speed*0.55, speed*1.45)) if not is_random_profile else float(rng.uniform(20, 120))
+        # Profile
+        if is_random_profile:
+            prof_i = rng.choice(list(MotionProfile))
+        else:
+            prof_i = prof_base if prof_base is not None else rng.choice(list(MotionProfile))
+        # Shape
+        shape_i = rng.choice(["square", "circle"]) if is_random_shape else shape_base
         beacons.append(
             Target(
-                x, y, prof_i, sp, bounds,
+                xi, yi, prof_i, sp, bounds,
                 seed=int(rng.integers(0, 999999)),
-                brightness=int(brightness), radius=int(radius),
+                brightness=int(brightness), radius=int(radius_from_size),
                 hitbox_radius=int(hitbox_radius), center_radius=int(center_radius),
                 beacon_id=int(i),
+                shape=str(shape_i), size_w=int(size_w), size_h=int(size_h), blinking=bool(blinking),
             )
         )
     return beacons
@@ -76,75 +135,28 @@ def create_beacons_with_configs(
     bounds: tuple[int, int],
     global_seed: int | None = 42,
 ) -> list[Target]:
-    """
-    Create beacons directly from a validated MultiBeaconConfig.
-
-    Each BeaconConfig drives one Target via Target(config=cfg, bounds=bounds, beacon_id=i).
-    If configs contain explicit x/y, they are used; otherwise seed-driven placement
-    (mirrors create_beacons spread logic) fills in.
-
-    Returns list[Target] length == multi_config.beacon_count, with enabled flags preserved.
-    """
-    if MultiBeaconConfig is None or BeaconConfig is None:
-        # No config support — fallback to basic
+    if MultiBeaconConfig is None:
         return create_beacons(
             multi_config.beacon_count if hasattr(multi_config, "beacon_count") else 1,
             bounds, "curved", 60.0, seed=global_seed,
         )
-
     cfg = multi_config.validate()
-    rng = np.random.default_rng(global_seed)
-    w, h = bounds
-    targets: list[Target] = []
-
-    for i, beacon_cfg in enumerate(cfg.beacons):
-        # If beacon_cfg has default placeholder position (400,300), treat as "needs placement"
-        # and generate spread position deterministically.
-        # We detect placeholder by checking if x/y are still defaults and not yet validated against bounds.
-        use_spread = False
-        # If beacon was freshly defaulted (beacon_id matches and x/y are 400/300), generate spread
-        if (beacon_cfg.x == 400.0 and beacon_cfg.y == 300.0 and beacon_cfg.position_seed == 42
-                and len(cfg.beacons) == cfg.beacon_count):
-            # Heuristic: allow caller to request auto-placement by leaving defaults
-            # We generate spread for first creation; subsequent edits keep explicit positions.
-            # To avoid overriding user-edited positions, only auto-place when bounds are large
-            # and we haven't yet placed any beacons.
-            # For now, respect explicit x/y — if caller wants spread, they should pre-randomize.
-            pass
-
-        # Resolve position via spread if not explicitly set? For now keep config's x/y as is,
-        # but ensure non-overlapping if multiple beacons share same default center.
-        x, y = float(beacon_cfg.x), float(beacon_cfg.y)
-        # Simple de-overlap for duplicates
-        for _ in range(6):
-            too_close = any(math.hypot(x - t.x, y - t.y) < beacon_cfg.hitbox_radius*2.2 for t in targets)
-            if not too_close:
-                break
-            x = float(rng.uniform(w*0.15, w*0.85))
-            y = float(rng.uniform(h*0.15, h*0.85))
-            # Update config to reflect new position for round-trip
-            beacon_cfg.x = x; beacon_cfg.y = y
-
-        # Build Target via config — clamp x/y to bounds
-        x = float(np.clip(x, 0, w)); y = float(np.clip(y, 0, h))
-        beacon_cfg.x = x; beacon_cfg.y = y
-        beacon_cfg.beacon_id = int(i)
-
-        try:
-            prof = beacon_cfg.profile if isinstance(beacon_cfg.profile, MotionProfile) else MotionProfile(str(beacon_cfg.profile).lower())
-        except Exception:
-            prof = MotionProfile.CURVED
-
-        tgt = Target(
-            x=x, y=y, profile=prof, speed=float(beacon_cfg.speed), bounds=bounds,
-            seed=int(beacon_cfg.position_seed), brightness=int(beacon_cfg.brightness),
-            radius=int(beacon_cfg.radius), hitbox_radius=int(beacon_cfg.hitbox_radius),
-            center_radius=int(beacon_cfg.center_radius),
-            heading=None if beacon_cfg.heading is None else float(beacon_cfg.heading) * math.pi / 180.0,
-            beacon_id=int(i), enabled=bool(beacon_cfg.enabled),
-        )
-        # Preserve enabled even if Target.__init__ didn't accept it (set post-init)
-        tgt.enabled = bool(beacon_cfg.enabled)
-        targets.append(tgt)
-
-    return targets
+    # Use shared config for all beacons
+    return create_beacons(
+        count=int(cfg.beacon_count),
+        bounds=bounds,
+        profile=str(getattr(cfg, "profile", "curved")),
+        speed=float(getattr(cfg, "speed", 60.0)),
+        seed=int(global_seed) if global_seed is not None else 42,
+        hitbox_radius=14,
+        center_radius=2,
+        brightness=255,
+        radius=int(max(getattr(cfg, "size_w", 10), getattr(cfg, "size_h", 10)) / 2),
+        shape=str(getattr(cfg, "shape", "square")),
+        size_w=int(getattr(cfg, "size_w", 10)),
+        size_h=int(getattr(cfg, "size_h", 10)),
+        blinking=bool(getattr(cfg, "blinking", False)),
+        x=float(getattr(cfg, "x", 2500.0)) if cfg.beacon_count == 1 else None,
+        speed_random=bool(getattr(cfg, "speed_random", False)),
+        y=float(getattr(cfg, "y", 2500.0)) if cfg.beacon_count == 1 else None,
+    )

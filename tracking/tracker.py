@@ -53,7 +53,7 @@ class Tracker:
         self._consecutive_hits: int = 0
         self._consecutive_misses: int = 0
 
-    # Config bridge — hot-apply without rebuild
+    # Config bridge — -apply without rebuild
 
     def apply_config(self, config: TrackerConfig) -> None:
         cfg = config.validate()

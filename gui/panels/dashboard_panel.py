@@ -191,14 +191,10 @@ class DashboardPanel(QWidget):
         metrics_layout.setSpacing(12)
 
         # Title
-        hdr = QLabel("Dashboard — Live System Metrics (dashboard-only, graph removed)")
+        hdr = QLabel("Dashboard")
         hdr.setStyleSheet("color:#0f172a; font-weight:800; font-size:13px; background:transparent;")
         hdr.setToolTip("All system metrics displayed here (dashboard-only); graph removed per consolidation")
         metrics_layout.addWidget(hdr)
-        sub = QLabel("All metrics centralized here — see groups A-G. Command deck detached to separate window.")
-        sub.setWordWrap(True)
-        sub.setStyleSheet("color:#64748b; font-size:10px; background:transparent;")
-        metrics_layout.addWidget(sub)
 
         # System Health — Live section removed per user request
         self.health_card = QFrame()
@@ -223,80 +219,67 @@ class DashboardPanel(QWidget):
         self.health_error = QLabel("Err —")
         self.health_error.hide()
 
-        # A. Timing & Processing — (≥20 FPS, <33ms) & Log Duration — single FPS, ms units (no duplicate S)
-        self._make_section(metrics_layout, "A. Timing & Processing — (≥20 FPS, <33ms) & Log", [
-            ("Duration (S)", "simulation_duration_s", "⏱ Duration", "Wall time since Start (s) — performance log", False, None),
-            ("Processing Speed (FPS)", "fps", "● FPS", "Sr.20 processing speed — spec ≥20 FPS (green≥20, yellow≥15)", True, "fps"),
-            ("Avg Processing Time (ms)", "avg_processing_time_ms", "⚙ Avg Proc", "Average per-frame time — Sr.20 <33ms real-time (ms, not S duplicate)", True, "avg_processing_time_ms"),
-            ("Min Processing Time (ms)", "min_processing_time_ms", "⬇ Min Proc", "Minimum latency — best case", False, None),
-            ("Max Processing Time (ms)", "max_processing_time_ms", "⬆ Max Proc", "Maximum latency — worst case", False, None),
-            ("Jitter (ms)", "jitter_ms", "〰 Jitter", "Processing time std dev — stability, <2ms good", True, "jitter_ms"),
-            ("P95 Processing Time (ms)", "p95_processing_time_ms", "⏱ P95 Proc", "95th percentile latency — worst-case", True, "p95_processing_time_ms"),
+        self._make_section(metrics_layout, "A. Timing and Processing", [
+            ("Duration (S)", "simulation_duration_s", "Duration", "Wall time since Start (s) — performance log", False, None),
+            ("Processing Speed (FPS)", "fps", "FPS", "Sr.20 processing speed — spec >=20 FPS (green>=20, yellow>=15)", True, "fps"),
+            ("Avg Processing Time (ms)", "avg_processing_time_ms", "Avg Proc", "Average per-frame time — Sr.20 <33ms real-time", True, "avg_processing_time_ms"),
+            ("Min Processing Time (ms)", "min_processing_time_ms", "Min Proc", "Minimum latency — best case", False, None),
+            ("Max Processing Time (ms)", "max_processing_time_ms", "Max Proc", "Maximum latency — worst case", False, None),
+            ("Jitter (ms)", "jitter_ms", "Jitter", "Processing time std dev — stability, <2ms good", True, "jitter_ms"),
+            ("P95 Processing Time (ms)", "p95_processing_time_ms", "P95 Proc", "95th percentile latency — worst-case", True, "p95_processing_time_ms"),
         ])
-
-        # B. Acquisition — (≤2s) & Re-acquisition (≤1s)
-        self._make_section(metrics_layout, "B. Acquisition — (≤2s) & Re-acquisition (≤1s)", [
-            ("Acquisition Time (S)", "acquisition_time_s", "⚡ Acq", "Sr.16 time to first TRACKING lock — spec ≤2s (green≤2)", True, "acquisition_time_s"),
-            ("Re-acquisition Avg (S)", "avg_reacquisition_time_s", "↩ Re-acq Avg", "Sr.19 avg after loss — spec ≤1s (green≤1)", True, "avg_reacquisition_time_s"),
-            ("Re-acquisition Min (S)", "min_reacquisition_time_s", "↩ Min", "Fastest reacquisition — stability", False, None),
-            ("Re-acquisition Max (S)", "max_reacquisition_time_s", "↩ Max", "Worst reacquisition — worst-case recovery", False, None),
-            ("Total Acquisitions (count)", "acquisitions", "🔁 Acqs", "Count of entries into TRACKING — stability", False, None),
-            ("Lock Losses (count)", "lock_losses", "💔 Losses", "Times TRACKING→LOST — lower is better, 0 ideal", False, None),
+        self._make_section(metrics_layout, "B. Acquisition", [
+            ("Acquisition Time (S)", "acquisition_time_s", "Acq", "Sr.16 time to first TRACKING lock — spec <=2s", True, "acquisition_time_s"),
+            ("Re-acquisition Avg (S)", "avg_reacquisition_time_s", "Re-acq Avg", "Sr.19 avg after loss — spec <=1s", True, "avg_reacquisition_time_s"),
+            ("Re-acquisition Min (S)", "min_reacquisition_time_s", "Min", "Fastest reacquisition — stability", False, None),
+            ("Re-acquisition Max (S)", "max_reacquisition_time_s", "Max", "Worst reacquisition — worst-case recovery", False, None),
+            ("Total Acquisitions (count)", "acquisitions", "Acqs", "Count of entries into TRACKING — stability", False, None),
+            ("Lock Losses (count)", "lock_losses", "Losses", "Times TRACKING to LOST — lower is better, 0 ideal", False, None),
         ])
-
-        # C. Lock & Retention — (<5% Loss, >95% Retention) — single retention, loss derived (not duplicate state)
-        self._make_section(metrics_layout, "C. Lock & Retention — (<5% Loss, >95% Retention)", [
-            ("Lock Status", "lock_status", "🔒 Status", "Tracker state: SEARCHING / ACQUIRED / TRACKING / LOST", False, None),
-            ("Retention Rate (%)", "lock_retention_rate_pct", "💚 Retention", "Frames in TRACKING / total — spec >95% (green≥95)", True, "lock_retention_rate_pct"),
-            ("Target Loss (%)", "target_loss_pct", "⚠ Loss", "Sr.18 target loss =100−retention — spec <5% (green<5)", True, "target_loss_pct"),
-            ("State — Acquired (%)", "state_acquired_pct", "🔵 Acquired", "Frames in ACQUIRED (probation) — lock precursor", True, "state_acquired_pct"),
-            ("State — Lost (%)", "state_lost_pct", "🔴 Lost", "Frames in LOST — after TRACKING lost", True, "state_lost_pct"),
+        self._make_section(metrics_layout, "C. Lock and Retention", [
+            ("Lock Status", "lock_status", "Status", "Tracker state: SEARCHING / ACQUIRED / TRACKING / LOST", False, None),
+            ("Retention Rate (%)", "lock_retention_rate_pct", "Retention", "Frames in TRACKING / total — spec >95%", True, "lock_retention_rate_pct"),
+            ("Target Loss (%)", "target_loss_pct", "Loss", "Sr.18 target loss =100-retention — spec <5%", True, "target_loss_pct"),
+            ("State — Acquired (%)", "state_acquired_pct", "Acquired", "Frames in ACQUIRED (probation) — lock precursor", True, "state_acquired_pct"),
+            ("State — Lost (%)", "state_lost_pct", "Lost", "Frames in LOST — after TRACKING lost", True, "state_lost_pct"),
         ])
-
-        # D. Tracking & Centroiding — (≤10px) & Benchmark RMSE — single set (tracking = centroiding)
-        self._make_section(metrics_layout, "D. Tracking & Centroiding — (≤10px) & Benchmark RMSE", [
-            ("Average Error (px / mrad)", "avg_tracking_error_px", "🎯 Avg Err", "Sr.17 avg tracking/centroiding error — spec ≤10px (green≤10, mrad = px×scale)", True, "avg_tracking_error_px"),
-            ("RMS / RMSE (px / mrad) — Benchmark", "rms_tracking_error_px", "📊 RMS", "Benchmark RMSE — root-mean-square, spec ≤10px", True, "rms_tracking_error_px"),
-            ("Maximum Error (px)", "max_tracking_error_px", "📈 Max Err", "Peak error — worst case tail", True, "max_tracking_error_px"),
-            ("P95 Error (px)", "p95_tracking_error_px", "📈 P95", "95th percentile — 95% of errors below, robustness", True, "p95_tracking_error_px"),
-            ("Std Dev (px)", "std_tracking_error_px", "〰 Std", "Standard deviation — error jitter", True, "std_tracking_error_px"),
-            ("Median Error (px)", "median_tracking_error_px", "⬌ Median", "Median — typical error, 50th percentile", False, None),
-            ("Minimum Error (px)", "min_tracking_error_px", "⬇ Min", "Best-case error — lower bound", False, None),
-            ("Live Error (px / mrad)", "live_error_px", "◎ Live Err", "Current frame instantaneous error — from telemetry", True, "live_error_px"),
+        self._make_section(metrics_layout, "D. Tracking and Centroiding", [
+            ("Average Error (px / mrad)", "avg_tracking_error_px", "Avg Err", "Sr.17 avg tracking error — spec <=10px", True, "avg_tracking_error_px"),
+            ("RMS / RMSE (px / mrad) — Benchmark", "rms_tracking_error_px", "RMS", "Benchmark RMSE — root-mean-square, spec <=10px", True, "rms_tracking_error_px"),
+            ("Maximum Error (px)", "max_tracking_error_px", "Max Err", "Peak error — worst case tail", True, "max_tracking_error_px"),
+            ("P95 Error (px)", "p95_tracking_error_px", "P95", "95th percentile — 95% of errors below, robustness", True, "p95_tracking_error_px"),
+            ("Std Dev (px)", "std_tracking_error_px", "Std", "Standard deviation — error jitter", True, "std_tracking_error_px"),
+            ("Median Error (px)", "median_tracking_error_px", "Median", "Median — typical error, 50th percentile", False, None),
+            ("Minimum Error (px)", "min_tracking_error_px", "Min", "Best-case error — lower bound", False, None),
+            ("Live Error (px / mrad)", "live_error_px", "Live Err", "Current frame instantaneous error — from telemetry", True, "live_error_px"),
         ])
-
-        # E. Detection & Coverage — Rate & Time (only primary, no hitbox duplicate)
-        self._make_section(metrics_layout, "E. Detection & Coverage — Rate & Time", [
-            ("Detection Rate (%)", "detection_rate_pct", "👁 Detect Rate", "Primary target hitbox hits / total frames — detection success", True, "detection_rate_pct"),
-            ("Detection Time (S)", "detection_time_s", "⏱ Detect Time", "Total time target was detected (s)", False, None),
+        self._make_section(metrics_layout, "E. Detection and Coverage", [
+            ("Detection Rate (%)", "detection_rate_pct", "Detect Rate", "Primary target hitbox hits / total frames — detection success", True, "detection_rate_pct"),
+            ("Detection Time (S)", "detection_time_s", "Detect Time", "Total time target was detected (s)", False, None),
             ("Detection Count", "detection_count", "# Det Cnt", "Frames with primary detection — count", False, None),
-            ("Center Hit Rate (%)", "center_hit_rate_pct", "⭐ Center Rate", "Precise center hits (≤2px) / total — accuracy", True, "center_hit_rate_pct"),
-            ("Center Hit Time (S)", "center_hit_time_s", "⭐ Center Time", "Total time in precise center (s)", False, None),
+            ("Center Hit Rate (%)", "center_hit_rate_pct", "Center Rate", "Precise center hits (<=2px) / total — accuracy", True, "center_hit_rate_pct"),
+            ("Center Hit Time (S)", "center_hit_time_s", "Center Time", "Total time in precise center (s)", False, None),
             ("Center Hits (count)", "center_hit_count", "# Center Hits", "Precise center hit frames — count", False, None),
-            ("Searching Rate (%)", "searching_rate_pct", "🔍 Search Rate", "Frames in SEARCHING / total — lower is better when locked", True, "searching_rate_pct"),
-            ("Searching Time (S)", "searching_time_s", "⏱ Search Time", "Total time searching (s)", False, None),
+            ("Searching Rate (%)", "searching_rate_pct", "Search Rate", "Frames in SEARCHING / total — lower is better when locked", True, "searching_rate_pct"),
+            ("Searching Time (S)", "searching_time_s", "Search Time", "Total time searching (s)", False, None),
             ("Frame Count", "frame_count", "# Frames", "Total frames processed — throughput (Sr.20)", False, None),
         ])
-
-        # F. Live System Pose — Camera & Scene (from telemetry/header, dashboard-only)
-        self._make_section(metrics_layout, "F. Live System Pose — Camera & Scene (from telemetry/header)", [
-            ("Pan (px)", "live_pan", "↔ Pan", "Camera pan in world px — previously footer telemetry (dashboard-only)", False, None),
-            ("Tilt (px)", "live_tilt", "↕ Tilt", "Camera tilt in world px — previously footer telemetry", False, None),
-            ("FOV Size (px)", "live_fov", "▣ FOV", "Camera FOV W×H in px — previously header badge (640×480 spec 4°×3°)", False, None),
-            ("World Size (px)", "live_world", "⬣ World", "Scene world W×H in px — previously header badge (≥2000 spec)", False, None),
-            ("Pixel Scale (mrad/px)", "live_pixel_scale", "◈ Scale", "Pixel to angle — mrad per px (0.109=4°×3° for 640×480)", False, None),
+        self._make_section(metrics_layout, "F. Live System Pose", [
+            ("Pan (px)", "live_pan", "Pan", "Camera pan in world px", False, None),
+            ("Tilt (px)", "live_tilt", "Tilt", "Camera tilt in world px", False, None),
+            ("FOV Size (px)", "live_fov", "FOV", "Camera FOV WxH in px (640x480 spec 4deg x 3deg)", False, None),
+            ("World Size (px)", "live_world", "World", "Scene world WxH in px (spec >=2000)", False, None),
+            ("Pixel Scale (mrad/px)", "live_pixel_scale", "Scale", "Pixel to angle — mrad per px (0.109=4deg x 3deg for 640x480)", False, None),
         ])
-
-        # G. System Configuration Snapshot — from control panels (dashboard-only, entire system)
-        self._make_section(metrics_layout, "G. System Configuration — Snapshot (entire system, from control panels)", [
-            ("World — Haze (%)", "config_haze_pct", "🌫 Haze", "Environment haze % — from Environment panel (Sr.21.4)", True, "config_haze_pct"),
-            ("World — Star Count", "config_star_count", "⭐ Stars", "Star/clutter count — from Environment panel", False, None),
-            ("Camera — Max Slew (px/s)", "config_max_slew", "🏃 Slew", "Camera max slew — from Camera panel (Sr.13-14, 5-10°/s)", True, "config_max_slew"),
-            ("Camera — Latency (ms)", "config_latency_ms", "⏱ Latency", "Camera latency — from Camera panel", False, None),
-            ("Beacons — Count / Target", "config_beacon_count", "◉ Beacons", "Beacon count & target index — from Beacons panel (Sr.8)", False, None),
-            ("Beacons — Target Profile / Speed", "config_beacon_profile", "🎯 Profile", "Target profile & speed — from Beacons panel (Sr.12)", False, None),
-            ("Disturbances — Turb/Vib/Cam/Noise", "config_disturbances", "⚡ Disturb", "Intensities 0-10 — from Disturbances panel (Sr.21)", False, None),
-            ("Controller — Type & Kp (Hz)", "config_controller", "⟡ Ctrl", "Controller type, Kp, update rate — from Control panel (Sr.15)", False, None),
+        self._make_section(metrics_layout, "G. System Configuration", [
+            ("World — Haze (%)", "config_haze_pct", "Haze", "Environment haze % — from Environment panel (Sr.21.4)", True, "config_haze_pct"),
+            ("World — Star Count", "config_star_count", "Stars", "Star/clutter count — from Environment panel", False, None),
+            ("Camera — Max Slew (px/s)", "config_max_slew", "Slew", "Camera max slew — from Camera panel (Sr.13-14, 5-10deg/s)", True, "config_max_slew"),
+            ("Camera — Latency (ms)", "config_latency_ms", "Latency", "Camera latency — from Camera panel", False, None),
+            ("Beacons — Count / Target", "config_beacon_count", "Beacons", "Beacon count and target index — from Beacons panel (Sr.8)", False, None),
+            ("Beacons — Target Profile / Speed", "config_beacon_profile", "Profile", "Target profile and speed — from Beacons panel (Sr.12)", False, None),
+            ("Disturbances — Turb/Vib/Cam/Noise", "config_disturbances", "Disturb", "Intensities 0-10 — from Disturbances panel (Sr.21)", False, None),
+            ("Controller — Type and Kp (Hz)", "config_controller", "Ctrl", "Controller type, Kp, update rate — from Control panel (Sr.15)", False, None),
         ])
 
         metrics_layout.addStretch()
@@ -348,23 +331,23 @@ class DashboardPanel(QWidget):
 
     def _build_health_header(self) -> QFrame:
         card = QFrame()
-        card.setStyleSheet("QFrame { background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #eff6ff, stop:1 #f0fdf4); border:1px solid #dbeafe; border-radius:10px; }")
+        card.setStyleSheet("QFrame { background: #ffffff; border:1px solid #e5e7eb; border-radius:6px; }")
         grid = QGridLayout(card)
         grid.setContentsMargins(10, 10, 10, 10)
         grid.setHorizontalSpacing(10)
         grid.setVerticalSpacing(6)
         title = QLabel("System Health — Live")
-        title.setStyleSheet("color:#0f172a; font-weight:800; font-size:10px; background:transparent; border:none;")
+        title.setStyleSheet("color:#111827; font-weight:600; font-size:10px; background:transparent; border:none;")
         grid.addWidget(title, 0, 0, 1, 4)
-        self.health_lock_dot = QLabel("●")
-        self.health_lock_dot.setStyleSheet("color:#64748b; font-size:18px; background:transparent; border:none;")
+        self.health_lock_dot = QLabel("")
+        self.health_lock_dot.setStyleSheet("color:#6b7280; font-size:12px; background:#9ca3af; border-radius:6px;")
         self.health_lock_dot.setAlignment(Qt.AlignCenter)
         grid.addWidget(self.health_lock_dot, 1, 0)
         self.health_lock_text = QLabel("SEARCHING")
-        self.health_lock_text.setStyleSheet("color:#64748b; font-weight:800; font-size:11px; background:transparent; border:none;")
+        self.health_lock_text.setStyleSheet("color:#6b7280; font-weight:600; font-size:11px; background:transparent; border:none;")
         grid.addWidget(self.health_lock_text, 1, 1)
         self.health_retention_val = QLabel("—%")
-        self.health_retention_val.setStyleSheet("color:#0f172a; font-weight:700; font-size:11px; background:#ffffff; border:1px solid #e2e8f0; border-radius:6px; padding:3px 6px;")
+        self.health_retention_val.setStyleSheet("color:#111827; font-weight:600; font-size:11px; background:#ffffff; border:1px solid #e5e7eb; border-radius:4px; padding:3px 6px;")
         self.health_retention_val.setAlignment(Qt.AlignCenter)
         grid.addWidget(self.health_retention_val, 1, 2, 1, 2)
         self.health_retention_bar = self.health_retention_val
@@ -377,18 +360,18 @@ class DashboardPanel(QWidget):
         except Exception:
             pass
         self.health_fps = QLabel("FPS —")
-        self.health_fps.setStyleSheet("color:#334155; font-size:11px; font-weight:600; background:#ffffff; border:1px solid #e2e8f0; border-radius:6px; padding:3px 6px;")
+        self.health_fps.setStyleSheet("color:#374151; font-size:11px; font-weight:500; background:#ffffff; border:1px solid #e5e7eb; border-radius:4px; padding:3px 6px;")
         self.health_fps.setAlignment(Qt.AlignCenter)
         grid.addWidget(self.health_fps, 2, 0, 1, 2)
         self.health_error = QLabel("Err —")
-        self.health_error.setStyleSheet("color:#334155; font-size:11px; font-weight:600; background:#ffffff; border:1px solid #e2e8f0; border-radius:6px; padding:3px 6px;")
+        self.health_error.setStyleSheet("color:#374151; font-size:11px; font-weight:500; background:#ffffff; border:1px solid #e5e7eb; border-radius:4px; padding:3px 6px;")
         self.health_error.setAlignment(Qt.AlignCenter)
         grid.addWidget(self.health_error, 2, 2, 1, 2)
         return card
 
     def _make_section(self, layout: QVBoxLayout, title: str, rows: list[tuple[str, str, str, str, bool, str | None]]) -> None:
         box = QGroupBox(title)
-        box.setStyleSheet("QGroupBox { background:#ffffff; border:1px solid #e2e8f0; border-radius:8px; margin-top:16px; padding-top:14px; } QGroupBox::title { color:#2563eb; font-weight:700; left:10px; }")
+        box.setStyleSheet("QGroupBox { background:#ffffff; border:1px solid #e5e7eb; border-radius:6px; margin-top:14px; padding-top:12px; } QGroupBox::title { color:#111827; font-weight:600; left:10px; }")
         grid = QGridLayout(box)
         grid.setContentsMargins(10, 14, 10, 10)
         grid.setHorizontalSpacing(10)
@@ -397,7 +380,7 @@ class DashboardPanel(QWidget):
         grid.setColumnStretch(1, 1)
         for i, (label, key, icon_label, tooltip, with_progress, progress_key) in enumerate(rows):
             lk = QLabel(label)
-            lk.setStyleSheet("color:#475569; font-size:11px; font-weight:600;")
+            lk.setStyleSheet("color:#374151; font-size:11px; font-weight:500;")
             lk.setToolTip(tooltip)
             lk.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             grid.addWidget(lk, i, 0)
@@ -407,7 +390,7 @@ class DashboardPanel(QWidget):
             val.setMinimumHeight(26)
             val.setToolTip(tooltip)
             if key == "lock_status":
-                val.setStyleSheet("font-weight:800; color:#64748b; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:6px; padding:4px 8px; font-size:11px;")
+                val.setStyleSheet("font-weight:600; color:#6b7280; background:#f9fafb; border:1px solid #e5e7eb; border-radius:4px; padding:4px 8px; font-size:11px;")
             else:
                 val.setStyleSheet(_value_style())
             self.stat_labels[key] = val
@@ -415,7 +398,7 @@ class DashboardPanel(QWidget):
 
         layout.addWidget(box)
 
-    # Update — HOT, real-time, informative
+    # Update — , real-time, informative
 
     def update_from_summary(self, summary: dict, tracker_status: str, tracking_error_px: float | None = None, camera_scale_mrad: float | None = None) -> None:
         """Update all labels from PerformanceLogger summary. Real-time at ~30 Hz. Graph removed."""
@@ -503,18 +486,18 @@ class DashboardPanel(QWidget):
                 except Exception:
                     set_val("acquisition_time_s", "— S", "#64748b")
             else:
-                set_val("acquisition_time_s", "0.00 S", "#64748b")
+                set_val("acquisition_time_s", "— S", "#64748b")
             for k in ["avg_reacquisition_time_s", "min_reacquisition_time_s", "max_reacquisition_time_s"]:
                 v = summary.get(k)
                 try:
                     if v is None:
-                        set_val(k, "0.00 S", "#64748b")
+                        set_val(k, "— S", "#64748b")
                     else:
                         fval = float(v)
                         col = _color_for_reacq(fval)
                         set_val(k, f"{fval:.2f} S", col)
                 except Exception:
-                    set_val(k, "0.00 S")
+                    set_val(k, "— S", "#64748b")
             for k in ["acquisitions", "lock_losses"]:
                 v = summary.get(k)
                 try:
@@ -535,7 +518,7 @@ class DashboardPanel(QWidget):
                 v = summary.get(k)
                 try:
                     fval = float(v) if v is not None else 0.0
-                    col = _color_for_rate(fval) if k != "state_lost_pct" else _color_for_error_pct(fval)
+                    col = "#0f172a" if k == "state_acquired_pct" else _color_for_error_pct(fval)
                     set_val(k, f"{fval:.1f} %", col)
                 except Exception:
                     set_val(k, "0.0 %")
@@ -670,7 +653,7 @@ class DashboardPanel(QWidget):
         except Exception:
             pass
 
-        # G. System Configuration Snapshot
+        # G. System Configuration Snaps
         try:
             haze = summary.get("config_haze_pct")
             if haze is not None:

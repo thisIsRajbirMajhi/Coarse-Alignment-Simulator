@@ -29,7 +29,7 @@ class DashboardWindow(QMainWindow):
         super().__init__(main_window)
         self.main_window = main_window
         self.dashboard_panel = dashboard_panel
-        self.setWindowTitle("◉ FSOC — Mission Dashboard  •  Live Telemetry")
+        self.setWindowTitle("FSOC — Dashboard (Live Telemetry)")
         self.setMinimumSize(960, 680)
         self.resize(1280, 880)
         self.setStyleSheet(APP_STYLE)
@@ -46,28 +46,24 @@ class DashboardWindow(QMainWindow):
         tb = QToolBar("Dashboard Tools")
         tb.setMovable(False)
         tb.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        tb.setStyleSheet("QToolBar { background:#ffffff; border-bottom:1px solid #e2e8f0; spacing:8px; padding:6px 8px; } QToolBar QToolButton { background:#f8fafc; border:1px solid #e2e8f0; border-radius:7px; padding:5px 12px; font-weight:700; } QToolBar QToolButton:hover { background:#eff6ff; border-color:#93c5fd; color:#1e40af; }")
+        tb.setStyleSheet("QToolBar { background:#ffffff; border-bottom:1px solid #e5e7eb; spacing:8px; padding:6px 8px; } QToolBar QToolButton { background:#ffffff; border:1px solid #e5e7eb; border-radius:4px; padding:5px 12px; font-weight:500; } QToolBar QToolButton:hover { background:#f9fafb; border-color:#d1d5db; color:#111827; }")
         self.addToolBar(Qt.TopToolBarArea, tb)
 
-        act_fit = QAction("◎ Auto-fit", self)
-        act_fit.setToolTip("Auto-scale graph to show complete history (no trimming) — responsive, shows full mission timeline")
+        act_fit = QAction("Auto-fit", self)
+        act_fit.setToolTip("Auto-scale graph to show complete history — responsive, shows full mission timeline")
         act_fit.triggered.connect(self._on_autofit)
         tb.addAction(act_fit)
-
-        act_clear = QAction("↺ Clear", self)
+        act_clear = QAction("Clear", self)
         act_clear.setToolTip("Clear graph history (metrics continue)")
         act_clear.triggered.connect(self._on_clear)
         tb.addAction(act_clear)
-
         tb.addSeparator()
-
-        act_export = QAction("⬇ Export", self)
-        act_export.setToolTip("Export current metrics to CSV/JSON (informative snapshot)")
+        act_export = QAction("Export", self)
+        act_export.setToolTip("Export current metrics to CSV/JSON")
         act_export.triggered.connect(self._on_export)
         tb.addAction(act_export)
-
-        act_help = QAction("◐ Help", self)
-        act_help.setToolTip("Dashboard: left = live values, right = responsive auto-scaling graph with complete picture")
+        act_help = QAction("Help", self)
+        act_help.setToolTip("Dashboard: left = live values, right = responsive auto-scaling graph")
         act_help.triggered.connect(self._on_help)
         tb.addAction(act_help)
 
@@ -81,18 +77,18 @@ class DashboardWindow(QMainWindow):
         self.dashboard_panel.setParent(self)
         self.setCentralWidget(self.dashboard_panel)
         # Enable responsive resizing: dashboard_panel's internal splitter will handle
-        self.dashboard_panel.setStyleSheet(self.dashboard_panel.styleSheet() + " QSplitter::handle { background:#e2e8f0; }")
+        self.dashboard_panel.setStyleSheet(self.dashboard_panel.styleSheet() + " QSplitter::handle { background:#e5e7eb; }")
 
     # StatusBar — informative live hint
 
     def _build_status(self):
         sb = QStatusBar()
-        sb.setStyleSheet("QStatusBar { background:#ffffff; color:#64748b; border-top:1px solid #e2e8f0; }")
+        sb.setStyleSheet("QStatusBar { background:#ffffff; color:#6b7280; border-top:1px solid #e5e7eb; }")
         self.status_lbl = QLabel("Live — graph auto-scales to show complete history. Drag to pan, scroll to zoom, double-click to fit.")
-        self.status_lbl.setStyleSheet("color:#64748b; font-size:10px;")
+        self.status_lbl.setStyleSheet("color:#6b7280; font-size:10px;")
         sb.addWidget(self.status_lbl, 1)
         self.live_lbl = QLabel("FPS —  |  Retention —  |  Detection —")
-        self.live_lbl.setStyleSheet("color:#0f172a; font-weight:600; font-size:10px; background:#f1f5f9; border:1px solid #e2e8f0; border-radius:4px; padding:2px 6px;")
+        self.live_lbl.setStyleSheet("color:#111827; font-weight:500; font-size:10px; background:#f9fafb; border:1px solid #e5e7eb; border-radius:4px; padding:2px 6px;")
         sb.addPermanentWidget(self.live_lbl)
         self.setStatusBar(sb)
         self.statusBar().showMessage("Dashboard ready — live metrics update every tick (~30 Hz)", 4000)
@@ -121,7 +117,7 @@ class DashboardWindow(QMainWindow):
         self.statusBar().showMessage("Graph cleared — history reset, metrics continue", 2000)
 
     def _on_export(self):
-        # Delegate to main_window's perf export if available, else snapshot from dashboard
+        # Delegate to main_window's perf export if available, else snaps from dashboard
         try:
             if hasattr(self.main_window, "perf"):
                 path, _ = QFileDialog.getSaveFileName(self, "Export dashboard metrics", "dashboard_metrics.csv", "CSV (*.csv);;JSON (*.json)")
@@ -166,13 +162,13 @@ class DashboardWindow(QMainWindow):
         except Exception:
             pass
 
-    # Window behavior — hide on close (preserve HOT wiring)
+    # Window behavior — hide on close (preserve wiring)
 
     def closeEvent(self, event):
         event.ignore()
         self.hide()
         if hasattr(self.main_window, "statusBar"):
-            self.main_window.statusBar().showMessage("Dashboard hidden — click 'Open Dashboard' to show (live still updates)", 3000)
+            self.main_window.statusBar().showMessage("Dashboard hidden — click Show Dashboard to show", 3000)
 
     def showEvent(self, event):
         super().showEvent(event)

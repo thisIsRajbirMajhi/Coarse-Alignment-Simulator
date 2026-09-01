@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QSlider,
     QVBoxLayout,
     QWidget,
@@ -43,97 +44,65 @@ class GlobalPanel(BaseConfigPanel):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(12)
 
-        # Header banner — mission controls
-        banner = QFrame()
-        banner.setStyleSheet("QFrame { background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #eff6ff, stop:1 #f0fdf4); border:1px solid #dbeafe; border-radius:10px; }")
-        bl = QVBoxLayout(banner)
-        bl.setContentsMargins(12, 10, 12, 10)
-        bl.setSpacing(4)
-        b_title = QLabel("◈  GLOBAL  MISSION  CONTROLS")
-        b_title.setStyleSheet("color:#1e40af; font-weight:900; font-size:11px; letter-spacing:0.6px; background: transparent;")
-        b_title.setAlignment(Qt.AlignCenter)
-        bl.addWidget(b_title)
-        b_sub = QLabel("Motion · Speed · Detection  •  Master transport for simulation")
-        b_sub.setStyleSheet("color:#475569; font-size:10px; background: transparent;")
-        b_sub.setAlignment(Qt.AlignCenter)
-        bl.addWidget(b_sub)
-        layout.addWidget(banner)
-
-        # Target motion profile — card
-        motion_card = QFrame()
-        motion_card.setStyleSheet("QFrame { background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; }")
-        mc_lay = QVBoxLayout(motion_card)
-        mc_lay.setContentsMargins(12, 12, 12, 12)
-        mc_lay.setSpacing(8)
-        motion_hdr = QHBoxLayout()
-        motion_hdr.setSpacing(8)
-        motion_icon = QLabel("⬢")
-        motion_icon.setStyleSheet("background:#eff6ff; color:#2563eb; border:1px solid #dbeafe; border-radius:6px; padding:3px 7px; font-weight:800; font-size:11px;")
-        motion_icon.setFixedSize(26, 22)
-        motion_icon.setAlignment(Qt.AlignCenter)
-        motion_hdr.addWidget(motion_icon)
-        motion_lbl = QLabel("Target motion profile")
-        motion_lbl.setStyleSheet("font-weight:800; color:#0f172a; font-size:11px;")
-        motion_hdr.addWidget(motion_lbl)
-        motion_hdr.addStretch()
-        live_hint = QLabel("HOT")
-        live_hint.setStyleSheet("background:#eff6ff; color:#2563eb; border:1px solid #dbeafe; border-radius:4px; padding:2px 6px; font-size:9px; font-weight:800; letter-spacing:0.5px;")
-        motion_hdr.addWidget(live_hint)
-        mc_lay.addLayout(motion_hdr)
-
+        # Motion and tuning moved to Beacons panel — keep hidden dummies for backward compat
         self.motion_combo = QComboBox()
         self.motion_combo.addItems([p.value for p in MotionProfile])
         self.motion_combo.setCurrentText(MotionProfile.CURVED.value)
-        self.motion_combo.setMinimumHeight(30)
+        self.motion_combo.hide()
         self.motion_combo.currentTextChanged.connect(self.motionChanged.emit)
-        mc_lay.addWidget(self.motion_combo)
-        # Quick hint
-        motion_hint = QLabel("Curved = orbit with drift · Random-walk = diffusion · Linear = constant heading")
-        motion_hint.setStyleSheet("color:#64748b; font-size:10px; font-style:italic; background: transparent;")
-        motion_hint.setWordWrap(True)
-        mc_lay.addWidget(motion_hint)
-        layout.addWidget(motion_card)
+        self.speed_slider = self._add_slider_row(layout, "Target speed (px/s)", 10, 150, 60)
+        self.speed_slider.hide()
+        self.speed_slider._value_label.hide()  # type: ignore
+        self.thresh_slider = self._add_slider_row(layout, "Detector threshold", 100, 255, 200)
+        self.thresh_slider.hide()
+        self.thresh_slider._value_label.hide()  # type: ignore
+        # Hide the labels for those hidden sliders (they are the last two labels added)
+        # Find and hide the labels
+        for i in range(layout.count()):
+            item = layout.itemAt(i)
+            w = item.widget()
+            if w and isinstance(w, QLabel) and w.text() in ("Target speed (px/s)", "Detector threshold"):
+                w.hide()
 
-        # Sliders — card
-        sliders_card = QFrame()
-        sliders_card.setStyleSheet("QFrame { background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; }")
-        sl = QVBoxLayout(sliders_card)
-        sl.setContentsMargins(12, 12, 12, 12)
-        sl.setSpacing(10)
-        sliders_title = QLabel("▣  TUNING")
-        sliders_title.setStyleSheet("color:#1e40af; font-weight:800; font-size:10px; letter-spacing:0.5px; background: transparent;")
-        sl.addWidget(sliders_title)
-        self.speed_slider = self._add_slider_row(sl, "Target speed (px/s)", 10, 150, 60)
-        self.thresh_slider = self._add_slider_row(sl, "Detector threshold", 100, 255, 200)
-        layout.addWidget(sliders_card)
-
-        # Transport controls — premium grouped
         transport_card = QFrame()
-        transport_card.setStyleSheet("QFrame { background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; }")
+        transport_card.setStyleSheet("QFrame { background:#ffffff; border:1px solid #e5e7eb; border-radius:8px; }")
         tl = QVBoxLayout(transport_card)
-        tl.setContentsMargins(12, 12, 12, 12)
-        tl.setSpacing(10)
-        trans_title = QLabel("▶  TRANSPORT")
-        trans_title.setStyleSheet("color:#0f172a; font-weight:800; font-size:10px; letter-spacing:0.5px; background: transparent;")
+        tl.setContentsMargins(16, 16, 16, 16)
+        tl.setSpacing(14)
+        trans_title = QLabel("Transport")
+        trans_title.setStyleSheet("color:#111827; font-weight:700; font-size:12px; background: transparent; letter-spacing: 0.3px;")
+        trans_title.setAlignment(Qt.AlignCenter)
         tl.addWidget(trans_title)
 
         btn_row = QHBoxLayout()
-        btn_row.setSpacing(8)
-        self.start_btn = QPushButton("▶ Start")
-        self.start_btn.setMinimumHeight(36)
-        self.start_btn.setStyleSheet("QPushButton { background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #16a34a, stop:1 #15803d); color:white; font-weight:800; border:none; border-radius:8px; font-size:11px; letter-spacing:0.4px; } QPushButton:hover { background:#15803d; }")
-        self.pause_btn = QPushButton("⏸ Pause")
-        self.pause_btn.setMinimumHeight(36)
-        self.pause_btn.setStyleSheet("QPushButton { background:#f8fafc; color:#334155; font-weight:700; border:1px solid #cbd5e1; border-radius:8px; } QPushButton:hover { background:#f1f5f9; border-color:#94a3b8; }")
-        self.reset_btn = QPushButton("↺ Reset")
-        self.reset_btn.setMinimumHeight(36)
-        self.reset_btn.setStyleSheet("QPushButton { background:#ffffff; color:#475569; font-weight:700; border:1px solid #cbd5e1; border-radius:8px; } QPushButton:hover { background:#fef2f2; border-color:#fca5a5; color:#dc2626; }")
+        btn_row.setSpacing(12)
+        self.start_btn = QPushButton("Start")
+        self.start_btn.setMinimumHeight(52)
+        self.start_btn.setMinimumWidth(90)
+        self.start_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.start_btn.setStyleSheet("QPushButton { background: #111827; color:white; font-weight:700; border:1px solid #111827; border-radius:8px; font-size:13px; padding:10px 16px; } QPushButton:hover { background:#1f2937; } QPushButton:pressed { background:#000000; }")
+        self.pause_btn = QPushButton("Pause")
+        self.pause_btn.setMinimumHeight(52)
+        self.pause_btn.setMinimumWidth(90)
+        self.pause_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.pause_btn.setStyleSheet("QPushButton { background:#ffffff; color:#374151; font-weight:600; border:1.5px solid #d1d5db; border-radius:8px; font-size:13px; padding:10px 16px; } QPushButton:hover { background:#f9fafb; border-color:#9ca3af; } QPushButton:pressed { background:#f3f4f6; }")
+        self.reset_btn = QPushButton("Reset")
+        self.reset_btn.setMinimumHeight(52)
+        self.reset_btn.setMinimumWidth(90)
+        self.reset_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.reset_btn.setStyleSheet("QPushButton { background:#ffffff; color:#374151; font-weight:600; border:1.5px solid #d1d5db; border-radius:8px; font-size:13px; padding:10px 16px; } QPushButton:hover { background:#fef2f2; border-color:#fca5a5; color:#dc2626; } QPushButton:pressed { background:#fee2e2; }")
         self.start_btn.clicked.connect(self.startRequested.emit)
         self.pause_btn.clicked.connect(self.pauseRequested.emit)
         self.reset_btn.clicked.connect(self.resetRequested.emit)
         for b in (self.start_btn, self.pause_btn, self.reset_btn):
             btn_row.addWidget(b, 1)
         tl.addLayout(btn_row)
+        # Hint for transport
+        hint = QLabel("Use Start to run, Pause to hold, Reset to restore defaults")
+        hint.setStyleSheet("color:#6b7280; font-size:10px; font-style:italic; background: transparent;")
+        hint.setAlignment(Qt.AlignCenter)
+        hint.setWordWrap(True)
+        tl.addWidget(hint)
 
         # Export / Open Dashboard buttons removed entirely per user request (dashboard now in MainWindow, graph removed)
         # Kept as hidden dummies for backward compat so MainWindow wiring does not break
@@ -152,7 +121,7 @@ class GlobalPanel(BaseConfigPanel):
 
     def _add_slider_row(self, layout: QVBoxLayout, label: str, vmin: int, vmax: int, vinit: int) -> QSlider:
         lab = QLabel(label)
-        lab.setStyleSheet("color:#0f172a; font-weight:700; font-size:11px; letter-spacing:0.2px;")
+        lab.setStyleSheet("color:#374151; font-weight:500; font-size:11px;")
         layout.addWidget(lab)
         h = QHBoxLayout()
         h.setSpacing(8)
@@ -166,7 +135,7 @@ class GlobalPanel(BaseConfigPanel):
         val.setFixedWidth(42)
         val.setMinimumHeight(24)
         val.setAlignment(Qt.AlignCenter)
-        val.setStyleSheet("color:#1e40af; font-weight:800; background:#eff6ff; border:1px solid #bfdbfe; border-radius:7px; padding:2px 4px; font-family:'Consolas','Courier New',monospace; font-size:11px;")
+        val.setStyleSheet("color:#111827; font-weight:600; background:#f9fafb; border:1px solid #e5e7eb; border-radius:4px; padding:2px 4px; font-family:'Consolas','Courier New',monospace; font-size:11px;")
         slider.valueChanged.connect(lambda v, l=val: l.setText(str(v)))
         h.addWidget(slider, 1)
         h.addWidget(val)

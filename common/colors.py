@@ -11,8 +11,7 @@ LOCK_STATUS_COLORS_HEX: dict[str, str] = {
     "detecting": "#3b82f6",
 }
 
-# BGR for OpenCV (B,G,R) — canonical = overlay.constants.LOCK_COLOR_DEFAULTS
-# Defined here as single source; overlay/constants.py now re-exports from here for consistency
+# BGR for OpenCV (B,G,R) — single source for lock status colors
 LOCK_STATUS_COLORS_BGR: dict[str, tuple[int, int, int]] = {
     "searching": (170, 170, 170),  # gray
     "acquired": (90, 220, 220),    # cyan

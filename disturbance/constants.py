@@ -41,3 +41,69 @@ T_EXP: float = 0.033  # s — 30 FPS
 # Slider limits
 SLIDER_MIN: int = 0
 SLIDER_MAX: int = 10
+
+# ── Image Noise — Salt & Pepper / Gaussian / Poisson ─────────────────────
+# Salt & Pepper density default 10% (≈ 0.10), user 0-20%
+SALT_PEPPER_DEFAULT_DENSITY: float = 0.10
+SALT_PEPPER_LIMITS: tuple[float, float] = (0.0, 0.20)
+SALT_PEPPER_RATIO_DEFAULT: float = 0.50
+SALT_PEPPER_RATIO_LIMITS: tuple[float, float] = (0.0, 1.0)
+# Gaussian noise — Max StdDev 20px default, user-definable up to 50
+GAUSSIAN_SIGMA_DEFAULT: float = 8.0
+GAUSSIAN_SIGMA_LIMITS: tuple[float, float] = (0.0, 20.0)
+GAUSSIAN_SIGMA_MAX_USER: float = 50.0  # user-defined extended cap
+GAUSSIAN_SIGMA_USER_LIMITS: tuple[float, float] = (0.0, 50.0)
+# Poisson scale (lambda multiplier) 0..10 controls shot strength
+POISSON_LIMITS: tuple[float, float] = (0.0, 10.0)
+POISSON_DEFAULT: float = 0.0
+POISSON_SCALE_LIMITS: tuple[float, float] = (0.5, 5.0)
+POISSON_SCALE_DEFAULT: float = 1.0
+POISSON_PEAK_LIMITS: tuple[float, float] = (30.0, 255.0)
+POISSON_PEAK_DEFAULT: float = 100.0
+
+# Legacy sensor noise std alias for GUI
+MAX_NOISE_STD: float = 20.0  # px/DN
+MAX_NOISE_STD_USER_LIMITS: tuple[float, float] = (0.0, 50.0)
+
+# ── Camera Jitter — per-frame uniform ±20 px ────────────────────────────
+CAMERA_JITTER_LIMITS: tuple[float, float] = (0.0, 20.0)
+CAMERA_JITTER_DEFAULT: float = 0.0
+CAMERA_JITTER_MAX: float = 20.0
+
+# ── Atmospheric Disturbance — Clear/Haze/Fog/Rain/Low Light + User ───────
+ATMOSPHERIC_PRESETS: tuple[str, ...] = ("Clear", "Haze", "Fog", "Rain", "Low Light", "User Defined")
+ATMOSPHERIC_DEFAULT_PRESET: str = "Clear"
+# Contrast/brightness reduction 0..100 % (maps to 0..1 fraction)
+ATMOSPHERIC_CONTRAST_LIMITS: tuple[float, float] = (0.0, 100.0)
+ATMOSPHERIC_BRIGHTNESS_LIMITS: tuple[float, float] = (0.0, 100.0)
+# Preset → (contrast %, brightness %, blur sigma, extra flag)
+ATMOSPHERIC_PRESET_MAP: dict[str, dict] = {
+    "Clear":      {"contrast": 0,  "brightness": 0,  "blur": 0.0, "haze": 0.0},
+    "Haze":       {"contrast": 15, "brightness": 10, "blur": 0.6, "haze": 0.18},
+    "Fog":        {"contrast": 38, "brightness": 22, "blur": 1.4, "haze": 0.42},
+    "Rain":       {"contrast": 24, "brightness": 18, "blur": 0.4, "haze": 0.12},
+    "Low Light":  {"contrast": 18, "brightness": 48, "blur": 0.2, "haze": 0.08},
+    "User Defined": {"contrast": 0, "brightness": 0, "blur": 0.0, "haze": 0.0},
+}
+
+# ── Platform Motion — px/frame MAX 20, default Linear ────────────────────
+PLATFORM_SPEED_LIMITS: tuple[float, float] = (0.0, 20.0)  # px / frame
+PLATFORM_SPEED_DEFAULT: float = 5.0
+PLATFORM_MAX_PX_PER_FRAME: float = 20.0
+PLATFORM_PROFILES: tuple[str, ...] = ("Linear", "Circular", "Random", "Spiral", "Figure 8", "Sin", "Zig-Zag")
+PLATFORM_DEFAULT_PROFILE: str = "Linear"
+# Mapping display name → internal key
+PLATFORM_PROFILE_MAP: dict[str, str] = {
+    "Linear": "linear",
+    "Circular": "circular",
+    "Random": "random",
+    "Spiral": "spiral",
+    "Figure 8": "figure_8",
+    "Sin": "sin",
+    "Zig-Zag": "zigzag",
+    # aliases
+    "figure_8": "figure_8",
+    "figure8": "figure_8",
+    "zigzag": "zigzag",
+    "zig_zag": "zigzag",
+}

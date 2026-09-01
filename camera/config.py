@@ -14,74 +14,91 @@ from environment.constants import MAX_RES, MIN_RES
 class CameraConfig(BaseValidatedConfig):
     """
     Camera configuration — covers FOV, mechanics, display, and optics.
+    Monochrome Focal Plane Array.
 
-    Field of View / Optics:
-      fov_width, fov_height — sensor resolution (px)
-
-    Pan-Tilt Mechanics:
+    Sensor Resolution:
+      fov_width, fov_height — sensor resolution (px), default 640x640
+    FOV in degrees:
+      fov_deg_x, fov_deg_y — angular FOV deg, default 4.0x3.0
+    Pan-Tilt Mechanics (30Hz):
       pan_min, pan_max — pan range (px scene coords, None=auto)
       tilt_min, tilt_max — tilt range
-      home_pan, home_tilt — home/centre on start/reset (None=auto W/2,H/2)
-      max_slew_rate — px/s (10..5000, caps per-tick delta)
-      resolution — smallest step px (0.01..5.0, quantized)
-      latency_ms — delay ms (0..500, queued)
-
+      home_pan/home_tilt — fixed centre (W/2, H/2), not configurable
+      max_slew_rate — px/s (configurable)
+      resolution — smallest step px
+      latency_ms — delay ms (configurable)
+      update_rate_hz — fixed 30Hz
     Display:
-      viewport_width/height — on-screen FOV feed size (independent of FOV res)
-      god_width/height — on-screen God-view map size
-
-    Units/Reporting:
-      pixel_scale_mrad — mrad per px for angular error reporting
+      viewport_width/height — Camera Screen Size 2000-5000 (on-screen)
+      god_width/height — God View fixed 5000x5000
+    Units:
+      pixel_scale_mrad — derived from FOV deg / resolution
     """
 
     LIMITS = {**CAMERA_LIMITS, **DISPLAY_LIMITS}
     DEFAULTS = {**CAMERA_DEFAULTS, **DISPLAY_DEFAULTS}
 
-    # Field of View / Optics
+    # Sensor Resolution
     fov_width: int = CAMERA_DEFAULTS["fov_width"]
     fov_height: int = CAMERA_DEFAULTS["fov_height"]
+    fov_deg_x: float = CAMERA_DEFAULTS.get("fov_deg_x", 4.0)
+    fov_deg_y: float = CAMERA_DEFAULTS.get("fov_deg_y", 3.0)
 
-    # Pan-Tilt Mechanics
     pan_min: int | None = CAMERA_DEFAULTS["pan_min"]
     pan_max: int | None = CAMERA_DEFAULTS["pan_max"]
     tilt_min: int | None = CAMERA_DEFAULTS["tilt_min"]
     tilt_max: int | None = CAMERA_DEFAULTS["tilt_max"]
     home_pan: float | None = CAMERA_DEFAULTS["home_pan"]
     home_tilt: float | None = CAMERA_DEFAULTS["home_tilt"]
+    max_pan_speed_deg: float = CAMERA_DEFAULTS["max_pan_speed_deg"]
+    max_tilt_speed_deg: float = CAMERA_DEFAULTS["max_tilt_speed_deg"]
     max_slew_rate: float = CAMERA_DEFAULTS["max_slew_rate"]
     resolution: float = CAMERA_DEFAULTS["resolution"]
     latency_ms: int = CAMERA_DEFAULTS["latency_ms"]
+    update_rate_hz: int = CAMERA_DEFAULTS.get("update_rate_hz", 30)
 
-    # Display — viewport / God view on-screen sizes
+    # Display
     viewport_width: int = DISPLAY_DEFAULTS["viewport_width"]
     viewport_height: int = DISPLAY_DEFAULTS["viewport_height"]
     god_width: int = DISPLAY_DEFAULTS["god_width"]
     god_height: int = DISPLAY_DEFAULTS["god_height"]
 
-    # Units — pixel to angle
+    # Units — derived
     pixel_scale_mrad: float = CAMERA_DEFAULTS["pixel_scale_mrad"]
 
     # Validation — clamp to limits, resolve autos
 
     def validate(self, scene_bounds: tuple[int,int] | None = None) -> "CameraConfig":
-        """Clamp numeric fields to limits via clip_field; resolve None autos against scene_bounds."""
         self.fov_width = int(clip_field(self.fov_width, *CAMERA_LIMITS["fov_width"]))
         self.fov_height = int(clip_field(self.fov_height, *CAMERA_LIMITS["fov_height"]))
+        # FOV degrees in degree units
+        if "fov_deg_x" in CAMERA_LIMITS:
+            self.fov_deg_x = float(clip_field(self.fov_deg_x, *CAMERA_LIMITS["fov_deg_x"]))
+            self.fov_deg_y = float(clip_field(self.fov_deg_y, *CAMERA_LIMITS["fov_deg_y"]))
+        self.max_pan_speed_deg = float(clip_field(self.max_pan_speed_deg, *CAMERA_LIMITS["max_pan_speed_deg"]))
+        self.max_tilt_speed_deg = float(clip_field(self.max_tilt_speed_deg, *CAMERA_LIMITS["max_tilt_speed_deg"]))
         self.max_slew_rate = float(clip_field(self.max_slew_rate, *CAMERA_LIMITS["max_slew_rate"]))
         self.resolution = float(clip_field(self.resolution, *CAMERA_LIMITS["resolution"]))
         self.latency_ms = int(clip_field(self.latency_ms, *CAMERA_LIMITS["latency_ms"]))
-        self.pixel_scale_mrad = float(clip_field(self.pixel_scale_mrad, *CAMERA_LIMITS["pixel_scale_mrad"]))
+        self.update_rate_hz = int(clip_field(self.update_rate_hz, *CAMERA_LIMITS["update_rate_hz"]))
+        if self.update_rate_hz < 20:
+            self.update_rate_hz = 20
+        # Derived pixel scale from FOV deg / resolution (mrad per px)
+        try:
+            deg_to_mrad = 17.453292519943295
+            # Use horizontal FOV for scale (4 deg / 640 px = 0.109 mrad/px)
+            self.pixel_scale_mrad = float((self.fov_deg_x * deg_to_mrad) / max(1, self.fov_width))
+            self.pixel_scale_mrad = float(clip_field(self.pixel_scale_mrad, *CAMERA_LIMITS["pixel_scale_mrad"]))
+        except:
+            self.pixel_scale_mrad = float(clip_field(self.pixel_scale_mrad, *CAMERA_LIMITS["pixel_scale_mrad"]))
         self.viewport_width = int(clip_field(self.viewport_width, *DISPLAY_LIMITS["viewport_width"]))
         self.viewport_height = int(clip_field(self.viewport_height, *DISPLAY_LIMITS["viewport_height"]))
         self.god_width = int(clip_field(self.god_width, *DISPLAY_LIMITS["god_width"]))
         self.god_height = int(clip_field(self.god_height, *DISPLAY_LIMITS["god_height"]))
 
-        # Pan/Tilt ranges and home — resolve autos if scene known
         if scene_bounds is not None:
             sw, sh = scene_bounds
-            # Effective FOV half-sizes for auto range
             hw, hh = self.fov_width/2, self.fov_height/2
-            # Pan range autos
             if self.pan_min is None:
                 self.pan_min = int(hw)
             else:
@@ -102,14 +119,9 @@ class CameraConfig(BaseValidatedConfig):
                 self.tilt_max = int(clip_field(self.tilt_max, *CAMERA_LIMITS["tilt_max"]))
             if self.tilt_min is not None and self.tilt_max is not None and self.tilt_min > self.tilt_max:
                 self.tilt_min, self.tilt_max = int(self.tilt_max), int(self.tilt_min)
-            if self.home_pan is None:
-                self.home_pan = float(sw/2)
-            else:
-                self.home_pan = float(clip_field(self.home_pan, float(self.pan_min), float(self.pan_max)))
-            if self.home_tilt is None:
-                self.home_tilt = float(sh/2)
-            else:
-                self.home_tilt = float(clip_field(self.home_tilt, float(self.tilt_min), float(self.tilt_max)))
+            # Initial position fixed to centre — not configurable
+            self.home_pan = float(sw/2)
+            self.home_tilt = float(sh/2)
             self.home_pan = float(clip_field(self.home_pan, float(self.pan_min), float(self.pan_max)))
             self.home_tilt = float(clip_field(self.home_tilt, float(self.tilt_min), float(self.tilt_max)))
 

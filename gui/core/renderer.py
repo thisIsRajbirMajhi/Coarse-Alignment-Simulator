@@ -1,4 +1,4 @@
-# gui/core/renderer.py - Viewport, crosshair, and screen rendering for camera FOV + God-view
+# gui/core/renderer.py - Viewport and God-view rendering with standard crosshair only
 
 import math
 
@@ -7,46 +7,42 @@ import numpy as np
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QImage, QPixmap
 
-from tracking.types import LockStatus
+from common.colors import lock_color_bgr
 
-from common.colors import LOCK_STATUS_COLORS_BGR, lock_color_bgr
-
-# Optional overlay integration — fallback to legacy if not available
-try:
-    from overlay.config import OverlayConfig
-    from overlay.renderer import OverlayRenderer
-except Exception:
-    OverlayConfig = None  # type: ignore
-    OverlayRenderer = None  # type: ignore
 
 class CrosshairStyle:
-    """Legacy crosshair spec — kept for backward compat; new code uses OverlayConfig."""
-    def __init__(self, gap: int = 10, arm: int = 16, color=(230, 230, 230), thickness: int = 1, show_center_dot: bool = True, show_coords: bool = False):
-        self.gap = int(gap); self.arm = int(arm); self.color = color; self.thickness = int(thickness)
-        self.show_center_dot = bool(show_center_dot); self.show_coords = bool(show_coords)
+    """Standard crosshair — fixed style, no configuration."""
+    def __init__(self, gap: int = 10, arm: int = 16, color=(230, 230, 230), thickness: int = 1, show_center_dot: bool = True):
+        self.gap = int(gap)
+        self.arm = int(arm)
+        self.color = color
+        self.thickness = int(thickness)
+        self.show_center_dot = bool(show_center_dot)
+
 
 class ScreenSpec:
     """On-screen display sizes — independent of FOV sensor resolution."""
     def __init__(self, viewport_w: int = 400, viewport_h: int = 300, god_w: int = 400, god_h: int = 300, keep_aspect: bool = True):
-        self.viewport_w = int(viewport_w); self.viewport_h = int(viewport_h)
-        self.god_w = int(god_w); self.god_h = int(god_h); self.keep_aspect = bool(keep_aspect)
+        self.viewport_w = int(viewport_w)
+        self.viewport_h = int(viewport_h)
+        self.god_w = int(god_w)
+        self.god_h = int(god_h)
+        self.keep_aspect = bool(keep_aspect)
+
 
 class Renderer:
-    """
-    Stateless renderer — delegates overlay to OverlayRenderer when OverlayConfig supplied.
-
-    Backward compat: render_viewport(fov_frame, camera, beacons, target, tracker, all_dets)
-    still works (uses default crosshair). New: render_viewport(..., overlay, pulse_progress, pixel_scale)
-    enables full configurability.
-    """
+    """Stateless renderer — standard crosshair only."""
 
     @staticmethod
     def beacon_vibrant_color(beacon_id: int, brightness: float) -> tuple[int, int, int]:
         b_vals = [0, 30, 60, 90, 120, 150, 180, 210, 15, 45, 105, 135]
         b_base = b_vals[int(beacon_id) % len(b_vals)]
         scale = float(np.clip(brightness / 255.0, 0.7, 1.0))
-        b_col = int(b_base * scale); g_col = int(255 * scale); r_col = int(255 * scale)
-        g_col = max(g_col, 200); r_col = max(r_col, 200)
+        b_col = int(b_base * scale)
+        g_col = int(255 * scale)
+        r_col = int(255 * scale)
+        g_col = max(g_col, 200)
+        r_col = max(r_col, 200)
         return (int(b_col), int(g_col), int(r_col))
 
     @staticmethod
@@ -54,16 +50,34 @@ class Renderer:
         for beacon in beacons:
             if not getattr(beacon, "enabled", True):
                 continue
+            if getattr(beacon, "blinking", False) and not getattr(beacon, "_blink_visible", True):
+                continue
             x, y = beacon.get_position()
-            try: brightness, radius = beacon.get_photometry()
-            except: brightness, radius = float(beacon.brightness), float(beacon.radius)
-            ix, iy = int(round(x)), int(round(y)); r = int(round(radius))
+            try:
+                brightness, radius = beacon.get_photometry()
+            except:
+                brightness, radius = float(beacon.brightness), float(beacon.radius)
+            ix, iy = int(round(x)), int(round(y))
             vib = Renderer.beacon_vibrant_color(beacon.beacon_id, brightness)
-            if r > 3:
-                glow = tuple(int(c * 0.55) for c in vib)
-                cv2.circle(scene_frame, (ix, iy), r+1, glow, -1, cv2.LINE_AA)
-            cv2.circle(scene_frame, (ix, iy), max(1, r), vib, -1, cv2.LINE_AA)
-            cv2.circle(scene_frame, (ix, iy), 1, (255, 255, 255), -1, cv2.LINE_AA)
+            shape = getattr(beacon, "shape", "square")
+            size_w = int(getattr(beacon, "size_w", 10))
+            size_h = int(getattr(beacon, "size_h", 10))
+            # For square: use size_w/h as side lengths; for circle: use radius
+            if shape == "square":
+                hw, hh = size_w // 2, size_h // 2
+                # Glow
+                if max(size_w, size_h) > 6:
+                    glow = tuple(int(c * 0.55) for c in vib)
+                    cv2.rectangle(scene_frame, (ix - hw - 1, iy - hh - 1), (ix + hw + 1, iy + hh + 1), glow, -1, cv2.LINE_AA)
+                cv2.rectangle(scene_frame, (ix - hw, iy - hh), (ix + hw, iy + hh), vib, -1, cv2.LINE_AA)
+                cv2.rectangle(scene_frame, (ix - hw, iy - hh), (ix + hw, iy + hh), (255, 255, 255), 1, cv2.LINE_AA)
+            else:
+                r = max(1, int(round(max(size_w, size_h) / 2)) if size_w and size_h else int(round(radius)))
+                if r > 3:
+                    glow = tuple(int(c * 0.55) for c in vib)
+                    cv2.circle(scene_frame, (ix, iy), r+1, glow, -1, cv2.LINE_AA)
+                cv2.circle(scene_frame, (ix, iy), max(1, r), vib, -1, cv2.LINE_AA)
+                cv2.circle(scene_frame, (ix, iy), 1, (255, 255, 255), -1, cv2.LINE_AA)
 
     @staticmethod
     def draw_reticle(img, center, gap=10, arm=16, color=(230, 230, 230), thickness=1, show_dot: bool = True) -> None:
@@ -90,126 +104,100 @@ class Renderer:
 
     @staticmethod
     def draw_crosshair(img, style: CrosshairStyle | None = None, pan_tilt: tuple[float,float] | None = None) -> None:
-        if style is None:
-            style = CrosshairStyle()
-        h, w = img.shape[:2]; cx, cy = w//2, h//2
-        gap = style.gap if style.gap != 10 or w < 200 else max(8, min(w, h)//16)
-        arm = style.arm if style.arm != 16 or w < 200 else max(12, min(w, h)//12)
-        Renderer.draw_reticle(img, (cx, cy), gap=gap, arm=arm, color=style.color, thickness=style.thickness, show_dot=style.show_center_dot)
+        # Square box + thin circle + plus half-cutting square
+        h, w = img.shape[:2]
+        cx, cy = w//2, h//2
+        # Square size ~30% of min dimension, at least 80px for visibility
+        S = int(min(w, h) * 0.32)
+        S = max(80, min(S, min(w, h) - 20))
+        half = S // 2
+        # Square box thin (1px) light gray
+        x0, y0 = cx - half, cy - half
+        x1, y1 = cx + half, cy + half
+        cv2.rectangle(img, (x0, y0), (x1, y1), (220, 220, 220), 1, cv2.LINE_AA)
+        # Thin circle inside square — radius 0.38*S
+        r = int(S * 0.38)
+        cv2.circle(img, (cx, cy), r, (200, 200, 200), 1, cv2.LINE_AA)
+        # Plus crosshair half cutting square — arms from centre to square edge
+        # Horizontal
+        cv2.line(img, (x0, cy), (x1, cy), (230, 230, 230), 1, cv2.LINE_AA)
+        # Vertical
+        cv2.line(img, (cx, y0), (cx, y1), (230, 230, 230), 1, cv2.LINE_AA)
+        # Small centre dot
+        cv2.circle(img, (cx, cy), 1, (255, 255, 255), -1, cv2.LINE_AA)
+        # Corner brackets for FOV border refinement
         Renderer.draw_corner_brackets(img, margin=4, length=max(8, min(w,h)//20), color=(180, 180, 180), thickness=1)
-
-    # Viewport — FOV with overlay (crosshair/lock/error) + pulse
 
     @staticmethod
     def render_viewport(fov_frame: np.ndarray, camera, beacons, target, tracker, all_dets: list[dict] | None, overlay=None, pulse_progress: float = 0.0, pixel_scale_mrad: float | None = None) -> np.ndarray:
-        """
-        Render FOV viewport.
-
-        If overlay (OverlayConfig) supplied, uses OverlayRenderer for:
-          - Crosshair style/size/gap/thickness/dot
-          - Lock circle + pulse
-          - Error line/text with units (px/mrad/urad auto)
-        Else falls back to legacy rendering (backward compat).
-        """
+        """Render FOV viewport with standard crosshair only."""
         display = fov_frame.copy()
         h, w = display.shape[:2]
         cx, cy = w // 2, h // 2
 
-        # Resolve overlay and pixel scale
-        use_overlay = overlay is not None and OverlayRenderer is not None and OverlayConfig is not None
         if pixel_scale_mrad is None:
             try:
                 pixel_scale_mrad = float(getattr(getattr(camera, "config", None), "pixel_scale_mrad", 0.035))
             except:
                 pixel_scale_mrad = 0.035
 
-        # Crosshair — overlay-aware
-        if use_overlay:
-            OverlayRenderer.draw_crosshair(display, overlay, center=(cx, cy))
-        else:
-            gap = max(8, min(w, h)//16); arm = max(12, min(w, h)//12)
-            Renderer.draw_reticle(display, (cx, cy), gap=gap, arm=arm, color=(230, 230, 230), thickness=1)
-            Renderer.draw_corner_brackets(display, margin=4, length=max(8, min(w,h)//20), color=(180, 180, 180), thickness=1)
+        # Standard crosshair
+        gap = max(8, min(w, h)//16)
+        arm = max(12, min(w, h)//12)
+        Renderer.draw_reticle(display, (cx, cy), gap=gap, arm=arm, color=(230, 230, 230), thickness=1)
+        Renderer.draw_corner_brackets(display, margin=4, length=max(8, min(w,h)//20), color=(180, 180, 180), thickness=1)
 
         status = tracker.status
-        # Lock colors — single source via common.colors, overlay if present
-        if use_overlay:
-            base_color = overlay.lock_color(status.value)  # type: ignore
-        else:
-            # Single source fallback — common BGR map (replaces inline color_map duplication)
-            base_color = lock_color_bgr(status.value, default=(170, 170, 170))
+        base_color = lock_color_bgr(status.value, default=(170, 170, 170))
 
-        # Beacons — hitbox/center + lock circle with pulse
         fov_x0, fov_y0, _, _ = camera.get_fov_rect()
         for beacon in beacons:
             if not getattr(beacon, "enabled", True):
                 continue
-            px = beacon.x - fov_x0; py = beacon.y - fov_y0
-            if -beacon.hitbox_radius <= px <= w + beacon.hitbox_radius and -beacon.hitbox_radius <= py <= h + beacon.hitbox_radius:
-                is_primary = (beacon is target)
-                # Lock circle — overlay or legacy
-                if use_overlay:
-                    # Only for primary or if showing all
-                    if is_primary:
-                        OverlayRenderer.draw_lock_circle(display, (int(px), int(py)), overlay, status.value, hitbox_radius=int(beacon.hitbox_radius), pulse_progress=float(pulse_progress) if is_primary else 0.0)
-                    # Still draw subtle hitbox for distractors
-                    col_hit = base_color if is_primary else (160, 180, 120)
-                    if not is_primary or int(overlay.lock_circle_radius) != 0:
-                        cv2.circle(display, (int(px), int(py)), int(beacon.hitbox_radius), col_hit, 1, cv2.LINE_AA)
-                    col_center = (255, 255, 255) if is_primary else (200, 200, 170)
-                    cv2.circle(display, (int(px), int(py)), int(beacon.center_radius), col_center, -1, cv2.LINE_AA)
-                else:
+            if getattr(beacon, "blinking", False) and not getattr(beacon, "_blink_visible", True):
+                # Skip drawing when blinking off, but keep hitbox for detection? Skip visual only
+                pass
+            else:
+                px = beacon.x - fov_x0
+                py = beacon.y - fov_y0
+                if -beacon.hitbox_radius <= px <= w + beacon.hitbox_radius and -beacon.hitbox_radius <= py <= h + beacon.hitbox_radius:
+                    is_primary = (beacon is target)
+                    # Visual shape
+                    shape = getattr(beacon, "shape", "square")
+                    size_w = int(getattr(beacon, "size_w", 10))
+                    size_h = int(getattr(beacon, "size_h", 10))
+                    if shape == "square":
+                        hw, hh = size_w // 2, size_h // 2
+                        col = (0, 220, 255) if is_primary else (200, 200, 200)
+                        cv2.rectangle(display, (int(px)-hw, int(py)-hh), (int(px)+hw, int(py)+hh), col, 1, cv2.LINE_AA)
+                        cv2.rectangle(display, (int(px)-1, int(py)-1), (int(px)+1, int(py)+1), (255,255,255), -1, cv2.LINE_AA)
+                    else:
+                        r = max(2, max(size_w, size_h)//2)
+                        col = (0, 220, 255) if is_primary else (200, 200, 200)
+                        cv2.circle(display, (int(px), int(py)), r, col, 1, cv2.LINE_AA)
+                        cv2.circle(display, (int(px), int(py)), 1, (255,255,255), -1, cv2.LINE_AA)
+                    # Hitbox
                     col_hit = (0, 220, 255) if is_primary else (160, 180, 120)
                     cv2.circle(display, (int(px), int(py)), int(beacon.hitbox_radius), col_hit, 1, cv2.LINE_AA)
                     col_center = (255, 255, 255) if is_primary else (200, 200, 170)
                     cv2.circle(display, (int(px), int(py)), int(beacon.center_radius), col_center, -1, cv2.LINE_AA)
-                if len(beacons) > 1:
-                    cv2.putText(display, f"#{beacon.beacon_id}", (int(px)+beacon.hitbox_radius+2, int(py)-2),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.28, base_color if is_primary else (160,180,120), 1, cv2.LINE_AA)
+                    if len(beacons) > 1:
+                        cv2.putText(display, f"#{beacon.beacon_id}", (int(px)+beacon.hitbox_radius+2, int(py)-2),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.28, base_color if is_primary else (160,180,120), 1, cv2.LINE_AA)
 
-        # Detections — diamonds
         if all_dets:
             for d in all_dets:
                 x, y = int(d["x"]), int(d["y"])
                 pts = np.array([[x, y-3],[x+3, y],[x, y+3],[x-3, y]], np.int32)
                 cv2.polylines(display, [pts], True, (130, 130, 255), 1, cv2.LINE_AA)
 
-        # Tracker estimate — error line/text + status, via overlay or legacy
         estimate = tracker.estimated_position
         if estimate is not None:
             ex, ey = int(estimate[0]), int(estimate[1])
-            if use_overlay:
-                OverlayRenderer.draw_error(display, (cx, cy), (ex, ey), overlay, status.value, pixel_scale_mrad=float(pixel_scale_mrad))
-                # Also draw estimate box/marker with lock color
-                cv2.rectangle(display, (ex-6, ey-6), (ex+6, ey+6), base_color, 1, cv2.LINE_AA)
-                cv2.drawMarker(display, (ex, ey), base_color, cv2.MARKER_CROSS, 10, 1, cv2.LINE_AA)
-                cv2.putText(display, f"{w}x{h}", (w-44, 12), cv2.FONT_HERSHEY_SIMPLEX, 0.28, (180, 180, 180), 1, cv2.LINE_AA)
-            else:
-                cv2.rectangle(display, (ex-6, ey-6), (ex+6, ey+6), base_color, 1, cv2.LINE_AA)
-                cv2.drawMarker(display, (ex, ey), base_color, cv2.MARKER_CROSS, 10, 1, cv2.LINE_AA)
-                cv2.putText(display, status.value.upper(), (6, 12), cv2.FONT_HERSHEY_SIMPLEX, 0.32, base_color, 1, cv2.LINE_AA)
-                cv2.putText(display, f"{w}x{h}", (w-44, 12), cv2.FONT_HERSHEY_SIMPLEX, 0.28, (180, 180, 180), 1, cv2.LINE_AA)
-                cv2.line(display, (cx, cy), (ex, ey), base_color, 1, cv2.LINE_AA)
-                err = math.hypot(ex - cx, ey - cy)
-                try:
-                    scale = float(pixel_scale_mrad)
-                    label = f"{err:.0f}px {err*scale:.2f}mrad"
-                except:
-                    label = f"{err:.0f}px"
-                cv2.putText(display, label, ((cx+ex)//2+3, (cy+ey)//2-3), cv2.FONT_HERSHEY_SIMPLEX, 0.28, base_color, 1, cv2.LINE_AA)
-            # Pan/tilt + slew queue
-            try:
-                pan, tilt = float(camera.pan), float(camera.tilt)
-                qlen = int(camera.pending_queue_len()) if hasattr(camera, "pending_queue_len") else 0
-                pan_txt = f"pan {pan:.0f} tilt {tilt:.0f}" + (f" q{qlen}" if qlen else "")
-                cv2.putText(display, pan_txt, (6, h-8), cv2.FONT_HERSHEY_SIMPLEX, 0.28, (160, 160, 160), 1, cv2.LINE_AA)
-            except: pass
-        else:
-            cv2.putText(display, f"{w}x{h}", (w-44, 12), cv2.FONT_HERSHEY_SIMPLEX, 0.28, (180, 180, 180), 1, cv2.LINE_AA)
-            try:
-                pan, tilt = float(camera.pan), float(camera.tilt)
-                cv2.putText(display, f"pan {pan:.0f} tilt {tilt:.0f}", (6, h-8), cv2.FONT_HERSHEY_SIMPLEX, 0.28, (160, 160, 160), 1, cv2.LINE_AA)
-            except: pass
+            cv2.rectangle(display, (ex-6, ey-6), (ex+6, ey+6), base_color, 1, cv2.LINE_AA)
+            cv2.drawMarker(display, (ex, ey), base_color, cv2.MARKER_CROSS, 10, 1, cv2.LINE_AA)
+            # No in-screen text overlays — resolution/pan-tilt hidden per spec
+        # No resolution or pan-tilt text inside screen
         return display
 
     @staticmethod
@@ -244,6 +232,8 @@ class Renderer:
         for beacon in beacons:
             if not getattr(beacon, "enabled", True):
                 continue
+            if getattr(beacon, "blinking", False) and not getattr(beacon, "_blink_visible", True):
+                continue
             bx, by = beacon.x, beacon.y
             mx, my = int(bx * scale_x), int(by * scale_y)
             hr_s = max(2, int(beacon.hitbox_radius * min(scale_x, scale_y)))
@@ -252,6 +242,19 @@ class Renderer:
             is_primary = (beacon is target)
             col_hit = (0, 220, 255) if is_primary else (165, 175, 120)
             col_center = (255, 255, 255) if is_primary else (200, 200, 170)
+            # Shape visual
+            shape = getattr(beacon, "shape", "square")
+            size_w = int(getattr(beacon, "size_w", 10))
+            size_h = int(getattr(beacon, "size_h", 10))
+            if shape == "square":
+                hw = max(1, int(size_w * scale_x / 2))
+                hh = max(1, int(size_h * scale_y / 2))
+                col = (0, 220, 255) if is_primary else (200, 200, 200)
+                cv2.rectangle(display, (mx - hw, my - hh), (mx + hw, my + hh), col, 1, cv2.LINE_AA)
+            else:
+                r = max(1, int(max(size_w, size_h) * min(scale_x, scale_y) / 2))
+                col = (0, 220, 255) if is_primary else (200, 200, 200)
+                cv2.circle(display, (mx, my), r, col, 1, cv2.LINE_AA)
             cv2.circle(display, (mx, my), hr_s, col_hit, 1, cv2.LINE_AA)
             cv2.circle(display, (mx, my), cr_s, col_center, -1, cv2.LINE_AA)
             if len(beacons) > 1:

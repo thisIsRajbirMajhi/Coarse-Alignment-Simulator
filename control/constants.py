@@ -1,12 +1,10 @@
 # control/constants.py - Single source for controller limits & defaults (gains, rate, dead zone, clamp)
 
 CONTROL_LIMITS: dict[str, tuple[float, float]] = {
-    # Gains — per-axis, applied to px error → px correction
-    "kp": (0.0, 1.0),          # Proportional
-    "ki": (0.0, 0.5),          # Integral
-    "kd": (0.0, 0.5),          # Derivative
-    # Update rate — Hz, how often to compute (can differ from render FPS)
-    "update_rate_hz": (5.0, 120.0),
+    "kp": (0.0, 1.0),
+    "ki": (0.0, 0.5),
+    "kd": (0.0, 0.5),
+    "update_rate_hz": (20.0, 120.0),
     # Dead zone — px, below this error no move (anti-jitter)
     "dead_zone": (0.0, 20.0),
     # Output clamp — px per tick, max correction magnitude (should respect camera slew)

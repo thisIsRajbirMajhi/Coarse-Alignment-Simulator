@@ -27,7 +27,7 @@ class EnvironmentPanel(BaseConfigPanel):
       randomizeRequested()             — when Randomize clicked
     """
 
-    # Emitted with a validated EnvironmentConfig snapshot
+    # Emitted with a validated EnvironmentConfig snaps
     configChanged = pyqtSignal(object)
     randomizeRequested = pyqtSignal()
 
@@ -42,46 +42,20 @@ class EnvironmentPanel(BaseConfigPanel):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(10)
 
-        # Section A: World — Full 2D scene size
-        # World width/height drive Scene resolution; also clamp
-        # FOV and beacon bounds. Step 50 for 5000-range usability.
-        world_box = QGroupBox("⬢  WORLD  —  Full 2D Scene Size")
-        world_grid = QGridLayout(world_box)
-        world_grid.setContentsMargins(12, 18, 12, 12)
-        world_grid.setHorizontalSpacing(8)
-        world_grid.setVerticalSpacing(8)
-        world_grid.setColumnStretch(1, 1)
-        world_grid.setColumnStretch(3, 1)
-
-        world_grid.addWidget(self._label("World W"), 0, 0)
+        # World fixed 5000x5000 — removed from UI per user request
         self.scene_w_spin = QSpinBox()
-        self.scene_w_spin.setRange(MIN_RES, MAX_RES)
-        self.scene_w_spin.setSingleStep(50)
-        self.scene_w_spin.setSuffix(" px")
-        self.scene_w_spin.setToolTip("Full scene width (px) — 50..5000, validated & clamped. Affects world bounds and minimap scale.")
-        self.scene_w_spin.setMinimumHeight(26)
-        world_grid.addWidget(self.scene_w_spin, 0, 1)
-
-        world_grid.addWidget(self._label("H"), 0, 2)
+        self.scene_w_spin.setRange(5000, 5000)
+        self.scene_w_spin.setValue(5000)
+        self.scene_w_spin.hide()
         self.scene_h_spin = QSpinBox()
-        self.scene_h_spin.setRange(MIN_RES, MAX_RES)
-        self.scene_h_spin.setSingleStep(50)
-        self.scene_h_spin.setSuffix(" px")
-        self.scene_h_spin.setToolTip("Full scene height (px) — 50..5000.")
-        self.scene_h_spin.setMinimumHeight(26)
-        world_grid.addWidget(self.scene_h_spin, 0, 3)
-
-        world_hint = QLabel("Size of the full 2D scene — beacons and camera bounds adapt instantly (HOT).")
-        world_hint.setWordWrap(True)
-        world_hint.setStyleSheet("color:#64748b; font-size:10px; font-style:italic;")
-        world_grid.addWidget(world_hint, 1, 0, 1, 4)
-
-        root.addWidget(world_box)
+        self.scene_h_spin.setRange(5000, 5000)
+        self.scene_h_spin.setValue(5000)
+        self.scene_h_spin.hide()
 
         # Section B: Seed — Reproducible generation
         # Seed drives np.random.default_rng(seed) for gradient/haze/stars.
         # Same seed → identical background (reproducibility).
-        seed_box = QGroupBox("◈  SEED  —  Reproducible Scenes")
+        seed_box = QGroupBox("Seed — Reproducible Scenes")
         seed_grid = QGridLayout(seed_box)
         seed_grid.setContentsMargins(12, 18, 12, 12)
         seed_grid.setHorizontalSpacing(8)
@@ -97,8 +71,8 @@ class EnvironmentPanel(BaseConfigPanel):
 
         self.random_seed_btn = QPushButton("Randomize")
         self.random_seed_btn.setMinimumHeight(26)
-        self.random_seed_btn.setToolTip("Reroll seed to a random value (0..999999) and regenerate — HOT, next tick.")
-        self.random_seed_btn.setStyleSheet("background:#f1f5f9; border:1px solid #cbd5e1; border-radius:6px; padding:4px 10px;")
+        self.random_seed_btn.setToolTip("Reroll seed to a random value (0..999999) and regenerate.")
+        self.random_seed_btn.setStyleSheet("background:#ffffff; border:1px solid #d1d5db; border-radius:4px; padding:4px 10px;")
         seed_grid.addWidget(self.random_seed_btn, 0, 2, 1, 2)
 
         seed_hint = QLabel("Deterministic: same seed → identical sky, haze, and stars.")
@@ -109,7 +83,7 @@ class EnvironmentPanel(BaseConfigPanel):
         root.addWidget(seed_box)
 
         # Section C: Atmosphere — Gradient + fog + vignetting
-        atmo_box = QGroupBox("◎  ATMOSPHERE  —  Gradient + Haze")
+        atmo_box = QGroupBox("Atmosphere — Gradient + Haze")
         atmo_grid = QGridLayout(atmo_box)
         atmo_grid.setContentsMargins(12, 18, 12, 12)
         atmo_grid.setHorizontalSpacing(8)
@@ -150,7 +124,7 @@ class EnvironmentPanel(BaseConfigPanel):
         root.addWidget(atmo_box)
 
         # Section D: Starfield / Clutter
-        stars_box = QGroupBox("▣  STARFIELD  •  Clutter")
+        stars_box = QGroupBox("Starfield / Clutter")
         stars_grid = QGridLayout(stars_box)
         stars_grid.setContentsMargins(12, 18, 12, 12)
         stars_grid.setHorizontalSpacing(8)
@@ -176,36 +150,14 @@ class EnvironmentPanel(BaseConfigPanel):
 
         root.addWidget(stars_box)
 
-        # Section E: Dynamics — Time-varying animation
-        dyn_box = QGroupBox("⟡  DYNAMICS  —  Time-Varying Animation")
-        dyn_grid = QGridLayout(dyn_box)
-        dyn_grid.setContentsMargins(12, 18, 12, 12)
-        dyn_grid.setHorizontalSpacing(8)
-        dyn_grid.setVerticalSpacing(8)
-        dyn_grid.setColumnStretch(1, 1)
-        dyn_grid.setColumnStretch(3, 1)
-
+        # Dynamics removed per user request — fixed to static (dynamic=False)
         self.dynamic_check = QCheckBox("Dynamic scene")
-        self.dynamic_check.setToolTip("When enabled, stars twinkle ±18% and haze shimmers — time advances at dynamic_speed × dt.")
-        self.dynamic_check.setStyleSheet("font-size:11px; color:#0f172a;")
-        dyn_grid.addWidget(self.dynamic_check, 0, 0, 1, 2)
-
-        dyn_grid.addWidget(self._label("Speed"), 0, 2)
+        self.dynamic_check.hide()
+        self.dynamic_check.setChecked(False)
         self.env_dynamic_speed_spin = QDoubleSpinBox()
         self.env_dynamic_speed_spin.setRange(*LIMITS["dynamic_speed"])
-        self.env_dynamic_speed_spin.setSingleStep(0.1)
-        self.env_dynamic_speed_spin.setDecimals(1)
-        self.env_dynamic_speed_spin.setSuffix(" x")
-        self.env_dynamic_speed_spin.setToolTip("Animation speed multiplier — 0.1..5.0 ×. Effective only when Dynamic is on; drives update(dt * speed).")
-        self.env_dynamic_speed_spin.setMinimumHeight(26)
-        dyn_grid.addWidget(self.env_dynamic_speed_spin, 0, 3)
-
-        dyn_hint = QLabel("Whether background elements move/animate — disable for static bench, enable for realism.")
-        dyn_hint.setWordWrap(True)
-        dyn_hint.setStyleSheet("color:#64748b; font-size:10px; font-style:italic;")
-        dyn_grid.addWidget(dyn_hint, 1, 0, 1, 4)
-
-        root.addWidget(dyn_box)
+        self.env_dynamic_speed_spin.setValue(1.0)
+        self.env_dynamic_speed_spin.hide()
 
         # Wiring — emit validated config on any change
         for w in [
@@ -231,7 +183,7 @@ class EnvironmentPanel(BaseConfigPanel):
 
     def _label(self, text: str) -> QLabel:
         lbl = QLabel(text)
-        lbl.setStyleSheet("color:#334155; font-size:11px;")
+        lbl.setStyleSheet("color:#374151; font-size:11px;")
         return lbl
 
     def _on_dynamic_toggled(self, checked: bool) -> None:
@@ -310,7 +262,7 @@ class EnvironmentPanel(BaseConfigPanel):
             self._emit_config()
 
     def _emit_config(self) -> None:
-        """Emit a validated config snapshot (connected to MainWindow debounced HOT)."""
+        """Emit a validated config snaps (connected to MainWindow debounced )."""
         try:
             cfg = self.collect_config()
             self.configChanged.emit(cfg)

@@ -1,4 +1,4 @@
-# gui/mixins/state_mixin.py - Dirty-tracking, HOT apply/discard, snapshots, debounced auto-apply
+# gui/mixins/state_mixin.py - Dirty-tracking, apply/discard, snapss, debounced auto-apply
 
 from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QMessageBox
@@ -26,8 +26,8 @@ class StateMixin:
         }
         btn = btn_map.get(section)
         if btn is not None:
-            btn.setStyleSheet("background:#f59e0b; color:white; font-weight:700; border:none; border-radius:6px;")
-            btn.setText(f"Apply {section.title()} — HOT ●")
+            btn.setStyleSheet("background:#e5e7eb; color:#111827; font-weight:600; border:1px solid #d1d5db; border-radius:4px;")
+            btn.setText(f"Apply {section.title} — ")
 
     def _clear_dirty(self, section: str):
         self._dirty_tabs.discard(section)
@@ -41,17 +41,17 @@ class StateMixin:
         btn = btn_map.get(section)
         if btn is not None:
             defaults = {
-                "global": ("Apply Global — HOT", "#2563eb"),
-                "beacons": ("Apply Beacons Section — HOT", "#2563eb"),
-                "camera": ("Apply Camera — HOT", "#2563eb"),
-                "environment": ("Apply Environment", "#2563eb"),
-                "disturbances": ("Apply Disturbances — HOT", "#2563eb"),
+                "global": ("Apply Global — ", "#ffffff"),
+                "beacons": ("Apply Beacons Section — ", "#ffffff"),
+                "camera": ("Apply Camera — ", "#ffffff"),
+                "environment": ("Apply Environment", "#ffffff"),
+                "disturbances": ("Apply Disturbances — ", "#ffffff"),
             }
-            txt, col = defaults.get(section, ("Apply", "#2563eb"))
-            btn.setStyleSheet(f"background:{col}; color:white; font-weight:600; border:none; border-radius:6px;")
+            txt, col = defaults.get(section, ("Apply", "#ffffff"))
+            btn.setStyleSheet(f"background:{col}; color:#111827; font-weight:500; border:1px solid #d1d5db; border-radius:4px;")
             btn.setText(txt)
 
-    # Apply / Discard per section (HOT)
+    # Apply / Discard per section ()
 
     def _apply_section(self, section: str, hot: bool = True):
         try:
@@ -63,14 +63,15 @@ class StateMixin:
                 self._apply_camera_hot()
             elif section == "control":
                 self._apply_control_hot()
-            elif section == "overlay":
-                self._apply_overlay_hot()
             elif section == "environment":
                 self._apply_scene_settings_hot()
             elif section == "disturbances":
-                pass
+                if hasattr(self, "_apply_disturbances_hot"):
+                    self._apply_disturbances_hot()
+                else:
+                    pass
             self._clear_dirty(section)
-            self.statusBar().showMessage(f"{section.title()} applied — HOT, next tick", 3000)
+            self.statusBar().showMessage(f"{section.title} applied — , next tick", 3000)
         except Exception as e:
             QMessageBox.warning(self, f"Apply {section}", f"Failed: {e}")
 
@@ -186,13 +187,22 @@ class StateMixin:
                             elif hasattr(w, "setChecked"): w.setChecked(bool(val))
                         finally:
                             w.blockSignals(False)
-            elif section == "overlay" and snap and "crosshair_style" in snap:
+            elif section == "disturbances" and snap and ("turbulence" in snap or "platform_profile" in snap):
                 try:
-                    from overlay.config import OverlayConfig
-                    cfg = OverlayConfig.from_dict(snap).validate()
-                    self.overlay_config = cfg
-                    if hasattr(self, "overlay_panel"):
-                        self.overlay_panel.set_config(cfg, emit=False)
+                    from disturbance.config import DisturbanceConfig as _DCsnap
+                    cfg = _DCsnap.from_dict(snap).validate()
+                    self.disturbance_config = cfg
+                    if hasattr(self, "disturbances_panel"):
+                        self.disturbances_panel.set_config(cfg, emit=False)
+                        # Sync legacy alias sliders dict if present
+                        try:
+                            for k in ["Turbulence", "Vibration", "Camera Motion", "Noise"]:
+                                sl = self.disturbances_panel.sliders.get(k)
+                                if sl is not None:
+                                    # value already synced via panel, but keep alias reference consistent
+                                    pass
+                            self.sliders = self.disturbances_panel.sliders
+                        except: pass
                 except Exception:
                     for key, val in snap.items():
                         w = getattr(self, key, None)
@@ -223,14 +233,14 @@ class StateMixin:
     def _master_apply_all(self):
         if self._dirty_tabs:
             ret = QMessageBox.question(self, "Apply All Sections",
-                f"Apply all dirty sections? ({', '.join(sorted(self._dirty_tabs))}) — HOT (next tick).",
+                f"Apply all dirty sections? ({', '.join(sorted(self._dirty_tabs))}) — (next tick).",
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
             if ret != QMessageBox.Yes:
                 return
-        for sec in ["global", "beacons", "camera", "control", "overlay", "environment", "disturbances"]:
+        for sec in ["global", "beacons", "camera", "control", "environment", "disturbances"]:
             self._apply_section(sec, hot=True)
         self._dirty_tabs.clear()
-        self.statusBar().showMessage("All sections applied — HOT", 3000)
+        self.statusBar().showMessage("All sections applied — ", 3000)
 
     def _master_discard_all(self):
         if not self._dirty_tabs:
@@ -245,7 +255,7 @@ class StateMixin:
             self._discard_section(sec)
         self._dirty_tabs.clear()
 
-    # Snapshots — for discard
+    # Snapss — for discard
 
     def _snapshot_section(self, section: str):
         try:
@@ -260,7 +270,7 @@ class StateMixin:
                         try: self._applied_snapshot[section][attr] = w.value()
                         except: pass
             elif section == "camera":
-                # Snapshot via CameraPanel (full 11 params) if available
+                # Snaps via CameraPanel (full 11 params) if available
                 try:
                     if hasattr(self, "camera_panel") and self.camera_panel is not None:
                         self._applied_snapshot[section] = self.camera_panel.collect_config().to_dict()
@@ -314,7 +324,19 @@ class StateMixin:
                         "env_dynamic_speed_spin": self.env_dynamic_speed_spin.value(),
                     }
             elif section == "disturbances":
-                self._applied_snapshot[section] = {k: s.value() for k, s in self.sliders.items()}
+                # New: DisturbanceConfig snapshot (full spec) if panel available, fallback legacy sliders
+                try:
+                    if hasattr(self, "disturbances_panel") and hasattr(self.disturbances_panel, "collect_config"):
+                        self._applied_snapshot[section] = self.disturbances_panel.collect_config().to_dict()
+                    elif hasattr(self, "disturbance_config"):
+                        self._applied_snapshot[section] = self.disturbance_config.to_dict()
+                    else:
+                        self._applied_snapshot[section] = {k: s.value() for k, s in self.sliders.items()}
+                except Exception:
+                    try:
+                        self._applied_snapshot[section] = {k: s.value() for k, s in self.sliders.items()}
+                    except:
+                        self._applied_snapshot[section] = {}
             elif section == "beacons":
                 try:
                     if hasattr(self, "beacon_manager"):
@@ -333,19 +355,9 @@ class StateMixin:
                         "center_spin": self.center_spin.value(),
                         "target_beacon_spin": self.target_beacon_spin.value(),
                     }
-            elif section == "overlay":
-                try:
-                    if hasattr(self, "overlay_panel"):
-                        self._applied_snapshot[section] = self.overlay_panel.collect_config().to_dict()
-                    else:
-                        self._applied_snapshot[section] = self.overlay_config.to_dict()
-                except Exception:
-                    try:
-                        self._applied_snapshot[section] = self.overlay_config.to_dict()
-                    except: pass
         except: pass
 
-    # Debounced HOT — every slider change auto-applies
+    # Debounced — every slider change auto-applies
 
     def _schedule_auto(self, section: str, func, delay: int = 360):
         if section in ("global_controls",):

@@ -55,7 +55,7 @@ class ControllerConfig(BaseValidatedConfig):
 
     @gain.setter
     def gain(self, value: float) -> None:
-        self.kp = float(np.clip(float(value), *CONTROL_LIMITS["kp"]))
+        self.kp = float(clip_field(float(value), *CONTROL_LIMITS["kp"]))
 
     def update_interval(self) -> float:
         """Seconds between controller computations (1/Hz)."""

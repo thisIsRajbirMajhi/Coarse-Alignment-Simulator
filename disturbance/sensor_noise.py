@@ -1,4 +1,4 @@
-# disturbance/sensor_noise.py - Physics sensor model — shot/read/PRNU/hot pixels, well-commented
+# disturbance/sensor_noise.py - Physics sensor model — s/read/PRNU/ pixels, well-commented
 
 import numpy as np
 
@@ -35,7 +35,7 @@ def apply_sensor_noise(
     dark_e = (6.0 + float(intensity) * 3.5) * float(T_EXP) * 60.0
     electrons = electrons + float(dark_e)
 
-    # Poisson shot — vectorized, with Normal approx for large λ or large frames
+    # Poisson s — vectorized, with Normal approx for large λ or large frames
     flat = electrons.reshape(-1)
     large = flat > 3000
     shot = np.empty_like(flat)
@@ -66,7 +66,7 @@ def apply_sensor_noise(
             else:
                 electrons_noisy[:] *= prnu
 
-    # Back to DN, hot pixels, quantise
+    # Back to DN, pixels, quantise
     dn_out = electrons_noisy / float(electrons_per_dn)
     if intensity > 6 and np.random.random() < 0.35:
         n_hot = int(h * w * 0.0002 * (float(intensity) - 6) / 4)

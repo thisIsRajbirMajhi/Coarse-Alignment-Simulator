@@ -32,7 +32,7 @@ class BeaconDetector:
             self.brightness_threshold = int(self.config.brightness_threshold)
             self.min_area = int(self.config.min_area)
 
-    # Config bridge — hot-apply without rebuild
+    # Config bridge — -apply without rebuild
 
     def apply_config(self, config: DetectorConfig) -> None:
         cfg = config.validate()

@@ -3,9 +3,12 @@
 from environment.constants import MAX_RES
 
 CAMERA_LIMITS: dict[str, tuple[float, float]] = {
-    # Field of View — actual sensor resolution (px)
-    "fov_width": (20, MAX_RES),
-    "fov_height": (20, MAX_RES),
+    # Sensor Resolution — 640x640 default, user defined
+    "fov_width": (100, MAX_RES),
+    "fov_height": (100, MAX_RES),
+    # FOV in degrees — 4 x 3 default, user defined
+    "fov_deg_x": (1.0, 10.0),
+    "fov_deg_y": (1.0, 10.0),
     # Pan/Tilt range — mechanical limits (px in scene coords). 0..MAX_RES, but also clamped to scene.
     "pan_min": (0, MAX_RES),
     "pan_max": (0, MAX_RES),
@@ -14,43 +17,48 @@ CAMERA_LIMITS: dict[str, tuple[float, float]] = {
     # Home / centre — default pointing on start/reset (px)
     "home_pan": (0, MAX_RES),
     "home_tilt": (0, MAX_RES),
-    # Max slew rate — actuator speed limit (px/s). 0 = unlimited handled as 1e6
+    "max_pan_speed_deg": (5.0, 10.0),
+    "max_tilt_speed_deg": (5.0, 10.0),
+    # Legacy px/s kept for internal conversion
     "max_slew_rate": (10, 5000),
-    # Positional resolution — smallest step (px). 0.01..5.0, 0 = continuous
     "resolution": (0.01, 5.0),
-    # Response latency — queue delay (ms). 0..500 ms
     "latency_ms": (0, 500),
-    # Optics — pixel to angle conversion (mrad per px). 0.001..2.0
     "pixel_scale_mrad": (0.001, 2.0),
+    "update_rate_hz": (20, 120),
 }
 
 CAMERA_DEFAULTS: dict = {
-    "fov_width": 250,
-    "fov_height": 250,
-    "pan_min": None,          # None → auto = fov/2
-    "pan_max": None,          # None → auto = W - fov/2
+    "fov_width": 640,
+    "fov_height": 640,
+    "fov_deg_x": 4.0,
+    "fov_deg_y": 3.0,
+    "pan_min": None,
+    "pan_max": None,
     "tilt_min": None,
     "tilt_max": None,
-    "home_pan": None,         # None → auto = W/2
-    "home_tilt": None,        # None → auto = H/2
-    "max_slew_rate": 800.0,   # px/s — ~3× FOV per second, realistic gimbal
-    "resolution": 0.1,        # px — 0.1 px finest step (quantized)
-    "latency_ms": 30,         # ms — ~1 frame delay, simulates actuator + comms
-    "pixel_scale_mrad": 0.035, # mrad/px — 35 µrad per px (FSOC relevant, ~7 arcsec)
-    "scene_width": 1000,      # helper for auto home/range when scene not yet known
-    "scene_height": 1000,
+    "home_pan": None,
+    "home_tilt": None,
+    "max_pan_speed_deg": 5.0,
+    "max_tilt_speed_deg": 5.0,
+    "max_slew_rate": 800.0,
+    "resolution": 0.1,
+    "latency_ms": 33,
+    "pixel_scale_mrad": 0.109,
+    "scene_width": 5000,
+    "scene_height": 5000,
+    "update_rate_hz": 30,
 }
 
 DISPLAY_LIMITS: dict[str, tuple[int, int]] = {
-    "viewport_width": (100, MAX_RES),
-    "viewport_height": (100, MAX_RES),
-    "god_width": (100, MAX_RES),
-    "god_height": (100, MAX_RES),
+    "viewport_width": (2000, MAX_RES),
+    "viewport_height": (2000, MAX_RES),
+    "god_width": (5000, 5000),
+    "god_height": (5000, 5000),
 }
 
 DISPLAY_DEFAULTS: dict = {
-    "viewport_width": 400,
-    "viewport_height": 300,
-    "god_width": 400,
-    "god_height": 300,
+    "viewport_width": 2000,
+    "viewport_height": 2000,
+    "god_width": 5000,
+    "god_height": 5000,
 }

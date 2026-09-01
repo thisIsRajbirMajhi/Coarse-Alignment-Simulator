@@ -1,4 +1,4 @@
-# target/motion.py - Beacon/Target dynamics — per-beacon motion, photometry, and hit geometry
+# target/motion.py - Beacon/Target dynamics — per-beacon motion, pometry, and hit geometry
 
 from __future__ import annotations
 
@@ -95,14 +95,17 @@ class Target:
         hitbox_radius: int = 14,
         center_radius: int = 2,
         beacon_id: int = 0,
-        config: "BeaconConfig | None" = None,  # Immediate migration path
+        config: "BeaconConfig | None" = None,
         enabled: bool = True,
+        shape: str = "square",
+        size_w: int = 10,
+        size_h: int = 10,
+        blinking: bool = False,
     ):
         # If BeaconConfig supplied, it drives construction (validated)
         if config is not None and BeaconConfig is not None:
             try:
                 cfg = config.validate()
-                # Override args with config values
                 x = float(cfg.x)
                 y = float(cfg.y)
                 profile = cfg.profile
@@ -115,6 +118,10 @@ class Target:
                 heading = None if cfg.heading is None else float(cfg.heading) * math.pi / 180.0
                 beacon_id = int(cfg.beacon_id)
                 enabled = bool(cfg.enabled)
+                shape = str(getattr(cfg, "shape", shape))
+                size_w = int(getattr(cfg, "size_w", size_w))
+                size_h = int(getattr(cfg, "size_h", size_h))
+                blinking = bool(getattr(cfg, "blinking", blinking))
             except Exception:
                 pass
 
@@ -160,6 +167,12 @@ class Target:
             self.center_radius = int(np.clip(int(center_radius), 1, 10))
         self.beacon_id = int(beacon_id)
         self.enabled = bool(enabled)
+        self.shape = str(shape).lower() if shape in ("square", "circle") else "square"
+        self.size_w = int(np.clip(int(size_w), 5, 20))
+        self.size_h = int(np.clip(int(size_h), 2, 20))
+        self.blinking = bool(blinking)
+        self._blink_visible = True
+        self._blink_timer = 0.0
 
         # Heading & velocity — seeded RNG for reproducibility
         if heading is not None:
@@ -170,7 +183,7 @@ class Target:
         self.vy = self.speed * math.sin(self._heading)
         self.ax = 0.0; self.ay = 0.0
 
-        # Photometric scintillation state
+        # Pometric scintillation state
         self._scint_phase = float(self._rng.uniform(0, 2*math.pi))
         self._scint_freq = float(self._rng.uniform(8.0, 14.0))
         self.current_brightness = float(self.brightness)
@@ -479,13 +492,21 @@ class Target:
             self._heading=math.atan2(self.vy,self.vx) if (self.vx or self.vy) else self._heading
             self.x=float(np.clip(self.x,0,w)); self.y=float(np.clip(self.y,0,h))
 
-        # Photometric scintillation — all profiles
+        # Pometric scintillation — all profiles
         fast=0.06*math.sin(self._t*self._scint_freq + self._scint_phase)
         slow=0.04*math.sin(self._t*0.7)
         noise=float(self._rng.normal(0,0.015))
         scint=float(np.clip(1.0+fast+slow+noise,0.78,1.22))
         self.current_brightness=float(np.clip(self.brightness*scint,180,255))
         self.current_radius=float(np.clip(self.radius*(0.92+0.16*scint),1.0,self.radius*1.4))
+        # Blinking
+        if self.blinking:
+            self._blink_timer += dt
+            if self._blink_timer >= 0.4:
+                self._blink_timer = 0.0
+                self._blink_visible = not self._blink_visible
+            if not self._blink_visible:
+                self.current_brightness = 0.0
 
     def get_position(self) -> tuple[float,float]:
         return (float(self.x), float(self.y))
@@ -527,18 +548,20 @@ class Target:
 def create_beacons(count: int, bounds: tuple[int,int], profile: MotionProfile,
                    speed: float, seed: int | None = 42,
                    hitbox_radius: int = 14, center_radius: int = 2,
-                   brightness: int = 255, radius: int = 5) -> list[Target]:
+                   brightness: int = 255, radius: int = 5,
+                   shape: str = "square", size_w: int = 10, size_h: int = 10,
+                   blinking: bool = False, x: float | None = None, y: float | None = None,
+                   speed_random: bool = False) -> list[Target]:
     """
-    Factory to create one or more beacons spread across world.
-
-    Kept for back-compat (tests+app still call this). New code may use
-    target.factory.create_beacons_with_configs instead.
+    Factory to create one or more beacons.
+    Supports shape, size, blinking, initial location and speed_random.
     """
-    # Delegate to factory module if available for DRY
     try:
         from target.factory import create_beacons as _factory_create
-        return _factory_create(count, bounds, profile, speed, seed, hitbox_radius, center_radius, brightness, radius)
-    except Exception:
+        return _factory_create(count, bounds, profile, speed, seed, hitbox_radius, center_radius, brightness, radius,
+                               shape, size_w, size_h, blinking, x, y, speed_random)
+    except Exception as e:
+        # Fallback if factory fails
         pass
     # Fallback inline (original logic)
     rng = np.random.default_rng(seed)

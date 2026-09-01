@@ -14,7 +14,7 @@ DETECTOR_LIMITS: dict[str, tuple[int, int]] = {
 
 DETECTOR_DEFAULTS: dict = {
     "brightness_threshold": 200,  # 200/255 ≈ 78% brightness — bright beacon on dim background
-    "min_area": 2,                # 2 px² — rejects isolated hot pixels
+    "min_area": 2,                # 2 px² — rejects isolated pixels
     "max_beacons": 12,
 }
 

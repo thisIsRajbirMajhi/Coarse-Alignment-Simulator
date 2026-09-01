@@ -42,8 +42,7 @@ class ControlPanel(BaseConfigPanel):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(10)
 
-        # Group A: Controller Type
-        type_box = QGroupBox("⟡  A  —  CONTROLLER  TYPE")
+        type_box = QGroupBox("A — Controller Type")
         type_layout = QGridLayout(type_box)
         type_layout.setContentsMargins(12, 18, 12, 12)
         type_layout.setHorizontalSpacing(8)
@@ -64,8 +63,7 @@ class ControlPanel(BaseConfigPanel):
 
         layout.addWidget(type_box)
 
-        # Group B: Gains — Kp, Ki, Kd
-        gains_box = QGroupBox("⬢  B  —  GAINS  •  Kp / Ki / Kd")
+        gains_box = QGroupBox("B — Gains / Kp / Ki / Kd")
         gains_grid = QGridLayout(gains_box)
         gains_grid.setContentsMargins(12, 18, 12, 12)
         gains_grid.setHorizontalSpacing(8)
@@ -112,8 +110,7 @@ class ControlPanel(BaseConfigPanel):
 
         layout.addWidget(gains_box)
 
-        # Group C: Timing & Limits — update rate, dead zone, clamp
-        limits_box = QGroupBox("◎  C  —  TIMING  &  LIMITS")
+        limits_box = QGroupBox("C — Timing and Limits")
         limits_grid = QGridLayout(limits_box)
         limits_grid.setContentsMargins(12, 18, 12, 12)
         limits_grid.setHorizontalSpacing(8)
@@ -126,7 +123,8 @@ class ControlPanel(BaseConfigPanel):
         lo, hi = CONTROL_LIMITS["update_rate_hz"]
         self.rate_spin.setRange(lo, hi); self.rate_spin.setSingleStep(1.0); self.rate_spin.setDecimals(1)
         self.rate_spin.setSuffix(" Hz")
-        self.rate_spin.setToolTip("Control update rate — Hz, how often controller computes correction (can differ from render FPS). Interval = 1/Hz.")
+        self.rate_spin.setValue(30.0)
+        self.rate_spin.setToolTip("Update rate >=20 Hz — default 30 Hz.")
         self.rate_spin.setMinimumHeight(26)
         limits_grid.addWidget(self.rate_spin, 0, 1)
 
