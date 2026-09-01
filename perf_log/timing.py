@@ -1,23 +1,15 @@
-"""
-Module: perf_log.timing
-Purpose: Isolated timing & acquisition calculations — split from PerformanceLogger god class.
-Public API: compute_fps, compute_acquisition, ReacquisitionTracker
-Notes: Extracted from perf_log/metrics.py:139/180. Single responsibility: wall-clock vs monotonic.
-"""
+# perf_log/timing.py - Isolated timing & acquisition calculations — split from PerformanceLogger god cl
 
 import math
 import time
 
-
 def compute_fps(frame_count: int, elapsed: float) -> float:
     return (frame_count / elapsed) if elapsed > 1e-9 else 0.0
-
 
 def compute_acquisition_time(is_locked: bool, acquisition_time: float | None, elapsed: float, start_mono: float | None) -> float | None:
     if is_locked and acquisition_time is None and start_mono is not None:
         return elapsed
     return acquisition_time
-
 
 class ReacquisitionTracker:
     """Tracks reacquisition times — isolated from log_frame 100-line method."""

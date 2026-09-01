@@ -1,18 +1,9 @@
-"""
-Module: gui.windows.control_window
-Purpose: Separate Control Dashboard window hosting live dashboard + all controls.
-Public API: ControlDashboardWindow
-Notes: Extracted from gui.app — reparented control_widget keeps logic in MainWindow.
-"""
+# gui/windows/control_window.py - Separate Control Dashboard window hosting live dashboard + all controls
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QMainWindow, QScrollArea, QStatusBar, QWidget
 
 from gui.styles import APP_STYLE
-
-# ============================================================
-# SECTION: ControlDashboardWindow — Separate live control panel
-# ============================================================
 
 class ControlDashboardWindow(QMainWindow):
     """
@@ -48,9 +39,7 @@ class ControlDashboardWindow(QMainWindow):
         # Keep as normal top-level window (not modal)
         self.setWindowFlags(self.windowFlags() | Qt.Window)
 
-    # --------------------------------------------------------
     # Hidden instead of destroyed — preserves HOT wiring
-    # --------------------------------------------------------
 
     def closeEvent(self, event):
         event.ignore()

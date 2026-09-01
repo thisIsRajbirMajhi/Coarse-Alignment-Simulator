@@ -1,11 +1,4 @@
-"""
-Module: disturbance.camera_motion
-Purpose: Camera drift — Ornstein-Uhlenbeck thermal/mount, well-commented.
-Public API: apply_camera_motion, apply_camera_motion_with_state
-Notes: Now dt-aware — caller passes sim-speed-scaled dt. Falls back to wall-clock
-       when dt not supplied. State is per-instance dict (or global) for temporal correlation.
-       Includes max-velocity clamp and slow bias random walk.
-"""
+# disturbance/camera_motion.py - Camera drift — Ornstein-Uhlenbeck thermal/mount, well-commented
 
 import math
 import time
@@ -15,10 +8,6 @@ import numpy as np
 from disturbance.constants import CAMERA_TAU
 from disturbance.dt_provider import DtProvider
 from disturbance.state import _cam_motion_state_global
-
-# ============================================================
-# SECTION: Camera drift — OU process
-# ============================================================
 
 def apply_camera_motion(pan: float, tilt: float, intensity: float, dt: float | None = None) -> tuple[float, float]:
     """
@@ -32,7 +21,6 @@ def apply_camera_motion(pan: float, tilt: float, intensity: float, dt: float | N
     Returns (pan_drifted, tilt_drifted).
     """
     return apply_camera_motion_with_state(pan, tilt, float(intensity), _cam_motion_state_global, dt=dt)
-
 
 def apply_camera_motion_with_state(
     pan: float,

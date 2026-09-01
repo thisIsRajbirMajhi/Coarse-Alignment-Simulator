@@ -1,11 +1,4 @@
-"""
-Module: gui.panels.global_panel
-Purpose: Global controls — motion profile, speed, detector threshold, Start/Pause/Reset/Export.
-Public API: GlobalPanel
-Notes: Extracted from gui.app — modular, well-commented.
-       Exposes widgets as attributes for backward compat wiring in MainWindow,
-       but also provides helper to build slider rows internally.
-"""
+# gui/panels/global_panel.py - Global controls — motion profile, speed, detector threshold, Start/Pause/Reset/E
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from gui.panels.base import BaseConfigPanel
@@ -21,10 +14,6 @@ from PyQt5.QtWidgets import (
 )
 
 from target.motion import MotionProfile
-
-# ============================================================
-# SECTION: GlobalPanel — Target + System global controls
-# ============================================================
 
 class GlobalPanel(BaseConfigPanel):
     """
@@ -47,9 +36,7 @@ class GlobalPanel(BaseConfigPanel):
         super().__init__(parent)
         self._build_ui()
 
-    # ========================================================
     # Build UI
-    # ========================================================
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -164,9 +151,7 @@ class GlobalPanel(BaseConfigPanel):
 
         layout.addStretch()
 
-    # --------------------------------------------------------
     # Helper — slider row with value label
-    # --------------------------------------------------------
 
     def _add_slider_row(self, layout: QVBoxLayout, label: str, vmin: int, vmax: int, vinit: int) -> QSlider:
         lab = QLabel(label)

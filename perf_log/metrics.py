@@ -25,6 +25,9 @@ import os
 import uuid
 from datetime import datetime
 
+from perf_log.error_stats import compute_error_stats, error_pct_from_px
+from perf_log.rates import compute_rates
+from perf_log.timing import compute_fps
 
 class PerformanceLogger:
     def __init__(self):
@@ -56,9 +59,7 @@ class PerformanceLogger:
         self._run_dir = None
         self._pause_offset = 0.0  # total paused duration (not used internally, external adjusts start)
 
-    # ----------------------------------------------------------
     # lifecycle helpers
-    # ----------------------------------------------------------
     def close(self):
         """Flush and close auto-log CSV if open. Safe to call multiple times."""
         try:
@@ -252,37 +253,23 @@ class PerformanceLogger:
 
     def summary(self) -> dict:
         elapsed = self._elapsed()
-        # fps: frames / elapsed, guard div0
-        fps = (self.frame_count / elapsed) if elapsed > 1e-9 else 0.0
+        fps = compute_fps(self.frame_count, elapsed)
 
-        # error stats — verified correct
-        n_err = len(self.tracking_errors)
-        if n_err:
-            avg_error = sum(self.tracking_errors) / n_err
-            max_error = max(self.tracking_errors)
-            min_error = min(self.tracking_errors)
-            rms = math.sqrt(sum(x * x for x in self.tracking_errors) / n_err)
-            mean = avg_error
-            var = sum((x - mean) ** 2 for x in self.tracking_errors) / n_err
-            std_err = math.sqrt(var) if var > 0 else 0.0
-            sorted_err = sorted(self.tracking_errors)
-            # median: for even n, average two middle for better accuracy
-            if n_err % 2 == 1:
-                median = sorted_err[n_err // 2]
-            else:
-                median = (sorted_err[n_err // 2 - 1] + sorted_err[n_err // 2]) / 2.0
-            p95_idx = int(math.ceil(0.95 * n_err)) - 1
-            p95_idx = max(0, min(p95_idx, n_err - 1))
-            p95 = sorted_err[p95_idx]
-        else:
-            avg_error = max_error = min_error = rms = std_err = median = p95 = 0.0
+        stats = compute_error_stats(self.tracking_errors)
+        avg_error = stats["avg"]
+        max_error = stats["max"]
+        min_error = stats["min"]
+        rms = stats["rms"]
+        std_err = stats["std"]
+        median = stats["median"]
+        p95 = stats["p95"]
 
-        # rates — denominators verified
         lock_retention = (self.locked_frame_count / self.frame_count * 100) if self.frame_count else 0.0
-        detection_rate = (self.detection_count / self.frame_count * 100) if self.frame_count else 0.0
-        hitbox_rate = (self.hitbox_hit_count / self.detection_count * 100) if self.detection_count else 0.0
-        center_rate = (self.center_hit_count / self.hitbox_hit_count * 100) if self.hitbox_hit_count else 0.0
-        center_overall = (self.center_hit_count / self.detection_count * 100) if self.detection_count else 0.0
+        rates = compute_rates(self.frame_count, self.detection_count, self.hitbox_hit_count, self.center_hit_count)
+        detection_rate = rates["detection_rate"]
+        hitbox_rate = rates["hitbox_rate"]
+        center_rate = rates["center_rate"]
+        center_overall = rates["center_overall"]
 
         if self.processing_times:
             avg_proc = sum(self.processing_times) / len(self.processing_times)
@@ -311,14 +298,9 @@ class PerformanceLogger:
         total = self.frame_count if self.frame_count else 1
         state_pct = {k: round(v / total * 100, 2) for k, v in self.state_counts.items()}
 
-        # dashboard-exact derived metrics — FIXED semantics documented
-        # tracking_error_pct: avg as % of max (consistency); 0 if no max. Dashboard now inverts color for error.
         tracking_error_pct = round((avg_error / max_error * 100) if max_error > 1e-9 else 0.0, 2)
-        # Intuitive error % where 15px =100% (matches dashboard thresholds green<5 yellow<15 red) — for image spec
-        def _err_pct(px: float) -> float:
-            return round(max(0.0, min(100.0, float(px) / 15.0 * 100.0)), 2) if px is not None else 0.0
-        avg_tracking_error_pct = _err_pct(avg_error)
-        max_tracking_error_pct = _err_pct(max_error)
+        avg_tracking_error_pct = error_pct_from_px(avg_error)
+        max_tracking_error_pct = error_pct_from_px(max_error)
         # Proc time in seconds for image spec (Dashboard: Proc. Time (S))
         proc_time_s = round(float(avg_proc), 6)  # avg_proc is seconds
         # Times: proportion of wall elapsed spent in that condition (correct for dashboard)

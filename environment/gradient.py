@@ -1,17 +1,6 @@
-"""
-Module: environment.gradient
-Purpose: Vertical sky gradient generation (zenith → horizon).
-Physics: Linear lerp of bg_top (zenith darker) → bg_bottom (horizon brighter)
-         plus slight blue/G bias for skylight scattering at low elevation.
-Public API: build_gradient
-Notes: Output is float32 (H, W, 3) before vignetting/haze; crystal sharp.
-"""
+# environment/gradient.py - Vertical sky gradient generation (zenith → horizon)
 
 import numpy as np
-
-# ============================================================
-# SECTION: Sky Gradient Builder
-# ============================================================
 
 def build_gradient(
     width: int,

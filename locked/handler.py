@@ -1,25 +1,9 @@
-"""
-Module: locked.handler
-Purpose: Isolated LOCKED (=TRACKING) algorithm — stable lock, retention.
-Public API: LockedHandler
-Notes: LOCKED is the committed tracking state. Retention metric counts frames
-       in LOCKED. Filter smooths detections; misses tolerated up to miss_limit.
-
-Maths:
-  LOCKED + hit  → LOCKED (hits++, misses=0, filter updates)
-  LOCKED + miss → if misses ≥ miss_limit → LOST else LOCKED
-       LOST transition retains last estimate for reacquisition window.
-       Colour: #22c55e (green) — stable lock.
-"""
+# locked/handler.py - Isolated LOCKED (=TRACKING) algorithm — stable lock, retention
 
 from __future__ import annotations
 
 from common.colors import lock_color_hex
 from tracking.types import LockStatus
-
-# ============================================================
-# SECTION: LockedHandler — LOCKED (=TRACKING) algorithm
-# ============================================================
 
 class LockedHandler:
     """

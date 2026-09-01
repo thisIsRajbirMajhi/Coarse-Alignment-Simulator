@@ -1,13 +1,4 @@
-"""
-Module: tracking.constants
-Purpose: Single source for tracker limits & defaults (smoothing, miss, acquisition).
-Public API: TRACKER_LIMITS, TRACKER_DEFAULTS
-Notes: Consumed by TrackerConfig, ExponentialFilter, and StateMachine.
-"""
-
-# ============================================================
-# SECTION: Tracker limits
-# ============================================================
+# tracking/constants.py - Single source for tracker limits & defaults (smoothing, miss, acquisition)
 
 TRACKER_LIMITS: dict[str, tuple[float, float]] = {
     # Smoothing α in y[n]=α·y[n-1]+(1-α)·x[n] — 0=snap to detection, 1=ignore new

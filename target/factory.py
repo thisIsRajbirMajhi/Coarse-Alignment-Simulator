@@ -1,10 +1,4 @@
-"""
-Module: target.factory
-Purpose: Beacon collection creation — deterministic spread, seed-driven, config-aware.
-Public API: create_beacons, create_beacons_with_configs
-Notes: Centralizes factory logic previously inside motion.py for modularity.
-       Both functions produce non-overlapping initial positions.
-"""
+# target/factory.py - Beacon collection creation — deterministic spread, seed-driven, config-aware
 
 from __future__ import annotations
 
@@ -20,10 +14,6 @@ try:
 except Exception:
     BeaconConfig = None  # type: ignore
     MultiBeaconConfig = None  # type: ignore
-
-# ============================================================
-# SECTION: Core Factory — back-compat API
-# ============================================================
 
 def create_beacons(
     count: int,
@@ -80,10 +70,6 @@ def create_beacons(
             )
         )
     return beacons
-
-# ============================================================
-# SECTION: Config-Aware Factory — new API
-# ============================================================
 
 def create_beacons_with_configs(
     multi_config: "MultiBeaconConfig",

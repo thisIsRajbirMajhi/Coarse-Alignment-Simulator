@@ -1,32 +1,4 @@
-"""
-Module: disturbance.disturbances
-Purpose: Shim + facade for modular FSOC impairments — re-exports from submodules.
-Public API: apply_sensor_noise, apply_turbulence, apply_platform_vibration,
-           apply_camera_motion, apply_camera_motion_with_state, reset_disturbance_state,
-           plus state dicts for backward compat.
-Architecture (modular rebuild):
-  - constants.py : physical constants (wavelength, r0, freqs, etc.)
-  - state.py     : global temporal state + _elapsed_dt + reset_disturbance_state
-  - helpers.py   : r0_from_intensity, rytov_variance (pure)
-  - sensor_noise.py : apply_sensor_noise (stateless)
-  - turbulence.py   : _kolmogorov_displacement + apply_turbulence (dt-aware)
-  - vibration.py    : apply_platform_vibration (dt-aware)
-  - camera_motion.py: apply_camera_motion / apply_camera_motion_with_state (dt-aware)
-  - disturbances.py : this facade — well-commented sections, re-exports, backward compat
-
-Fixes applied (per spec):
-  - apply_turbulence(dt=None) now accepts sim-speed-scaled dt, falls back to wall-clock
-  - apply_camera_motion_with_state(dt=None) same, threaded through wrapper
-  - reset_disturbance_state() clears all three global dicts + per-instance drift
-  - GUI tick now passes dt=dt_eff to all four disturbances for lockstep evolution
-
-Notes: `from disturbance import disturbances as dist` still works.
-       Prefer `from disturbance.state import reset_disturbance_state` for reset.
-"""
-
-# ============================================================
-# SECTION: Re-exports — modular submodules
-# ============================================================
+# disturbance/disturbances.py - Shim + facade for modular FSOC impairments — re-exports from submodules
 
 from disturbance.camera_motion import apply_camera_motion, apply_camera_motion_with_state
 from disturbance.constants import *  # noqa: F401,F403 re-export for introspection

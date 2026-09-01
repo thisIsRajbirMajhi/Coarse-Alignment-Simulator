@@ -1,14 +1,4 @@
-"""
-Module: gui.panels.camera_panel
-Purpose: Camera controls — grouped into FOV/Optics, Pan-Tilt Mechanics, Display, Units.
-Public API: CameraPanel
-Params (11):
-  FOV/Optics: fov_width, fov_height
-  Pan-Tilt: pan_min/max, tilt_min/max, home_pan/tilt, max_slew_rate, resolution, latency_ms
-  Display: viewport_width/height, god_width/height
-  Units: pixel_scale_mrad (px → mrad/µrad)
-Notes: Modular, well-commented, HOT via configChanged. Each section is a QGroupBox.
-"""
+# gui/panels/camera_panel.py - Camera controls — grouped into FOV/Optics, Pan-Tilt Mechanics, Display, Units
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from gui.panels.base import BaseConfigPanel
@@ -27,10 +17,6 @@ from PyQt5.QtWidgets import (
 from camera.config import CameraConfig
 from camera.constants import CAMERA_LIMITS, DISPLAY_LIMITS
 from environment.constants import MAX_RES
-
-# ============================================================
-# SECTION: CameraPanel — 11 camera/viewport params (grouped)
-# ============================================================
 
 class CameraPanel(BaseConfigPanel):
     """
@@ -60,18 +46,14 @@ class CameraPanel(BaseConfigPanel):
         self._build_ui()
         self.set_config(self._initial, emit=False)
 
-    # ========================================================
     # Build UI — 4 groups
-    # ========================================================
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(10)
 
-        # ----------------------------------------------------
         # Group A: Field of View / Optics
-        # ----------------------------------------------------
         fov_box = QGroupBox("⬢  A  —  FIELD OF VIEW  •  OPTICS")
         fov_grid = QGridLayout(fov_box)
         fov_grid.setContentsMargins(12, 18, 12, 12)
@@ -87,9 +69,7 @@ class CameraPanel(BaseConfigPanel):
         fov_grid.addWidget(self.fov_h_spin, 0, 3)
         layout.addWidget(fov_box)
 
-        # ----------------------------------------------------
         # Group B: Pan-Tilt Mechanics
-        # ----------------------------------------------------
         mech_box = QGroupBox("◈  B  —  PAN-TILT MECHANICS")
         mech_grid = QGridLayout(mech_box)
         mech_grid.setContentsMargins(12, 18, 12, 12)
@@ -140,9 +120,7 @@ class CameraPanel(BaseConfigPanel):
 
         layout.addWidget(mech_box)
 
-        # ----------------------------------------------------
         # Group C: Display — viewport / God view on-screen sizes
-        # ----------------------------------------------------
         disp_box = QGroupBox("▣  C  —  DISPLAY  •  ON-SCREEN RENDERING")
         disp_grid = QGridLayout(disp_box)
         disp_grid.setContentsMargins(12, 18, 12, 12)
@@ -165,9 +143,7 @@ class CameraPanel(BaseConfigPanel):
         disp_grid.addWidget(self.god_h_spin, 1, 3)
         layout.addWidget(disp_box)
 
-        # ----------------------------------------------------
         # Group D: Units / Reporting — pixel → angle
-        # ----------------------------------------------------
         units_box = QGroupBox("◎  D  —  UNITS  •  PIXEL → ANGLE")
         units_grid = QGridLayout(units_box)
         units_grid.setContentsMargins(12, 18, 12, 12)
@@ -181,9 +157,7 @@ class CameraPanel(BaseConfigPanel):
         units_grid.addWidget(self.scale_hint, 0, 2, 1, 2)
         layout.addWidget(units_box)
 
-        # ----------------------------------------------------
         # Group E: Control Gain (kept here for cohesion)
-        # ----------------------------------------------------
         gain_box = QGroupBox("⟡  E  —  CONTROLLER GAIN")
         gain_box.setStyleSheet("QGroupBox { padding-top: 14px; }")
         gain_layout = QVBoxLayout(gain_box)
@@ -224,10 +198,7 @@ class CameraPanel(BaseConfigPanel):
         lbl.setStyleSheet("color:#334155; font-size:11px; font-weight:600;")
         return lbl
 
-
-    # ========================================================
     # Wiring — emit on any change (HOT, debounced in MainWindow)
-    # ========================================================
 
     def _wire_all(self):
         for w in [self.fov_w_spin, self.fov_h_spin, self.pan_min_spin, self.pan_max_spin, self.tilt_min_spin, self.tilt_max_spin, self.home_pan_spin, self.home_tilt_spin, self.viewport_w_spin, self.viewport_h_spin, self.god_w_spin, self.god_h_spin]:
@@ -247,9 +218,7 @@ class CameraPanel(BaseConfigPanel):
     def _wire_signals(self):
         self._wire_all()
 
-    # ========================================================
     # Config ↔ UI
-    # ========================================================
 
     def collect_config(self) -> CameraConfig:
         # Pan/Tilt ranges: 0 means auto → store as None

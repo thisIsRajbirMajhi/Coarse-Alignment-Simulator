@@ -1,23 +1,4 @@
-"""
-Module: tracking.tracker
-Purpose: Continuous tracking — orchestrates isolated phase handlers + smoothing filter.
-Public API: Tracker, LockStatus
-Architecture (refactored 2026-09 — isolated phase directories):
-  - detection/      : BeaconDetector (stateless per-frame blob via moments)
-  - searching/      : SearchingHandler + SearchingStrategy (SEARCHING → ACQUIRED)
-  - acquired/       : AcquiredHandler (ACQUIRED probation → LOCKED/TRACKING or LOST)
-  - locked/         : LockedHandler + LockedFilter (LOCKED/TRACKING stable, → LOST)
-  - lost/           : LostHandler (LOST hold, hit → ACQUIRED, grace → SEARCHING)
-  - tracking/       : Tracker (this file) — orchestrates filter + LockStateMachine
-    - tracking/filter.py : ExponentialFilter (y=α·y_prev+(1-α)·x) — now also aliased as locked.filter.LockedFilter
-    - tracking/state.py  : LockStateMachine — thin dispatcher to searching/acquired/locked/lost handlers
-    - tracking/config.py : TrackerConfig (smoothing, miss_limit, acquire_hits, grace)
-Notes:
-  - Detection runs every frame (stateless) — Tracker owns continuity (stateful) by delegating hits/misses
-    to isolated handlers per phase. Each handler lives in its own directory for independent evolution.
-  - Physics: Exponential filter is RC low-pass (τ=-1/ln α frames), rejects scintillation jitter.
-  - Lock definitions per spec: SEARCHING (estimate None), ACQUIRED (probation), TRACKING/LOCKED (≥3 hits, retention), LOST (keep estimate, grace).
-"""
+# tracking/tracker.py - Continuous tracking — orchestrates isolated phase handlers + smoothing filter
 
 from __future__ import annotations
 
@@ -28,10 +9,6 @@ from tracking.state import LockStatus, LockStateMachine
 
 # Re-export LockStatus for backward compat `from tracking.tracker import LockStatus`
 __all__ = ["Tracker", "LockStatus"]
-
-# ============================================================
-# SECTION: Tracker — filter + state orchestrator
-# ============================================================
 
 class Tracker:
     """
@@ -76,9 +53,7 @@ class Tracker:
         self._consecutive_hits: int = 0
         self._consecutive_misses: int = 0
 
-    # --------------------------------------------------------
     # Config bridge — hot-apply without rebuild
-    # --------------------------------------------------------
 
     def apply_config(self, config: TrackerConfig) -> None:
         cfg = config.validate()
@@ -91,9 +66,7 @@ class Tracker:
     def to_config(self) -> TrackerConfig:
         return TrackerConfig(smoothing=float(self.smoothing), miss_limit=int(self.miss_limit), acquire_hits=int(self._state.acquire_hits), lost_grace_mult=float(self._state.lost_grace_mult)).validate()
 
-    # --------------------------------------------------------
     # Update — per-frame detection (or None) → estimate + status
-    # --------------------------------------------------------
 
     def update(self, detection: tuple[float, float] | None) -> tuple[float, float] | None:
         """
@@ -136,9 +109,7 @@ class Tracker:
 
         return self.estimated_position
 
-    # --------------------------------------------------------
     # Reset — for GUI _reset()
-    # --------------------------------------------------------
 
     def reset(self) -> None:
         self.estimated_position = None

@@ -1,14 +1,4 @@
-"""
-Module: gui.panels.control_panel
-Purpose: Controller controls — type, gains, update rate, dead zone, output clamp.
-Public API: ControlPanel
-Groups:
-  A) Controller Type — P / PI / PID
-  B) Gains — Kp, Ki, Kd (Ki/Kd enabled per type)
-  C) Timing & Limits — Update rate (Hz), Dead zone (px), Output clamp (px/tick)
-Notes: Modular, well-commented, HOT via configChanged. Single source ControllerConfig.
-       Output clamp respects camera max_slew — panel shows hint "should be ≤ camera slew*dt".
-"""
+# gui/panels/control_panel.py - Controller controls — type, gains, update rate, dead zone, output clamp
 
 import numpy as np
 from PyQt5.QtCore import Qt, pyqtSignal
@@ -25,10 +15,6 @@ from PyQt5.QtWidgets import (
 from control.config import ControllerConfig
 from control.constants import CONTROL_LIMITS, CONTROLLER_TYPES
 from gui.panels.base import BaseConfigPanel
-
-# ============================================================
-# SECTION: ControlPanel — PID controller tuning
-# ============================================================
 
 class ControlPanel(BaseConfigPanel):
     """
@@ -49,18 +35,14 @@ class ControlPanel(BaseConfigPanel):
         self._build_ui()
         self.set_config(self._initial, emit=False)
 
-    # ========================================================
     # Build UI — 3 groups
-    # ========================================================
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(10)
 
-        # ----------------------------------------------------
         # Group A: Controller Type
-        # ----------------------------------------------------
         type_box = QGroupBox("⟡  A  —  CONTROLLER  TYPE")
         type_layout = QGridLayout(type_box)
         type_layout.setContentsMargins(12, 18, 12, 12)
@@ -82,9 +64,7 @@ class ControlPanel(BaseConfigPanel):
 
         layout.addWidget(type_box)
 
-        # ----------------------------------------------------
         # Group B: Gains — Kp, Ki, Kd
-        # ----------------------------------------------------
         gains_box = QGroupBox("⬢  B  —  GAINS  •  Kp / Ki / Kd")
         gains_grid = QGridLayout(gains_box)
         gains_grid.setContentsMargins(12, 18, 12, 12)
@@ -132,9 +112,7 @@ class ControlPanel(BaseConfigPanel):
 
         layout.addWidget(gains_box)
 
-        # ----------------------------------------------------
         # Group C: Timing & Limits — update rate, dead zone, clamp
-        # ----------------------------------------------------
         limits_box = QGroupBox("◎  C  —  TIMING  &  LIMITS")
         limits_grid = QGridLayout(limits_box)
         limits_grid.setContentsMargins(12, 18, 12, 12)
@@ -187,9 +165,7 @@ class ControlPanel(BaseConfigPanel):
         self.gain_spin.valueChanged.connect(self._on_gain_alias)
         self.kp_spin.valueChanged.connect(self._on_kp_sync_gain)
 
-    # ========================================================
     # Helpers — _label now from BaseConfigPanel
-    # ========================================================
 
     def _on_type_changed(self, txt: str) -> None:
         # Enable Ki/Kd per type
@@ -214,9 +190,7 @@ class ControlPanel(BaseConfigPanel):
             self.gain_spin.setValue(gv)
             self.gain_spin.blockSignals(False)
 
-    # ========================================================
     # Config ↔ UI
-    # ========================================================
 
     def collect_config(self) -> ControllerConfig:
         return ControllerConfig(

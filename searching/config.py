@@ -1,10 +1,4 @@
-"""
-Module: searching.config
-Purpose: Typed, validated configuration for SEARCHING phase.
-Public API: SearchingConfig
-Notes: Minimal — SEARCHING is intentionally lightweight. Most thresholds
-       belong to acquired/locked/lost. This config governs scan pattern & timeout.
-"""
+# searching/config.py - Typed, validated configuration for SEARCHING phase
 
 from __future__ import annotations
 
@@ -12,10 +6,6 @@ from dataclasses import dataclass
 
 from common.config_base import BaseValidatedConfig, clip_field
 from searching.constants import SEARCHING_DEFAULTS, SEARCHING_LIMITS, SCAN_PATTERNS
-
-# ============================================================
-# SECTION: SearchingConfig — scan & timeout
-# ============================================================
 
 @dataclass
 class SearchingConfig(BaseValidatedConfig):

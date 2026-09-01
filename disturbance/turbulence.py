@@ -1,11 +1,4 @@
-"""
-Module: disturbance.turbulence
-Purpose: Kolmogorov / von Kármán turbulence — phase screens, seeing blur, scintillation.
-Public API: apply_turbulence, _kolmogorov_displacement
-Notes: Now dt-aware — caller should pass sim-speed-scaled dt=dt_eff.
-       Falls back to wall-clock _elapsed_dt when dt not supplied (backward compat).
-       Temporal blending via frozen-flow α=exp(-dt/0.11).
-"""
+# disturbance/turbulence.py - Kolmogorov / von Kármán turbulence — phase screens, seeing blur, scintillation
 
 import math
 
@@ -16,10 +9,6 @@ from disturbance.constants import INNER_SCALE, OUTER_SCALE, RYTOV_CAP, TILT_TAU,
 from disturbance.dt_provider import DtProvider
 from disturbance.helpers import r0_from_intensity, rytov_variance
 from disturbance.state import _turb_state
-
-# ============================================================
-# SECTION: Kolmogorov displacement — FFT synthesis
-# ============================================================
 
 def _kolmogorov_displacement(
     h: int,
@@ -62,10 +51,6 @@ def _kolmogorov_displacement(
     dx = np.clip(dx, -max_disp, max_disp)
     dy = np.clip(dy, -max_disp, max_disp)
     return dx.astype(np.float32), dy.astype(np.float32)
-
-# ============================================================
-# SECTION: Turbulence — dt-aware, wall-clock fallback
-# ============================================================
 
 def apply_turbulence(
     frame: np.ndarray,

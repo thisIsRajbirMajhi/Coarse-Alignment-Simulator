@@ -1,25 +1,9 @@
-"""
-Module: acquired.handler
-Purpose: Isolated ACQUIRED algorithm — probation before lock.
-Public API: AcquiredHandler
-Notes: Owns ACQUIRED → TRACKING/LOST transitions. Requires acquire_hits consecutive
-       hits to confirm lock, else miss_limit consecutive misses to demote to LOST.
-
-Maths:
-  ACQUIRED + hit  → if hits ≥ acquire_hits → TRACKING else ACQUIRED
-  ACQUIRED + miss → if misses ≥ miss_limit → LOST else ACQUIRED
-       Counters are sequential; hit resets misses, miss resets hits.
-       Colour: #06b6d4 (cyan) — provisional lock.
-"""
+# acquired/handler.py - Isolated ACQUIRED algorithm — probation before lock
 
 from __future__ import annotations
 
 from common.colors import lock_color_hex
 from tracking.types import LockStatus
-
-# ============================================================
-# SECTION: AcquiredHandler — ACQUIRED algorithm
-# ============================================================
 
 class AcquiredHandler:
     """

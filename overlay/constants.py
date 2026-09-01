@@ -1,13 +1,4 @@
-"""
-Module: overlay.constants
-Purpose: Single source for overlay limits & defaults (crosshair, lock, error).
-Public API: OVERLAY_LIMITS, OVERLAY_DEFAULTS, LOCK_COLOR_DEFAULTS
-Notes: Consumed by OverlayConfig and OverlayPanel for consistent clamping.
-"""
-
-# ============================================================
-# SECTION: Crosshair limits
-# ============================================================
+# overlay/constants.py - Single source for overlay limits & defaults (crosshair, lock, error)
 
 OVERLAY_LIMITS: dict[str, tuple[float, float]] = {
     # Crosshair

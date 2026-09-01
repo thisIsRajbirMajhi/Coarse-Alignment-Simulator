@@ -1,12 +1,4 @@
-"""
-Module: gui.core.renderer
-Purpose: Viewport, crosshair, and screen rendering for camera FOV + God-view.
-Public API: Renderer, CrosshairStyle, ScreenSpec
-Notes: Modular, well-commented, stateless. Crosshair and screens are now
-       configurable via OverlayConfig (crosshair style/size/gap/thickness/dot,
-       lock colors/circle/pulse, error line/text/units) and respect CameraConfig
-       pixel→angle. Delegates overlay drawing to overlay.renderer.OverlayRenderer.
-"""
+# gui/core/renderer.py - Viewport, crosshair, and screen rendering for camera FOV + God-view
 
 import math
 
@@ -27,10 +19,6 @@ except Exception:
     OverlayConfig = None  # type: ignore
     OverlayRenderer = None  # type: ignore
 
-# ============================================================
-# SECTION: Crosshair & Screen specs (configurable, legacy)
-# ============================================================
-
 class CrosshairStyle:
     """Legacy crosshair spec — kept for backward compat; new code uses OverlayConfig."""
     def __init__(self, gap: int = 10, arm: int = 16, color=(230, 230, 230), thickness: int = 1, show_center_dot: bool = True, show_coords: bool = False):
@@ -42,10 +30,6 @@ class ScreenSpec:
     def __init__(self, viewport_w: int = 400, viewport_h: int = 300, god_w: int = 400, god_h: int = 300, keep_aspect: bool = True):
         self.viewport_w = int(viewport_w); self.viewport_h = int(viewport_h)
         self.god_w = int(god_w); self.god_h = int(god_h); self.keep_aspect = bool(keep_aspect)
-
-# ============================================================
-# SECTION: Renderer — stateless helpers (now overlay-aware)
-# ============================================================
 
 class Renderer:
     """
@@ -114,9 +98,7 @@ class Renderer:
         Renderer.draw_reticle(img, (cx, cy), gap=gap, arm=arm, color=style.color, thickness=style.thickness, show_dot=style.show_center_dot)
         Renderer.draw_corner_brackets(img, margin=4, length=max(8, min(w,h)//20), color=(180, 180, 180), thickness=1)
 
-    # --------------------------------------------------------
     # Viewport — FOV with overlay (crosshair/lock/error) + pulse
-    # --------------------------------------------------------
 
     @staticmethod
     def render_viewport(fov_frame: np.ndarray, camera, beacons, target, tracker, all_dets: list[dict] | None, overlay=None, pulse_progress: float = 0.0, pixel_scale_mrad: float | None = None) -> np.ndarray:

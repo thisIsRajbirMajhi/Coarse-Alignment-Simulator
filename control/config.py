@@ -1,10 +1,4 @@
-"""
-Module: control.config
-Purpose: Typed, validated configuration for PID controller (robust, modular).
-Public API: ControllerConfig
-Notes: Single source for GUI and PIDController. HOT-reloaded, serializable.
-       Output clamp should respect camera max_slew_rate — enforced in controller, not here.
-"""
+# control/config.py - Typed, validated configuration for PID controller (robust, modular)
 
 from __future__ import annotations
 
@@ -12,10 +6,6 @@ from dataclasses import dataclass
 
 from common.config_base import BaseValidatedConfig, clip_field
 from control.constants import CONTROL_DEFAULTS, CONTROL_LIMITS, CONTROLLER_TYPES
-
-# ============================================================
-# SECTION: ControllerConfig — all 7 controller params
-# ============================================================
 
 @dataclass
 class ControllerConfig(BaseValidatedConfig):

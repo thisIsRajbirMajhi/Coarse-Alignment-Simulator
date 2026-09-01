@@ -1,14 +1,4 @@
-"""
-Module: locked.constants
-Purpose: Single source for LOCKED (=TRACKING) limits & defaults.
-Public API: LOCKED_LIMITS, LOCKED_DEFAULTS
-Notes: LOCKED is stable tracking — retention metric counts these frames.
-       Smoothing and miss tolerance govern stability vs responsiveness.
-"""
-
-# ============================================================
-# SECTION: Locked limits — stable tracking
-# ============================================================
+# locked/constants.py - Single source for LOCKED (=TRACKING) limits & defaults
 
 LOCKED_LIMITS: dict[str, tuple[float, float]] = {
     # Smoothing α in y[n]=α·y[n-1]+(1-α)·x[n] — 0=snap, 0.95=heavy

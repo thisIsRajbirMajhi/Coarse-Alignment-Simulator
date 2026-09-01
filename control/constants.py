@@ -1,13 +1,4 @@
-"""
-Module: control.constants
-Purpose: Single source for controller limits & defaults (gains, rate, dead zone, clamp).
-Public API: CONTROL_LIMITS, CONTROL_DEFAULTS, CONTROLLER_TYPES
-Notes: Consumed by ControllerConfig and PIDController for consistent clamping.
-"""
-
-# ============================================================
-# SECTION: Controller limits
-# ============================================================
+# control/constants.py - Single source for controller limits & defaults (gains, rate, dead zone, clamp)
 
 CONTROL_LIMITS: dict[str, tuple[float, float]] = {
     # Gains — per-axis, applied to px error → px correction

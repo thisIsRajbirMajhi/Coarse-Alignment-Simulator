@@ -1,16 +1,4 @@
-"""
-Module: gui.multi_beacon_panel
-Purpose: Multi-beacon manager — counts, target selection, and per-beacon collection.
-Public API: MultiBeaconPanel
-Params:
-  1) Beacon Count  — 1..16 (GUI 1..12) total beacons
-  2) Target Index  — 0..beacon_count-1 tracked beacon (others = distractors)
-  3) Randomize All — reroll every per-beacon parameter at once
-Also owns:
-  - Scrollable list of BeaconPanel (one per beacon, 8 params each)
-  - Per-beacon Random Position handling via seed + bounds
-Notes: Emits multiConfigChanged(MultiBeaconConfig) HOT. Modular, grouped, well commented.
-"""
+# gui/multi_beacon_panel.py - Multi-beacon manager — counts, target selection, and per-beacon collection
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
@@ -29,10 +17,6 @@ from PyQt5.QtWidgets import (
 from gui.beacon_panel import BeaconPanel
 from target.config import BeaconConfig, MultiBeaconConfig
 from target.constants import MULTI_BEACON_LIMITS
-
-# ============================================================
-# SECTION: MultiBeaconPanel — Collection manager
-# ============================================================
 
 class MultiBeaconPanel(QWidget):
     """
@@ -57,18 +41,12 @@ class MultiBeaconPanel(QWidget):
         self._build_ui()
         self.set_config(self._config, emit=False)
 
-    # ========================================================
-    # SECTION: UI — Header + Scrollable per-beacon list
-    # ========================================================
-
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(10)
 
-        # ----------------------------------------------------
         # Header: Beacon Count + Target Index + Randomize All
-        # ----------------------------------------------------
         # Multi-beacon controls — grouped in one QGroupBox for clear separation
         header_box = QGroupBox("⬢  MULTI-BEACON  —  COUNT & TARGET")
         header_grid = QGridLayout(header_box)
@@ -117,9 +95,7 @@ class MultiBeaconPanel(QWidget):
 
         root.addWidget(header_box)
 
-        # ----------------------------------------------------
         # Per-Beacon scroll area — one BeaconPanel per beacon
-        # ----------------------------------------------------
         # Each BeaconPanel exposes 8 per-beacon params (toggle, profile, seed, speed, brightness, radius, hitbox, center)
         self.per_beacon_box = QGroupBox("◈  PER-BEACON  —  Every Parameter Live")
         per_outer = QVBoxLayout(self.per_beacon_box)
@@ -150,10 +126,6 @@ class MultiBeaconPanel(QWidget):
         self.spin_target_index.valueChanged.connect(self._on_target_changed)
         self.btn_randomize_all.clicked.connect(self.randomizeAllRequested.emit)
         self.btn_randomize_all.clicked.connect(self._emit_multi_config)
-
-    # ========================================================
-    # SECTION: Helpers
-    # ========================================================
 
     def _label(self, text: str) -> QLabel:
         lbl = QLabel(text)
@@ -200,10 +172,6 @@ class MultiBeaconPanel(QWidget):
         except Exception:
             pass
 
-    # ========================================================
-    # SECTION: Per-Beacon Panel Management
-    # ========================================================
-
     def _rebuild_panels(self, beacons: list[BeaconConfig] | None = None) -> None:
         """Rebuild BeaconPanel list to match beacon_count (preserves configs if given)."""
         # Clear old
@@ -246,10 +214,6 @@ class MultiBeaconPanel(QWidget):
         self.randomizePositionRequested.emit(int(beacon_id))
         # Also emit multi config for dirty tracking
         self._emit_multi_config()
-
-    # ========================================================
-    # SECTION: Config ↔ UI Sync
-    # ========================================================
 
     def collect_multi_config(self) -> MultiBeaconConfig:
         """Read current UI (header + per-beacon) into validated MultiBeaconConfig."""

@@ -1,9 +1,4 @@
-"""
-Module: acquired.config
-Purpose: Typed, validated configuration for ACQUIRED phase.
-Public API: AcquiredConfig
-Notes: Probation tuning — how many hits to confirm lock, how many misses to lose probation.
-"""
+# acquired/config.py - Typed, validated configuration for ACQUIRED phase
 
 from __future__ import annotations
 
@@ -11,10 +6,6 @@ from dataclasses import dataclass
 
 from acquired.constants import ACQUIRED_DEFAULTS, ACQUIRED_LIMITS
 from common.config_base import BaseValidatedConfig, clip_field
-
-# ============================================================
-# SECTION: AcquiredConfig — probation thresholds
-# ============================================================
 
 @dataclass
 class AcquiredConfig(BaseValidatedConfig):

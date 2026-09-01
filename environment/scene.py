@@ -1,24 +1,4 @@
-"""
-Module: environment.scene
-Purpose: Realistic 2D sky/background — thin orchestrator delegating to modular sub-builders.
-Public API: Scene, MAX_RES, MIN_RES
-Architecture:
-  - constants.py : limits & defaults (single source)
-  - config.py    : EnvironmentConfig dataclass (10 params, typed)
-  - gradient.py  : sky gradient (zenith → horizon)
-  - vignetting.py: radial edge darkening
-  - haze.py      : low-frequency fog texture + dynamic drift
-  - stars.py     : starfield / clutter generation & drawing
-  - scene.py     : orchestration, caching, dynamic time, public API
-Notes:
-  - Backwards compatible: old Scene(width, height, seed, ...) still works.
-  - New path: Scene(config=EnvironmentConfig(...)) or regenerate_from_config().
-  - Crystal sharp: no Gaussian blur on final composite.
-"""
-
-# ============================================================
-# SECTION: Imports
-# ============================================================
+# environment/scene.py - Realistic 2D sky/background — thin orchestrator delegating to modular sub-builde
 
 import numpy as np
 
@@ -34,10 +14,6 @@ try:
     from environment.config import EnvironmentConfig  # noqa: F401
 except Exception:
     EnvironmentConfig = None  # type: ignore
-
-# ============================================================
-# SECTION: Scene — Orchestrator
-# ============================================================
 
 class Scene:
     """
@@ -61,9 +37,7 @@ class Scene:
                                             regenerate() / regenerate_from_config() rebuilds
     """
 
-    # --------------------------------------------------------
     # Constructor — supports legacy kwargs and new config object
-    # --------------------------------------------------------
 
     def __init__(
         self,
@@ -122,10 +96,6 @@ class Scene:
 
         self._build_background()
 
-    # ========================================================
-    # SECTION: Private — Config Apply Helper
-    # ========================================================
-
     def _apply_config(self, config, rebuild: bool = True) -> None:
         """Apply a validated EnvironmentConfig to this Scene's fields."""
         # Use to_scene_kwargs for consistent unit conversion
@@ -181,10 +151,6 @@ class Scene:
             self._rng = np.random.default_rng(self.seed)
             self._build_background()
 
-    # ========================================================
-    # SECTION: Private — Background Build (delegates to submodules)
-    # ========================================================
-
     def _build_background(self) -> None:
         """
         Compose the full background in layered order:
@@ -197,19 +163,13 @@ class Scene:
         rng = self._rng
         w, h = self.width, self.height
 
-        # ----------------------------------------------------
         # 1) Sky gradient
-        # ----------------------------------------------------
         base = build_gradient(w, h, self.bg_top, self.bg_bottom)
 
-        # ----------------------------------------------------
         # 2) Vignetting — edge darkening
-        # ----------------------------------------------------
         base = apply_vignetting(base, self.vignetting)
 
-        # ----------------------------------------------------
         # 3) Haze — low-frequency filtered noise
-        # ----------------------------------------------------
         self._haze_base = build_haze_field(w, h, rng, self.haze_strength)
         if self.haze_strength > 1e-6:
             base += self._haze_base[:, :, None]
@@ -218,9 +178,7 @@ class Scene:
         # Save base without stars for dynamic twinkle path — crystal sharp
         self._base_no_stars = base.astype(np.uint8)
 
-        # ----------------------------------------------------
         # 4) Starfield — magnitude-tiered generation
-        # ----------------------------------------------------
         star_data = generate_starfield(w, h, rng, self._star_count, self.star_brightness_scale)
         self._stars_xy = star_data["xy"]
         self._star_base_brightness = star_data["brightness"]
@@ -238,18 +196,10 @@ class Scene:
         self._static_with_stars = static  # alias for clarity
         self._time = 0.0
 
-    # ========================================================
-    # SECTION: Public — Dynamic Update
-    # ========================================================
-
     def update(self, dt: float) -> None:
         """Advance internal time for dynamic effects. Call once per tick."""
         if self.dynamic:
             self._time += dt * self.dynamic_speed
-
-    # ========================================================
-    # SECTION: Public — Frame Retrieval
-    # ========================================================
 
     def get_frame(self) -> np.ndarray:
         """
@@ -283,10 +233,6 @@ class Scene:
             self._time,
         )
         return frame
-
-    # ========================================================
-    # SECTION: Public — Regeneration
-    # ========================================================
 
     def regenerate(
         self,
@@ -353,10 +299,6 @@ class Scene:
         self._apply_config(config, rebuild=False)
         self._rng = np.random.default_rng(self.seed)
         self._build_background()
-
-    # ========================================================
-    # SECTION: Convenience Helpers
-    # ========================================================
 
     def resize(self, width: int, height: int) -> None:
         """Change resolution and regenerate (back-compat helper)."""

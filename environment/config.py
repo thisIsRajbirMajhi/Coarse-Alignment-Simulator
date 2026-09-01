@@ -1,11 +1,4 @@
-"""
-Module: environment.config
-Purpose: Typed, validated configuration for the Environment (10 parameters).
-Public API: EnvironmentConfig
-Notes: Single source of truth — consumed by Scene and EnvironmentPanel.
-       Immediate migration: MainWindow now stores self.env_config (replaces
-       6 separate _env_* attributes).
-"""
+# environment/config.py - Typed, validated configuration for the Environment (10 parameters)
 
 from __future__ import annotations
 
@@ -24,10 +17,6 @@ from environment.constants import (
 
 if TYPE_CHECKING:
     from environment.scene import Scene
-
-# ============================================================
-# SECTION: EnvironmentConfig — Dataclass
-# ============================================================
 
 @dataclass
 class EnvironmentConfig(BaseValidatedConfig):
@@ -48,40 +37,26 @@ class EnvironmentConfig(BaseValidatedConfig):
     LIMITS = LIMITS
     DEFAULTS = DEFAULTS
 
-    # --------------------------------------------------------
     # World (px) — full 2D scene size
-    # --------------------------------------------------------
     world_width: int = DEFAULTS["world_width"]
     world_height: int = DEFAULTS["world_height"]
 
-    # --------------------------------------------------------
     # Seed — reproducible RNG
-    # --------------------------------------------------------
     seed: int | None = DEFAULTS["seed"]
 
-    # --------------------------------------------------------
     # Atmosphere — gradient + fog + vignetting
-    # --------------------------------------------------------
     bg_top: int = DEFAULTS["bg_top"]
     bg_bottom: int = DEFAULTS["bg_bottom"]
     vignetting_pct: int = DEFAULTS["vignetting_pct"]
     haze_pct: int = DEFAULTS["haze_pct"]
 
-    # --------------------------------------------------------
     # Starfield / Clutter
-    # --------------------------------------------------------
     star_count: int = DEFAULTS["star_count"]
     star_brightness: float = DEFAULTS["star_brightness"]
 
-    # --------------------------------------------------------
     # Dynamics — time-varying animation
-    # --------------------------------------------------------
     dynamic: bool = DEFAULTS["dynamic"]
     dynamic_speed: float = DEFAULTS["dynamic_speed"]
-
-    # ========================================================
-    # SECTION: Validation
-    # ========================================================
 
     def validate(self) -> "EnvironmentConfig":
         """
@@ -100,10 +75,6 @@ class EnvironmentConfig(BaseValidatedConfig):
         self.dynamic = bool(self.dynamic)
         self.dynamic_speed = float(clip_field(self.dynamic_speed, *LIMITS["dynamic_speed"]))
         return self
-
-    # ========================================================
-    # SECTION: Conversions — Scene ↔ Config
-    # ========================================================
 
     def to_scene_kwargs(self) -> dict:
         """
@@ -148,10 +119,6 @@ class EnvironmentConfig(BaseValidatedConfig):
             dynamic=bool(scene.dynamic),
             dynamic_speed=float(scene.dynamic_speed),
         ).validate()
-
-    # ========================================================
-    # SECTION: Serialization helpers
-    # ========================================================
 
     def to_dict(self) -> dict:
         """Return a plain dict (e.g., for logging or export)."""

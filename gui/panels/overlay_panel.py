@@ -1,13 +1,4 @@
-"""
-Module: gui.panels.overlay_panel
-Purpose: Crosshair / tracking overlay controls — intuitive grouped sections.
-Public API: OverlayPanel
-Groups:
-  A) Crosshair — style, size, gap, thickness, centre dot
-  B) Lock Status — colors per state, circle radius/thickness, pulse
-  C) Error Visualization — line, text, units
-Notes: Modular, well-commented, HOT via configChanged. Each control emits validated OverlayConfig.
-"""
+# gui/panels/overlay_panel.py - Crosshair / tracking overlay controls — intuitive grouped sections
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor
@@ -30,10 +21,6 @@ from PyQt5.QtWidgets import (
 from overlay.config import OverlayConfig
 from overlay.constants import CROSSHAIR_STYLES, ERROR_UNITS_OPTIONS, LOCK_COLOR_DEFAULTS, OVERLAY_LIMITS
 
-# ============================================================
-# SECTION: OverlayPanel — Crosshair / Tracking Overlay
-# ============================================================
-
 class OverlayPanel(BaseConfigPanel):
     """
     Overlay tab — controls for crosshair, lock, and error.
@@ -52,18 +39,14 @@ class OverlayPanel(BaseConfigPanel):
         self._build_ui()
         self.set_config(self._initial, emit=False)
 
-    # ========================================================
     # Build UI — 3 grouped sections
-    # ========================================================
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(10)
 
-        # ----------------------------------------------------
         # Group A: Crosshair / Tracking Overlay
-        # ----------------------------------------------------
         cross_box = QGroupBox("◈  A  —  CROSSHAIR  •  TRACKING OVERLAY")
         cross_grid = QGridLayout(cross_box)
         cross_grid.setContentsMargins(12, 18, 12, 12)
@@ -124,9 +107,7 @@ class OverlayPanel(BaseConfigPanel):
 
         layout.addWidget(cross_box)
 
-        # ----------------------------------------------------
         # Group B: Lock Status Indication
-        # ----------------------------------------------------
         lock_box = QGroupBox("◎  B  —  LOCK  STATUS")
         lock_grid = QGridLayout(lock_box)
         lock_grid.setContentsMargins(12, 18, 12, 12)
@@ -190,9 +171,7 @@ class OverlayPanel(BaseConfigPanel):
 
         layout.addWidget(lock_box)
 
-        # ----------------------------------------------------
         # Group C: Error Visualization
-        # ----------------------------------------------------
         err_box = QGroupBox("⬢  C  —  ERROR  VISUALIZATION")
         err_grid = QGridLayout(err_box)
         err_grid.setContentsMargins(12, 18, 12, 12)
@@ -230,9 +209,7 @@ class OverlayPanel(BaseConfigPanel):
         # Dot radius enabled only if dot checked
         self.dot_check.toggled.connect(lambda checked: self.dot_radius_spin.setEnabled(checked))
 
-    # ========================================================
     # Helpers
-    # ========================================================
 
     def _label(self, text: str) -> QLabel:
         lbl = QLabel(text)
@@ -257,9 +234,7 @@ class OverlayPanel(BaseConfigPanel):
             btn.setStyleSheet(f"background:{qcolor.name()}; border:1px solid #cbd5e1; border-radius:4px;")
             btn._bgr = tuple(int(x) for x in bgr)  # type: ignore
 
-    # ========================================================
     # Config ↔ UI
-    # ========================================================
 
     def collect_config(self) -> OverlayConfig:
         # Gather colors from buttons

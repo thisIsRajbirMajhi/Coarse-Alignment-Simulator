@@ -1,15 +1,6 @@
-"""
-Module: detection.constants
-Purpose: Single source for detector limits & defaults.
-Public API: DETECTOR_LIMITS, DETECTOR_DEFAULTS, MORPH_KERNEL
-Notes: Consumed by DetectorConfig and BeaconDetector for consistent clamping.
-"""
+# detection/constants.py - Single source for detector limits & defaults
 
 import numpy as np
-
-# ============================================================
-# SECTION: Detector limits — slider ranges and physical bounds
-# ============================================================
 
 DETECTOR_LIMITS: dict[str, tuple[int, int]] = {
     # Brightness threshold — binary segmentation T in I(x,y) > T

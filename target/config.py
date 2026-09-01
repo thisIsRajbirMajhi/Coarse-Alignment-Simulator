@@ -1,11 +1,4 @@
-"""
-Module: target.config
-Purpose: Typed, validated configuration for Beacon/Target system.
-Public API: BeaconConfig, MultiBeaconConfig
-Notes: Immediate migration — MainWindow stores beacon state via these
-       dataclasses. Each BeaconConfig maps 1:1 to a Target instance.
-       All 8 per-beacon params + toggle/profile/seed are typed.
-"""
+# target/config.py - Typed, validated configuration for Beacon/Target system
 
 from __future__ import annotations
 
@@ -19,10 +12,6 @@ from target.constants import BEACON_DEFAULTS, BEACON_LIMITS, MULTI_BEACON_DEFAUL
 
 if TYPE_CHECKING:
     from target.motion import MotionProfile, Target
-
-# ============================================================
-# SECTION: BeaconConfig — 8 per-beacon parameters
-# ============================================================
 
 @dataclass
 class BeaconConfig(BaseValidatedConfig):
@@ -45,15 +34,11 @@ class BeaconConfig(BaseValidatedConfig):
     LIMITS = BEACON_LIMITS
     DEFAULTS = BEACON_DEFAULTS
 
-    # --------------------------------------------------------
     # Toggle & identity
-    # --------------------------------------------------------
     enabled: bool = BEACON_DEFAULTS["enabled"]
     beacon_id: int = 0
 
-    # --------------------------------------------------------
     # Motion — profile + starting position
-    # --------------------------------------------------------
     profile: str = BEACON_DEFAULTS["profile"]  # MotionProfile value string
     position_seed: int = BEACON_DEFAULTS["position_seed"]
     x: float = BEACON_DEFAULTS["x"]
@@ -61,21 +46,15 @@ class BeaconConfig(BaseValidatedConfig):
     heading: float | None = BEACON_DEFAULTS["heading"]
     speed: float = BEACON_DEFAULTS["speed"]
 
-    # --------------------------------------------------------
     # Photometric — visual appearance
-    # --------------------------------------------------------
     brightness: int = BEACON_DEFAULTS["brightness"]
     radius: int = BEACON_DEFAULTS["radius"]
 
-    # --------------------------------------------------------
     # Detection geometry — hitbox vs center
-    # --------------------------------------------------------
     hitbox_radius: int = BEACON_DEFAULTS["hitbox_radius"]
     center_radius: int = BEACON_DEFAULTS["center_radius"]
 
-    # ========================================================
     # Validation — clamp to BEACON_LIMITS
-    # ========================================================
 
     def validate(self) -> "BeaconConfig":
         """Clamp all numeric fields via clip_field, return self."""
@@ -98,9 +77,7 @@ class BeaconConfig(BaseValidatedConfig):
         self.profile = str(self.profile).lower()
         return self
 
-    # ========================================================
     # Conversions — Target ↔ BeaconConfig
-    # ========================================================
 
     @classmethod
     def from_target(cls, target: "Target") -> "BeaconConfig":
@@ -194,11 +171,6 @@ class BeaconConfig(BaseValidatedConfig):
             if k in data:
                 merged[k] = data[k]
         return cls(**merged).validate()
-
-
-# ============================================================
-# SECTION: MultiBeaconConfig — collection level
-# ============================================================
 
 @dataclass
 class MultiBeaconConfig(BaseValidatedConfig):

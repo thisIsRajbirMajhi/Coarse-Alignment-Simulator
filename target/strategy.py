@@ -1,10 +1,4 @@
-"""
-Module: target.strategy
-Purpose: Strategy interface for motion profiles — eliminates God method Target.update 205 lines.
-Public API: MotionStrategy, MotionContext
-Notes: Each profile (linear, curved, random_walk etc) implements step() pure.
-       Target holds strategy instance and delegates. Extracts bounce, photometry, hitbox.
-"""
+# target/strategy.py - Strategy interface for motion profiles — eliminates God method Target
 
 from __future__ import annotations
 
@@ -17,7 +11,6 @@ import numpy as np
 if TYPE_CHECKING:
     from target.motion import Target
 
-
 class MotionContext:
     """Data passed to strategy.step — dt, bounds, t, rng."""
 
@@ -27,7 +20,6 @@ class MotionContext:
         self.t = float(t)
         self.rng = rng
         self.W, self.H = float(bounds[0]), float(bounds[1])
-
 
 class MotionStrategy(ABC):
     """Abstract motion profile — one step per tick."""
@@ -48,13 +40,11 @@ class MotionStrategy(ABC):
     def wrap_angle(a: float) -> float:
         return float(a % (2 * math.pi))
 
-
 # Minimal example strategies — full 10-profile split can follow same pattern incrementally
 class StationaryStrategy(MotionStrategy):
     def step(self, target: "Target", ctx: MotionContext) -> None:
         target.x = float(np.clip(target.x + float(ctx.rng.normal(0, 0.12)), 0, ctx.W))
         target.y = float(np.clip(target.y + float(ctx.rng.normal(0, 0.12)), 0, ctx.H))
-
 
 class LinearStrategy(MotionStrategy):
     def step(self, target: "Target", ctx: MotionContext) -> None:

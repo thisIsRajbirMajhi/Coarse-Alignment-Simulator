@@ -1,10 +1,4 @@
-"""
-Module: disturbance.vibration
-Purpose: Harmonic platform vibration — jitter PSD + OU micro-vibration, well-commented.
-Public API: apply_platform_vibration
-Notes: dt-aware — caller should pass sim-speed-scaled dt=dt_eff.
-       Falls back to wall-clock _elapsed_dt when dt not supplied.
-"""
+# disturbance/vibration.py - Harmonic platform vibration — jitter PSD + OU micro-vibration, well-commented
 
 import math
 
@@ -13,10 +7,6 @@ import numpy as np
 from disturbance.constants import VIBRATION_BASE_AMPS, VIBRATION_FREQS, VIBRATION_OU_TAU
 from disturbance.dt_provider import DtProvider
 from disturbance.state import _vib_state
-
-# ============================================================
-# SECTION: Vibration — harmonic + OU
-# ============================================================
 
 def apply_platform_vibration(
     pan: float,

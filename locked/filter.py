@@ -1,12 +1,4 @@
-"""
-Module: locked.filter
-Purpose: Isolated smoothing filter for LOCKED phase — first-order IIR.
-Public API: LockedFilter (alias for tracking filter, scoped to locked)
-Notes: Re-exports ExponentialFilter with LOCKED-scoped naming.
-       Keeping filter in locked isolates LOCKED's algorithmic core (tracking)
-       while tracking package orchestrates. Single source remains tracking.filter
-       for backward compat; this module provides the locked-scoped alias/view.
-"""
+# locked/filter.py - Isolated smoothing filter for LOCKED phase — first-order IIR
 
 from __future__ import annotations
 

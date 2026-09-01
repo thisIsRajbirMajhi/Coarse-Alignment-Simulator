@@ -1,17 +1,6 @@
-"""
-Module: environment.stars
-Purpose: Starfield / clutter generation, storage, and rendering helpers.
-Physics: Magnitude distribution via exponential tiers + 2% rare-bright
-         tail; size 1 px if mag ≤90 else 3×3 soft kernel (0.5/0.7/1.0).
-Public API: generate_starfield, draw_static_stars, draw_twinkling_stars
-Notes: Keeps crystal sharp — no Gaussian blur on star composite.
-"""
+# environment/stars.py - Starfield / clutter generation, storage, and rendering helpers
 
 import numpy as np
-
-# ============================================================
-# SECTION: Generation
-# ============================================================
 
 def generate_starfield(
     width: int,
@@ -81,10 +70,6 @@ def generate_starfield(
         "freqs": freqs,
         "subpix": subpix,
     }
-
-# ============================================================
-# SECTION: Drawing Helpers (shared loop extracted to avoid duplication)
-# ============================================================
 
 def _draw_star_into(frame: np.ndarray, x: int, y: int, brightness: float, size: int) -> None:
     """

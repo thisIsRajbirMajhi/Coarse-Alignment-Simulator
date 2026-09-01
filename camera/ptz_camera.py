@@ -1,19 +1,4 @@
-"""
-Module: camera.ptz_camera
-Purpose: Virtual pan-tilt camera with full mechanics simulation.
-Public API: PTZCamera
-Architecture:
-  - constants.py : CAMERA_LIMITS/DEFAULTS (FOV, slew, resolution, latency, pan/tilt)
-  - config.py    : CameraConfig (11 params, validated, scene-aware autos)
-  - optics.py    : pixel ↔ mrad/µrad conversions
-  - ptz_camera.py: PTZCamera — FOV cropping + pan/tilt mechanics + latency queue
-Notes:
-  - Pan/tilt stored as scene-center (x,y). FOV rect derived from center.
-  - Mechanics: max slew rate caps delta per tick, resolution quantizes steps,
-    latency queues moves, pan/tilt ranges clamp to scene + configured min/max.
-  - Home/centre is default on start/reset.
-  - Capture() remains sole external API — swappable without touching other modules.
-"""
+# camera/ptz_camera.py - Virtual pan-tilt camera with full mechanics simulation
 
 from __future__ import annotations
 
@@ -25,10 +10,6 @@ import numpy as np
 
 from camera.config import CameraConfig
 from camera.optics import pixel_to_mrad, pixel_to_urad
-
-# ============================================================
-# SECTION: PTZCamera — Full mechanics
-# ============================================================
 
 class PTZCamera:
     """
@@ -93,9 +74,7 @@ class PTZCamera:
         # Keep FOV in sync with config
         self._sync_fov_from_config()
 
-    # ========================================================
     # Private — helpers for mechanics
-    # ========================================================
 
     def _sync_fov_from_config(self) -> None:
         self.fov_width = int(self.config.fov_width)
@@ -158,9 +137,7 @@ class PTZCamera:
         self.tilt += float(d_tilt)
         self._clamp_to_range()
 
-    # ========================================================
     # Public — movement with latency queue
-    # ========================================================
 
     def move(self, d_pan: float, d_tilt: float, dt: float | None = None) -> None:
         """
@@ -237,9 +214,7 @@ class PTZCamera:
         # Clear stale pending that may exceed new limits
         # (keep queue but will be clamped on execution)
 
-    # ========================================================
     # Public — FOV rect and capture (pure cropping, no mechanics)
-    # ========================================================
 
     def get_fov_rect(self) -> tuple[int, int, int, int]:
         """Return (x0, y0, x1, y1) of current FOV window in scene coords."""
@@ -270,9 +245,7 @@ class PTZCamera:
                 x0c - x0: x0c - x0 + crop.shape[1]] = crop
         return out
 
-    # ========================================================
     # Reporting — angular errors
-    # ========================================================
 
     def pixel_error_to_mrad(self, px_error: float) -> float:
         return pixel_to_mrad(px_error, self.config.pixel_scale_mrad)

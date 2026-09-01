@@ -1,18 +1,4 @@
-"""
-Module: gui.main_window
-Purpose: Main application window — orchestrates video, control panels, and simulation tick.
-Architecture (modular refactor):
-  - gui.styles          : APP_STYLE, SCENE_SIZE, FOV_SIZE, TICK_MS
-  - gui.windows.control_window : ControlDashboardWindow
-  - gui.panels.*        : Dashboard, Global, Camera, Disturbances, Environment, Beacons
-  - gui.core.renderer   : Renderer (viewport/minimap drawing)
-  - gui.mixins.state_mixin : dirty/HOT/snapshot handling
-  - target/environment  : typed configs (immediate migration)
-Public API: MainWindow
-Notes: Thin orchestrator — delegates panel building, rendering, and simulation
-       to modular helpers. Keeps ~2300-line monolith split into focused modules
-       with structured section comments.
-"""
+# gui/main_window.py - Main application window — orchestrates video, control panels, and simulation tic
 
 import math
 import random
@@ -133,7 +119,6 @@ class MainWindow(StateMixin, QMainWindow):
         except Exception:
             pass
 
-    # ---------- simulation setup ----------
     def _build_simulation(self):
         speed = getattr(self, "_target_speed", 100)
         thresh = getattr(self, "_det_thresh", 200)
@@ -167,9 +152,7 @@ class MainWindow(StateMixin, QMainWindow):
             profile = MotionProfile(self.motion_combo.currentText())  # type: ignore
         except Exception:
             profile = MotionProfile.CURVED
-        # ----------------------------------------------------
         # Environment — collect validated config (panel if available, else env_config)
-        # ----------------------------------------------------
         try:
             if hasattr(self, "env_panel") and self.env_panel is not None:
                 cfg = self.env_panel.collect_config().validate()
@@ -182,9 +165,7 @@ class MainWindow(StateMixin, QMainWindow):
         scene_w, scene_h = int(cfg.world_width), int(cfg.world_height)
         self._scene_size = (scene_w, scene_h)
 
-        # ----------------------------------------------------
         # Camera — collect validated CameraConfig (11 params: FOV, mechanics, display, units)
-        # ----------------------------------------------------
         try:
             if hasattr(self, "camera_panel") and self.camera_panel is not None:
                 cam_cfg = self.camera_panel.collect_config().validate((scene_w, scene_h))
@@ -206,9 +187,7 @@ class MainWindow(StateMixin, QMainWindow):
 
         # Build scene via typed config (preferred) — keeps gradient/haze/star modularity
         self.scene = Scene(config=cfg)
-        # ----------------------------------------------------
         # Multi-beacon — collect validated MultiBeaconConfig (8 per-beacon + 3 multi)
-        # ----------------------------------------------------
         beacon_count = int(getattr(self, "_beacon_count", 1))
         hb = int(getattr(self, "_hitbox_radius", 14))
         cr = int(getattr(self, "_center_radius", 2))
@@ -326,7 +305,6 @@ class MainWindow(StateMixin, QMainWindow):
         self._center_hits = 0
         self._frames_with_detections = 0
 
-    # ---------- UI layout — Premium Mission-Control ----------
     def _build_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
@@ -896,7 +874,6 @@ class MainWindow(StateMixin, QMainWindow):
         row.addWidget(self.gain_slider, 1); row.addWidget(self.gain_spin)
         layout.addLayout(row)
 
-    # ---------- handlers ----------
     def _on_motion_change(self, value: str):
         try:
             prof = MotionProfile(value)
@@ -1690,9 +1667,7 @@ class MainWindow(StateMixin, QMainWindow):
 
     def _apply_scene_settings_hot(self):
         """HOT — applies Environment from EnvironmentPanel + EnvironmentConfig (modular, no pause)."""
-        # ------------------------------------------------------------
         # Collect validated EnvironmentConfig (single source of truth)
-        # ------------------------------------------------------------
         try:
             cfg = self.env_panel.collect_config().validate() if hasattr(self, "env_panel") else self.env_config.validate()
             self.env_config = cfg
@@ -2035,7 +2010,6 @@ class MainWindow(StateMixin, QMainWindow):
             try: self.perf.export_report(path); QMessageBox.information(self,"Export", f"Saved to:\n{path}")
             except Exception as e: QMessageBox.critical(self,"Export failed", str(e))
 
-    # ---------- tick ----------
     def _tick(self):
         frame_start=time.time()
         dt = TICK_MS/1000.0 if self._last_tick_time is None else float(np.clip(frame_start-self._last_tick_time,0.005,0.1))
@@ -2198,10 +2172,6 @@ class MainWindow(StateMixin, QMainWindow):
                     self.dashboard_panel.graph.plot.repaint()
         except Exception:
             pass
-
-    # ========================================================
-    # SECTION: Rendering — delegated to gui.core.renderer.Renderer
-    # ========================================================
 
     def _beacon_vibrant_color(self, beacon_id: int, brightness: float) -> tuple[int,int,int]:
         return Renderer.beacon_vibrant_color(beacon_id, brightness)

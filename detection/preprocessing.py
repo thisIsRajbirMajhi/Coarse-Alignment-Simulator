@@ -1,24 +1,9 @@
-"""
-Module: detection.preprocessing
-Purpose: Frame preprocessing — grayscale + threshold + morphology (well-commented physics).
-Public API: to_grayscale, threshold_frame, close_gaps
-Notes: Stateless helpers used by BeaconDetector. Each step documented with maths.
-
-Maths:
-  Grayscale: Y = 0.299·R + 0.587·G + 0.114·B (OpenCV BGR→GRAY)
-  Threshold: mask(x,y) = 255 if I(x,y) > T else 0  (binary segmentation)
-  Closing:   mask_closed = dilate(erode(mask)) with 3×3 kernel — fills 1-px holes
-             from scintillation without merging separate beacons.
-"""
+# detection/preprocessing.py - Frame preprocessing — grayscale + threshold + morphology (well-commented physics
 
 import cv2
 import numpy as np
 
 from detection.constants import MORPH_KERNEL
-
-# ============================================================
-# SECTION: Preprocessing — grayscale + threshold + morphology
-# ============================================================
 
 def to_grayscale(frame: np.ndarray) -> np.ndarray:
     """

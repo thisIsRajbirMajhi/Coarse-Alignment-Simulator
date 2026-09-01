@@ -1,17 +1,7 @@
-"""
-Module: gui.panels.disturbances_panel
-Purpose: Disturbance intensity sliders (Turbulence, Vibration, Camera Motion, Noise).
-Public API: DisturbancesPanel
-Notes: Extracted from gui.app — modular, well-commented.
-       Each slider 0..10 maps to physics models in disturbance.disturbances.
-"""
+# gui/panels/disturbances_panel.py - Disturbance intensity sliders (Turbulence, Vibration, Camera Motion, Noise)
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QSlider, QVBoxLayout, QWidget
-
-# ============================================================
-# SECTION: DisturbancesPanel — Physics impairments
-# ============================================================
 
 class DisturbancesPanel(QWidget):
     """

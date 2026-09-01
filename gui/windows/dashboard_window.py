@@ -1,10 +1,4 @@
-"""
-Module: gui.windows.dashboard_window
-Purpose: Separate, modular, responsive window hosting the live DashboardPanel + graph.
-Public API: DashboardWindow
-Notes: Modular rebuild 2026-09-01 — responsive layout, auto-scaling graph, informative toolbar/status.
-       Graph shows complete picture without trimming (autoRange), intuitive legend, tooltips.
-"""
+# gui/windows/dashboard_window.py - Separate, modular, responsive window hosting the live DashboardPanel + graph
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
@@ -19,11 +13,6 @@ from PyQt5.QtWidgets import (
 )
 
 from gui.styles import APP_STYLE
-
-
-# ============================================================
-# SECTION: DashboardWindow — modular, intuitive, informative
-# ============================================================
 
 class DashboardWindow(QMainWindow):
     """
@@ -51,9 +40,7 @@ class DashboardWindow(QMainWindow):
         self._build_central()
         self._build_status()
 
-    # --------------------------------------------------------
     # Toolbar — intuitive actions
-    # --------------------------------------------------------
 
     def _build_toolbar(self):
         tb = QToolBar("Dashboard Tools")
@@ -86,9 +73,7 @@ class DashboardWindow(QMainWindow):
 
         self.toolbar = tb
 
-    # --------------------------------------------------------
     # Central — responsive DashboardPanel
-    # --------------------------------------------------------
 
     def _build_central(self):
         # DashboardPanel already contains its own splitter (metrics | graph)
@@ -98,9 +83,7 @@ class DashboardWindow(QMainWindow):
         # Enable responsive resizing: dashboard_panel's internal splitter will handle
         self.dashboard_panel.setStyleSheet(self.dashboard_panel.styleSheet() + " QSplitter::handle { background:#e2e8f0; }")
 
-    # --------------------------------------------------------
     # StatusBar — informative live hint
-    # --------------------------------------------------------
 
     def _build_status(self):
         sb = QStatusBar()
@@ -114,9 +97,7 @@ class DashboardWindow(QMainWindow):
         self.setStatusBar(sb)
         self.statusBar().showMessage("Dashboard ready — live metrics update every tick (~30 Hz)", 4000)
 
-    # --------------------------------------------------------
     # Actions
-    # --------------------------------------------------------
 
     def _on_autofit(self):
         try:
@@ -173,9 +154,7 @@ class DashboardWindow(QMainWindow):
             ),
         )
 
-    # --------------------------------------------------------
     # Live status update (called by MainWindow._update_stats if desired)
-    # --------------------------------------------------------
 
     def update_live_status(self, summary: dict):
         """Optional hook for MainWindow to push live FPS/retention into status bar."""
@@ -187,9 +166,7 @@ class DashboardWindow(QMainWindow):
         except Exception:
             pass
 
-    # --------------------------------------------------------
     # Window behavior — hide on close (preserve HOT wiring)
-    # --------------------------------------------------------
 
     def closeEvent(self, event):
         event.ignore()

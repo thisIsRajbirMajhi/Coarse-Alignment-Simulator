@@ -1,15 +1,4 @@
-"""
-Module: camera.config
-Purpose: Typed, validated configuration for Camera/Viewport/Screens (all 11 params).
-Public API: CameraConfig
-Groups:
-  - Field of View / Optics: fov_width, fov_height
-  - Pan-Tilt Mechanics: pan_min/max, tilt_min/max, home_pan/tilt, max_slew_rate, resolution, latency_ms
-  - Display: viewport_width/height, god_width/height
-  - Units/Reporting: pixel_scale_mrad (px → mrad)
-Notes: Immediate migration — MainWindow stores CameraConfig as single source.
-       PTZCamera is constructed from CameraConfig; panel collects it HOT.
-"""
+# camera/config.py - Typed, validated configuration for Camera/Viewport/Screens (all 11 params)
 
 from __future__ import annotations
 
@@ -20,10 +9,6 @@ import numpy as np
 from camera.constants import CAMERA_DEFAULTS, CAMERA_LIMITS, DISPLAY_DEFAULTS, DISPLAY_LIMITS
 from common.config_base import BaseValidatedConfig, clip_field
 from environment.constants import MAX_RES, MIN_RES
-
-# ============================================================
-# SECTION: CameraConfig — all 11 camera/viewport params
-# ============================================================
 
 @dataclass
 class CameraConfig(BaseValidatedConfig):
@@ -52,15 +37,11 @@ class CameraConfig(BaseValidatedConfig):
     LIMITS = {**CAMERA_LIMITS, **DISPLAY_LIMITS}
     DEFAULTS = {**CAMERA_DEFAULTS, **DISPLAY_DEFAULTS}
 
-    # --------------------------------------------------------
     # Field of View / Optics
-    # --------------------------------------------------------
     fov_width: int = CAMERA_DEFAULTS["fov_width"]
     fov_height: int = CAMERA_DEFAULTS["fov_height"]
 
-    # --------------------------------------------------------
     # Pan-Tilt Mechanics
-    # --------------------------------------------------------
     pan_min: int | None = CAMERA_DEFAULTS["pan_min"]
     pan_max: int | None = CAMERA_DEFAULTS["pan_max"]
     tilt_min: int | None = CAMERA_DEFAULTS["tilt_min"]
@@ -71,22 +52,16 @@ class CameraConfig(BaseValidatedConfig):
     resolution: float = CAMERA_DEFAULTS["resolution"]
     latency_ms: int = CAMERA_DEFAULTS["latency_ms"]
 
-    # --------------------------------------------------------
     # Display — viewport / God view on-screen sizes
-    # --------------------------------------------------------
     viewport_width: int = DISPLAY_DEFAULTS["viewport_width"]
     viewport_height: int = DISPLAY_DEFAULTS["viewport_height"]
     god_width: int = DISPLAY_DEFAULTS["god_width"]
     god_height: int = DISPLAY_DEFAULTS["god_height"]
 
-    # --------------------------------------------------------
     # Units — pixel to angle
-    # --------------------------------------------------------
     pixel_scale_mrad: float = CAMERA_DEFAULTS["pixel_scale_mrad"]
 
-    # ========================================================
     # Validation — clamp to limits, resolve autos
-    # ========================================================
 
     def validate(self, scene_bounds: tuple[int,int] | None = None) -> "CameraConfig":
         """Clamp numeric fields to limits via clip_field; resolve None autos against scene_bounds."""
@@ -140,9 +115,7 @@ class CameraConfig(BaseValidatedConfig):
 
         return self
 
-    # ========================================================
     # Helpers — conversions and dict
-    # ========================================================
 
     def effective_pan_range(self, scene_bounds: tuple[int,int]) -> tuple[float,float]:
         self.validate(scene_bounds)

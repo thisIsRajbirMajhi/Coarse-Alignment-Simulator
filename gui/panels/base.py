@@ -1,12 +1,4 @@
-"""
-Module: gui.panels.base
-Purpose: Shared base for all config panels — eliminates duplication of
-         QGroupBox setup, label styling, collect/set_config, signal blocking.
-Public API: BaseConfigPanel
-Notes: Generic base that panels can inherit to reduce ~200 lines of copy-pasted
-       _label(), _build_ui margins, collect_config()->validate(), set_config(blockSignals).
-       Each panel still defines its own groups, but uses helpers from here.
-"""
+# gui/panels/base.py - Shared base for all config panels — eliminates duplication of
 
 from __future__ import annotations
 
@@ -14,7 +6,6 @@ from contextlib import contextmanager
 from typing import Any, Generator
 
 from PyQt5.QtWidgets import QGridLayout, QGroupBox, QLabel, QWidget
-
 
 class BaseConfigPanel(QWidget):
     """

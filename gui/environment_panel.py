@@ -1,19 +1,4 @@
-"""
-Module: gui.environment_panel
-Purpose: Grouped control panel for all 10 Environment parameters — immediate migration.
-Public API: EnvironmentPanel
-Sections (grouping chosen per user request):
-  A) World        — World Width / Height
-  B) Seed         — Seed + Randomize button
-  C) Atmosphere   — BG Top / Bottom, Vignetting, Haze
-  D) Starfield    — Star count, Star brightness
-  E) Dynamics     — Dynamic toggle, Dynamic speed
-Notes:
-  - HOT-reloaded: every change emits configChanged(EnvironmentConfig) debounced
-    by MainWindow (520ms / 380ms) — no restart.
-  - Immediate migration: MainWindow stores self.env_config: EnvironmentConfig.
-  - Structured comments per Section: sub-header + widget purpose.
-"""
+# gui/environment_panel.py - Grouped control panel for all 10 Environment parameters — immediate migration
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from gui.panels.base import BaseConfigPanel
@@ -32,10 +17,6 @@ from PyQt5.QtWidgets import (
 
 from environment.config import EnvironmentConfig
 from environment.constants import DEFAULTS, LIMITS, MAX_RES, MIN_RES
-
-# ============================================================
-# SECTION: EnvironmentPanel — Grouped Control Widget
-# ============================================================
 
 class EnvironmentPanel(BaseConfigPanel):
     """
@@ -56,18 +37,12 @@ class EnvironmentPanel(BaseConfigPanel):
         self._build_ui()
         self.set_config(self._initial, emit=False)
 
-    # ========================================================
-    # SECTION: UI Construction — 5 Grouped Sections
-    # ========================================================
-
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(10)
 
-        # ----------------------------------------------------
         # Section A: World — Full 2D scene size
-        # ----------------------------------------------------
         # World width/height drive Scene resolution; also clamp
         # FOV and beacon bounds. Step 50 for 5000-range usability.
         world_box = QGroupBox("⬢  WORLD  —  Full 2D Scene Size")
@@ -103,9 +78,7 @@ class EnvironmentPanel(BaseConfigPanel):
 
         root.addWidget(world_box)
 
-        # ----------------------------------------------------
         # Section B: Seed — Reproducible generation
-        # ----------------------------------------------------
         # Seed drives np.random.default_rng(seed) for gradient/haze/stars.
         # Same seed → identical background (reproducibility).
         seed_box = QGroupBox("◈  SEED  —  Reproducible Scenes")
@@ -135,9 +108,7 @@ class EnvironmentPanel(BaseConfigPanel):
 
         root.addWidget(seed_box)
 
-        # ----------------------------------------------------
         # Section C: Atmosphere — Gradient + fog + vignetting
-        # ----------------------------------------------------
         atmo_box = QGroupBox("◎  ATMOSPHERE  —  Gradient + Haze")
         atmo_grid = QGridLayout(atmo_box)
         atmo_grid.setContentsMargins(12, 18, 12, 12)
@@ -178,9 +149,7 @@ class EnvironmentPanel(BaseConfigPanel):
 
         root.addWidget(atmo_box)
 
-        # ----------------------------------------------------
         # Section D: Starfield / Clutter
-        # ----------------------------------------------------
         stars_box = QGroupBox("▣  STARFIELD  •  Clutter")
         stars_grid = QGridLayout(stars_box)
         stars_grid.setContentsMargins(12, 18, 12, 12)
@@ -207,9 +176,7 @@ class EnvironmentPanel(BaseConfigPanel):
 
         root.addWidget(stars_box)
 
-        # ----------------------------------------------------
         # Section E: Dynamics — Time-varying animation
-        # ----------------------------------------------------
         dyn_box = QGroupBox("⟡  DYNAMICS  —  Time-Varying Animation")
         dyn_grid = QGridLayout(dyn_box)
         dyn_grid.setContentsMargins(12, 18, 12, 12)
@@ -240,9 +207,7 @@ class EnvironmentPanel(BaseConfigPanel):
 
         root.addWidget(dyn_box)
 
-        # ----------------------------------------------------
         # Wiring — emit validated config on any change
-        # ----------------------------------------------------
         for w in [
             self.scene_w_spin,
             self.scene_h_spin,
@@ -264,10 +229,6 @@ class EnvironmentPanel(BaseConfigPanel):
 
         root.addStretch()
 
-    # ========================================================
-    # SECTION: Helpers
-    # ========================================================
-
     def _label(self, text: str) -> QLabel:
         lbl = QLabel(text)
         lbl.setStyleSheet("color:#334155; font-size:11px;")
@@ -282,10 +243,6 @@ class EnvironmentPanel(BaseConfigPanel):
         enabled = self.dynamic_check.isChecked()
         self.env_dynamic_speed_spin.setEnabled(enabled)
         # Visual cue: dim label not needed — disabled spin is sufficient
-
-    # ========================================================
-    # SECTION: Config ↔ UI Sync
-    # ========================================================
 
     def collect_config(self) -> EnvironmentConfig:
         """Read current UI into a validated EnvironmentConfig."""

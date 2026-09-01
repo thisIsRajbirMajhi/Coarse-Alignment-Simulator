@@ -1,30 +1,9 @@
-"""
-Module: searching.handler
-Purpose: Isolated SEARCHING algorithm — no estimate, wait for first hit.
-Public API: SearchingHandler
-Notes: Stateless per-frame logic. Owns the SEARCHING → ACQUIRED transition
-       and the SEARCHING → SEARCHING dwell. No filtering, no memory beyond counters.
-
-Maths:
-  SEARCHING + hit  → ACQUIRED (hits=1, misses=0)
-  SEARCHING + miss → SEARCHING (hits=0, misses+=1, estimate stays None)
-       Miss counter increments for diagnostics but does not trigger LOST
-       (LOST requires prior lock). Colours: #64748b (gray).
-
-Transition table (isolated):
-  Input: has_detection: bool, counters: _consecutive_hits/_consecutive_misses,
-         thresholds: none needed for SEARCHING (first hit suffices).
-  Output: (new_status: LockStatus, should_clear: bool)
-"""
+# searching/handler.py - Isolated SEARCHING algorithm — no estimate, wait for first hit
 
 from __future__ import annotations
 
 from common.colors import lock_color_hex
 from tracking.types import LockStatus  # single source, no fallback duplication
-
-# ============================================================
-# SECTION: SearchingHandler — SEARCHING algorithm
-# ============================================================
 
 class SearchingHandler:
     """

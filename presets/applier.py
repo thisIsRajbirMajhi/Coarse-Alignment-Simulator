@@ -1,28 +1,8 @@
-"""
-Module: presets.applier
-Purpose: Apply a Preset to a live MainWindow — configures entire software (well-commented).
-Public API: apply_preset
-Notes: Stateless helper — reads preset dicts, builds validated configs, pushes to panels,
-       triggers HOT applies, then auto-runs simulation. Keeps preset pure data, applier handles GUI wiring.
-
-Steps per preset:
-  1) Environment — EnvironmentConfig.from_dict → env_panel.set_config → _apply_scene_settings_hot
-  2) Camera — CameraConfig.from_dict → camera_panel.set_config → _apply_camera_hot
-  3) Beacons — MultiBeaconConfig.from_dict → beacon_manager.set_config → _apply_beacons_hot (+ _apply_beacon_configs_hot for per-beacon)
-  4) Disturbances — set 4 sliders
-  5) Controller — ControllerConfig.from_dict → control_panel.set_config → _apply_control_hot
-  6) Overlay — OverlayConfig.from_dict → overlay_panel.set_config → _apply_overlay_hot
-  7) Detector/Tracker — set thresholds via detector/tracker directly
-  8) Reset disturbance state, tracker, perf, then _start()
-"""
+# presets/applier.py - Apply a Preset to a live MainWindow — configures entire software (well-commented
 
 from __future__ import annotations
 
 import time
-
-# ============================================================
-# SECTION: apply_preset — entire software
-# ============================================================
 
 def apply_preset(window, preset, auto_run: bool = True) -> None:
     """

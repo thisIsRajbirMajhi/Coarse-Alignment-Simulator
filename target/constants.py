@@ -1,13 +1,4 @@
-"""
-Module: target.constants
-Purpose: Single source of truth for Beacon/Target limits & defaults.
-Public API: BEACON_LIMITS, BEACON_DEFAULTS, MULTI_BEACON_LIMITS, MULTI_BEACON_DEFAULTS
-Notes: Consumed by BeaconConfig, Target, and GUI panels for consistent clamping.
-"""
-
-# ============================================================
-# SECTION: Per-Beacon Limits
-# ============================================================
+# target/constants.py - Single source of truth for Beacon/Target limits & defaults
 
 BEACON_LIMITS: dict[str, tuple[float, float]] = {
     # Visual / photometric
@@ -38,10 +29,6 @@ BEACON_DEFAULTS: dict = {
     "heading": None,               # None → random from RNG, else 0–360 deg
     "beacon_id": 0,
 }
-
-# ============================================================
-# SECTION: Multi-Beacon Limits
-# ============================================================
 
 MULTI_BEACON_LIMITS: dict[str, tuple[int, int]] = {
     "beacon_count": (1, 16),       # Total beacons in scene (GUI caps 12, factory allows 16)

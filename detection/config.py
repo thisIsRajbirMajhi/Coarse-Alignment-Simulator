@@ -1,10 +1,4 @@
-"""
-Module: detection.config
-Purpose: Typed, validated configuration for beacon detection.
-Public API: DetectorConfig
-Notes: Immediate migration — MainWindow can store DetectorConfig as single source.
-       Stateless detector, so config is just thresholds (no temporal state).
-"""
+# detection/config.py - Typed, validated configuration for beacon detection
 
 from __future__ import annotations
 
@@ -12,10 +6,6 @@ from dataclasses import dataclass
 
 from common.config_base import BaseValidatedConfig, clip_field
 from detection.constants import DETECTOR_DEFAULTS, DETECTOR_LIMITS
-
-# ============================================================
-# SECTION: DetectorConfig — thresholds (stateless)
-# ============================================================
 
 @dataclass
 class DetectorConfig(BaseValidatedConfig):

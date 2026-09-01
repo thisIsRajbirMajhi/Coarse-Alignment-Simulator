@@ -1,12 +1,4 @@
-"""
-Module: disturbance.state
-Purpose: Temporal state + reset for reproducible, wall-clock-decoupled simulation.
-         Refactored to class DisturbanceState — isolates global mutable state for
-         testability (per-test isolated instances) while keeping module globals
-         for backward compat (singleton).
-Public API: DisturbanceState, _turb_state, _vib_state, _cam_motion_state_global, _elapsed_dt, reset_disturbance_state
-Notes: _elapsed_dt now delegates to disturbance.dt_provider.DtProvider for single-source dt logic.
-"""
+# disturbance/state.py - Temporal state + reset for reproducible, wall-clock-decoupled simulation
 
 import time
 from contextlib import contextmanager
@@ -14,10 +6,6 @@ from contextlib import contextmanager
 import numpy as np
 
 from disturbance.dt_provider import DtProvider
-
-# ============================================================
-# SECTION: DisturbanceState — isolated state class
-# ============================================================
 
 class DisturbanceState:
     """
@@ -65,10 +53,6 @@ _turb_state: dict = _default_state.turb
 _vib_state: dict = _default_state.vib
 _cam_motion_state_global: dict = _default_state.cam_global
 
-# ============================================================
-# SECTION: Wall-clock fallback — dt inference
-# ============================================================
-
 def _elapsed_dt(state: dict, fallback: float = 0.033) -> float:
     """
     Derive dt from wall time when explicit dt not supplied — delegates to DtProvider.
@@ -83,10 +67,6 @@ def _elapsed_dt(state: dict, fallback: float = 0.033) -> float:
         if state.get("t", 0.0) == 0.0 and state.get("phases") is None:
             return float(fallback)
     return dt
-
-# ============================================================
-# SECTION: Explicit reset — for GUI reproducibility
-# ============================================================
 
 def reset_disturbance_state() -> None:
     """

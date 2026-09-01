@@ -1,9 +1,4 @@
-"""
-Module: perf_log.rates
-Purpose: Isolated detection/hit rates — split from PerformanceLogger.
-Public API: compute_rates
-Notes: Extracted from perf_log/metrics.py:281. Denominators: frames vs detections vs hitbox.
-"""
+# perf_log/rates.py - Isolated detection/hit rates — split from PerformanceLogger
 
 def compute_rates(frame_count: int, detection_count: int, hitbox_hit_count: int, center_hit_count: int) -> dict:
     total = frame_count if frame_count else 1

@@ -1,11 +1,4 @@
-"""
-Module: overlay.renderer
-Purpose: Robust crosshair / tracking overlay drawing (modular, intuitive).
-Public API: OverlayRenderer, PulseState
-Notes: Handles crosshair style/size/gap/thickness/dot, lock colors/circle/pulse,
-       error line/text/units (px/mrad/urad). Stateless except pulse timing.
-       Delegated to by gui.core.renderer.Renderer for FOV viewport.
-"""
+# overlay/renderer.py - Robust crosshair / tracking overlay drawing (modular, intuitive)
 
 import math
 import time
@@ -14,10 +7,6 @@ import cv2
 import numpy as np
 
 from overlay.config import OverlayConfig
-
-# ============================================================
-# SECTION: Pulse state — animate on lock transition
-# ============================================================
 
 class PulseState:
     """
@@ -58,10 +47,6 @@ class PulseState:
         progress = progress * progress * (3 - 2 * progress)
         return float(np.clip(progress, 0.0, 1.0))
 
-# ============================================================
-# SECTION: OverlayRenderer — pure drawing helpers
-# ============================================================
-
 class OverlayRenderer:
     """
     Stateless overlay drawing — crosshair, lock, error.
@@ -70,9 +55,7 @@ class OverlayRenderer:
     Pulse is driven by PulseState passed in.
     """
 
-    # --------------------------------------------------------
     # Crosshair — style/size/gap/thickness/dot
-    # --------------------------------------------------------
 
     @staticmethod
     def draw_crosshair(img: np.ndarray, overlay: OverlayConfig, center: tuple[int,int] | None = None) -> None:
@@ -122,9 +105,7 @@ class OverlayRenderer:
         elif overlay.centre_dot:
             cv2.circle(img, (cx, cy), 1, color, -1, cv2.LINE_AA)
 
-    # --------------------------------------------------------
     # Lock circle — around detected beacon, pulse on change
-    # --------------------------------------------------------
 
     @staticmethod
     def draw_lock_circle(img: np.ndarray, center: tuple[int,int], overlay: OverlayConfig, status: str, hitbox_radius: int | None = None, pulse_progress: float = 0.0) -> None:
@@ -149,9 +130,7 @@ class OverlayRenderer:
             flash_r = int(2 + 3 * pulse_progress)
             cv2.circle(img, (cx, cy), int(flash_r), color, -1, cv2.LINE_AA)
 
-    # --------------------------------------------------------
     # Error visualization — line + text with units
-    # --------------------------------------------------------
     @staticmethod
     def draw_error(img: np.ndarray, fov_center: tuple[int,int], estimate: tuple[int,int], overlay: OverlayConfig, status: str, pixel_scale_mrad: float = 0.035) -> None:
         cx, cy = int(fov_center[0]), int(fov_center[1])

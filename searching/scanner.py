@@ -1,29 +1,14 @@
-"""
-Module: searching.scanner
-Purpose: Active-search scan geometries — future drive for camera when SEARCHING.
-Public API: ScanPattern, SearchingStrategy
-Notes: Stateless helpers that propose next pan/tilt offset when no lock.
-       Currently not wired into control loop (future upgrade), but isolated here
-       so SEARCHING logic is extensible without touching tracking/state.py.
-"""
+# searching/scanner.py - Active-search scan geometries — future drive for camera when SEARCHING
 
 from __future__ import annotations
 
 import math
 from enum import Enum
 
-# ============================================================
-# SECTION: ScanPattern — enum of sweep geometries
-# ============================================================
-
 class ScanPattern(Enum):
     SPIRAL = "spiral"
     RASTER = "raster"
     RANDOM = "random"
-
-# ============================================================
-# SECTION: SearchingStrategy — proposes search offsets
-# ============================================================
 
 class SearchingStrategy:
     """

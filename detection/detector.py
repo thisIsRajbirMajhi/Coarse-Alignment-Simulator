@@ -1,20 +1,4 @@
-"""
-Module: detection.detector
-Purpose: Beacon detection — raw per-frame input (no lock state), well-commented maths/physics.
-Public API: BeaconDetector
-Architecture:
-  - constants.py : limits/defaults
-  - config.py    : DetectorConfig (typed thresholds)
-  - preprocessing.py : grayscale + threshold + closing
-  - detector.py  : BeaconDetector — contour + moments → centroid, sorted by confidence
-Notes:
-  - Stateless: runs every new frame and returns position or None, regardless of lock state.
-  - Physics: threshold → binary mask, contour area, image moments for centroid:
-      M00 = Σ I(x,y)          (area)
-      M10 = Σ x·I(x,y), M01 = Σ y·I(x,y)
-      centroid = (M10/M00, M01/M00)  (first-order moments / area)
-  - Confidence = area * (peak/255) — larger/brighter blobs rank higher.
-"""
+# detection/detector.py - Beacon detection — raw per-frame input (no lock state), well-commented maths/phy
 
 from __future__ import annotations
 
@@ -24,10 +8,6 @@ import numpy as np
 from detection.config import DetectorConfig
 from detection.constants import DETECTOR_DEFAULTS
 from detection.preprocessing import close_gaps, threshold_frame, to_grayscale
-
-# ============================================================
-# SECTION: BeaconDetector — stateless per-frame detection
-# ============================================================
 
 class BeaconDetector:
     """
@@ -52,9 +32,7 @@ class BeaconDetector:
             self.brightness_threshold = int(self.config.brightness_threshold)
             self.min_area = int(self.config.min_area)
 
-    # --------------------------------------------------------
     # Config bridge — hot-apply without rebuild
-    # --------------------------------------------------------
 
     def apply_config(self, config: DetectorConfig) -> None:
         cfg = config.validate()
@@ -65,9 +43,7 @@ class BeaconDetector:
     def to_config(self) -> DetectorConfig:
         return DetectorConfig(brightness_threshold=int(self.brightness_threshold), min_area=int(self.min_area)).validate()
 
-    # --------------------------------------------------------
     # Single-beacon — brightest
-    # --------------------------------------------------------
 
     def detect(self, frame: np.ndarray) -> tuple[float, float] | None:
         """
@@ -80,9 +56,7 @@ class BeaconDetector:
             return None
         return (all_dets[0]["x"], all_dets[0]["y"])
 
-    # --------------------------------------------------------
     # Multi-beacon — all blobs sorted by confidence
-    # --------------------------------------------------------
 
     def detect_all(self, frame: np.ndarray, max_beacons: int = 12) -> list[dict]:
         """

@@ -1,12 +1,6 @@
-"""
-Module: perf_log.error_stats
-Purpose: Isolated error distribution — split from PerformanceLogger.summary 126 lines.
-Public API: compute_error_stats
-Notes: Extracted from perf_log/metrics.py:259. Handles avg/max/min/median/p95/rms/std + intuitive 15px=100%.
-"""
+# perf_log/error_stats.py - Isolated error distribution — split from PerformanceLogger
 
 import math
-
 
 def compute_error_stats(tracking_errors: list[float]) -> dict:
     n = len(tracking_errors)
@@ -25,7 +19,6 @@ def compute_error_stats(tracking_errors: list[float]) -> dict:
     p95_idx = max(0, min(p95_idx, n - 1))
     p95 = s[p95_idx]
     return {"avg": avg, "max": mx, "min": mn, "median": median, "p95": p95, "rms": rms, "std": std}
-
 
 def error_pct_from_px(px: float) -> float:
     return round(max(0.0, min(100.0, float(px) / 15.0 * 100.0)), 2) if px is not None else 0.0

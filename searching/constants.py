@@ -1,15 +1,4 @@
-"""
-Module: searching.constants
-Purpose: Single source for SEARCHING-phase limits & defaults.
-Public API: SEARCHING_LIMITS, SEARCHING_DEFAULTS, SCAN_PATTERNS
-Notes: SEARCHING is the idle scan — no estimate, just waiting for first detection.
-       Tunables are intentionally minimal; most thresholds live in acquired/locked/lost.
-       Scan pattern is for future active-search (spiral raster) — currently stateless.
-"""
-
-# ============================================================
-# SECTION: Searching limits — scan & timeout
-# ============================================================
+# searching/constants.py - Single source for SEARCHING-phase limits & defaults
 
 SEARCHING_LIMITS: dict[str, tuple[float, float]] = {
     # Max frames to remain in SEARCHING before declaring timeout (diagnostics)

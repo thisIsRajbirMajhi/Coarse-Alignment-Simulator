@@ -1,18 +1,8 @@
-"""
-Module: disturbance.dt_provider
-Purpose: Single source for dt resolution — eliminates 3× duplication in turbulence/vibration/camera_motion.
-Public API: DtProvider
-Notes: Centralizes wall-clock fallback + clipping [0.005,0.08] and last_wall update.
-       Injected with state dict to keep per-module last_wall separate (no global coupling).
-"""
+# disturbance/dt_provider.py - Single source for dt resolution — eliminates 3× duplication in turbulence/vibrat
 
 from __future__ import annotations
 
 import time
-
-# ============================================================
-# SECTION: DtProvider — dt resolution
-# ============================================================
 
 class DtProvider:
     """

@@ -1,28 +1,6 @@
-"""
-Module: presets.library
-Purpose: Library of 7 curated presets covering baseline to full stress (well-commented).
-Public API: PRESETS, get_preset, PRESET_CATEGORIES
-Notes: Each preset configures entire software (environment, camera, beacons, disturbances, controller, overlay, detection, tracking)
-       and defines a brief end goal — what to observe / expected metric.
-
-Categories:
-  baseline — ideal, should lock 100%
-  turbulence — atmospheric
-  vibration — platform
-  distractors — multi-beacon
-  dynamics — agile target
-  snr — low signal
-  acquisition — reacquisition cycle
-  stress — all max
-
-Goals are phrased as "Observe ... — expect ..." for quick test guidance.
-"""
+# presets/library.py - Library of 7 curated presets covering baseline to full stress (well-commented)
 
 from presets.preset import Preset
-
-# ============================================================
-# SECTION: Presets — 7 curated test cases
-# ============================================================
 
 PRESETS: list[Preset] = [
     # 1 — Ideal Baseline (should always pass)

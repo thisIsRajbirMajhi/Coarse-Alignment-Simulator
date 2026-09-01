@@ -1,14 +1,4 @@
-"""
-Module: gui.styles
-Purpose: Centralized styling and layout constants for the FSOC Simulator GUI.
-Public API: APP_STYLE, SCENE_SIZE, FOV_SIZE, TICK_MS
-Notes: Premium aerospace mission-control theme — dark video stage, elevated light control deck,
-       subtle depth, neon-accent telemetry, polished cards & tabs. Single source for theme.
-"""
-
-# ============================================================
-# SECTION: Layout Constants
-# ============================================================
+# gui/styles.py - Centralized styling and layout constants for the FSOC Simulator GUI
 
 # Default world / camera geometry (px) — overridden by Environment/Camera panels at runtime.
 SCENE_SIZE: tuple[int, int] = (1000, 1000)
@@ -16,10 +6,6 @@ FOV_SIZE: tuple[int, int] = (250, 250)
 
 # Tick interval (ms) — QTimer driving simulation loop (~30 FPS).
 TICK_MS: int = 33
-
-# ============================================================
-# SECTION: Application Stylesheet — Premium Mission Control v2
-# ============================================================
 
 # Design tokens:
 #   App bg #f1f5f9  |  Card #ffffff  |  Dark stage #0f172a / #020617

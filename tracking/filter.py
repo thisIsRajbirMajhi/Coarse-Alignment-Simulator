@@ -1,28 +1,6 @@
-"""
-Module: tracking.filter
-Purpose: Exponential smoothing filter — first-order IIR low-pass (well-commented physics).
-Public API: ExponentialFilter
-Notes: Used by Tracker to smooth noisy detections into stable estimate.
-
-Maths:
-  y[n] = α·y[n-1] + (1-α)·x[n]   where
-    y = estimated_position, x = detection, α = smoothing (0..1)
-    α=0 → y=x (snap, no memory, responsive but noisy)
-    α→1 → y≈y_prev (heavy smoothing, stable but lags)
-  Equivalent to RC low-pass with time constant τ = -1/ln(α) frames.
-  For α=0.5, τ≈1.44 frames — halves noise variance at cost of 1-frame lag.
-
-Physics: Beacon scintillation and detector centroid jitter are high-frequency;
-         exponential filter rejects them while preserving low-frequency target motion.
-         Not a Kalman predictor — no velocity model, so it lags during fast maneuvers
-         (future upgrade: Kalman would predict through occlusion).
-"""
+# tracking/filter.py - Exponential smoothing filter — first-order IIR low-pass (well-commented physics)
 
 import numpy as np
-
-# ============================================================
-# SECTION: ExponentialFilter — IIR low-pass
-# ============================================================
 
 class ExponentialFilter:
     """

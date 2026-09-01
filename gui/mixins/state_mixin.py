@@ -1,17 +1,7 @@
-"""
-Module: gui.mixins.state_mixin
-Purpose: Dirty-tracking, HOT apply/discard, snapshots, debounced auto-apply.
-Public API: StateMixin
-Notes: Extracted from MainWindow monolith — modular, well-commented.
-       MainWindow inherits this mixin to keep sectioned state logic separate.
-"""
+# gui/mixins/state_mixin.py - Dirty-tracking, HOT apply/discard, snapshots, debounced auto-apply
 
 from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QMessageBox
-
-# ============================================================
-# SECTION: StateMixin — HOT dirty + snapshot management
-# ============================================================
 
 class StateMixin:
     """
@@ -23,9 +13,7 @@ class StateMixin:
     - snapshot / discard handles typed config dicts (environment/beacons)
     """
 
-    # --------------------------------------------------------
     # Dirty marking
-    # --------------------------------------------------------
 
     def _mark_dirty(self, section: str):
         self._dirty_tabs.add(section)
@@ -63,9 +51,7 @@ class StateMixin:
             btn.setStyleSheet(f"background:{col}; color:white; font-weight:600; border:none; border-radius:6px;")
             btn.setText(txt)
 
-    # --------------------------------------------------------
     # Apply / Discard per section (HOT)
-    # --------------------------------------------------------
 
     def _apply_section(self, section: str, hot: bool = True):
         try:
@@ -259,9 +245,7 @@ class StateMixin:
             self._discard_section(sec)
         self._dirty_tabs.clear()
 
-    # --------------------------------------------------------
     # Snapshots — for discard
-    # --------------------------------------------------------
 
     def _snapshot_section(self, section: str):
         try:
@@ -361,9 +345,7 @@ class StateMixin:
                     except: pass
         except: pass
 
-    # --------------------------------------------------------
     # Debounced HOT — every slider change auto-applies
-    # --------------------------------------------------------
 
     def _schedule_auto(self, section: str, func, delay: int = 360):
         if section in ("global_controls",):

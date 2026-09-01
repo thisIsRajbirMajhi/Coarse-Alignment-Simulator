@@ -1,17 +1,4 @@
-"""
-Module: target.motion
-Purpose: Beacon/Target dynamics — per-beacon motion, photometry, and hit geometry.
-Public API: MotionProfile, Target, create_beacons
-Architecture:
-  - constants.py : BEACON_LIMITS / DEFAULTS (clamping ranges)
-  - config.py    : BeaconConfig / MultiBeaconConfig (typed configs)
-  - motion.py    : Target class (state + update) + factory create_beacons
-  - factory.py   : Re-export for cleaner imports (beacon creation helpers)
-Notes:
-  - Immediate migration: Target supports BeaconConfig via from_config / apply_config.
-  - Backwards compatible: Target(x,y,profile,speed,bounds,seed,brightness,radius,...)
-  - Structured comments per Section: Profiles, Photometry, Motion handlers.
-"""
+# target/motion.py - Beacon/Target dynamics — per-beacon motion, photometry, and hit geometry
 
 from __future__ import annotations
 
@@ -32,9 +19,7 @@ except Exception:
     BEACON_LIMITS = {}
     BEACON_DEFAULTS = {}
 
-# ============================================================
-# SECTION: MotionProfile — Enum with back-compat aliases
-# ============================================================
+from target.strategy import LinearStrategy, MotionContext, StationaryStrategy
 
 class MotionProfile(Enum):
     """
@@ -74,10 +59,6 @@ class MotionProfile(Enum):
         except Exception:
             return cls.CURVED
 
-# ============================================================
-# SECTION: Target — Beacon instance with modular handlers
-# ============================================================
-
 class Target:
     """
     Beacon/Target instance — owns per-beacon state (8 params + dynamics).
@@ -98,9 +79,7 @@ class Target:
     Hot-apply: use apply_config(BeaconConfig) for live GUI updates (no rebuild).
     """
 
-    # --------------------------------------------------------
     # Constructor — supports legacy args and BeaconConfig
-    # --------------------------------------------------------
 
     def __init__(
         self,
@@ -139,9 +118,7 @@ class Target:
             except Exception:
                 pass
 
-        # ----------------------------------------------------
         # Core identity — clamped via constants
-        # ----------------------------------------------------
         self.x = float(x); self.y = float(y)
         # Normalize profile string → enum
         try:
@@ -184,9 +161,7 @@ class Target:
         self.beacon_id = int(beacon_id)
         self.enabled = bool(enabled)
 
-        # ----------------------------------------------------
         # Heading & velocity — seeded RNG for reproducibility
-        # ----------------------------------------------------
         if heading is not None:
             self._heading = float(heading)
         else:
@@ -195,17 +170,13 @@ class Target:
         self.vy = self.speed * math.sin(self._heading)
         self.ax = 0.0; self.ay = 0.0
 
-        # ----------------------------------------------------
         # Photometric scintillation state
-        # ----------------------------------------------------
         self._scint_phase = float(self._rng.uniform(0, 2*math.pi))
         self._scint_freq = float(self._rng.uniform(8.0, 14.0))
         self.current_brightness = float(self.brightness)
         self.current_radius = float(self.radius)
 
-        # ----------------------------------------------------
         # Profile-specific initializations (orbit, random walk, etc.)
-        # ----------------------------------------------------
         self._init_orbit_params()
         self._init_random_walk_params()
         self._init_sinusoidal_params()
@@ -215,9 +186,7 @@ class Target:
         self._init_accelerating_params()
         self._init_waypoint_params()
 
-    # --------------------------------------------------------
     # Private — profile initializers (grouped for clarity)
-    # --------------------------------------------------------
 
     def _init_orbit_params(self) -> None:
         """Curved/orbit parameters — center-relative radius & phase."""
@@ -271,10 +240,6 @@ class Target:
                              float(self._rng.uniform(80, h-80))])
         self._wp_speed = float(self.speed)
         self._wp_turn_rate = 3.2  # 1/s lerp toward target heading
-
-    # ========================================================
-    # SECTION: Config Integration — BeaconConfig bridge
-    # ========================================================
 
     def to_config(self) -> "BeaconConfig":
         """Export this Target's 8 params + state as a BeaconConfig."""
@@ -351,10 +316,6 @@ class Target:
         # Position via seed
         self.randomize_position(seed=int(rng.integers(0, 999999)))
 
-    # ========================================================
-    # SECTION: Update — per-frame motion dispatch
-    # ========================================================
-
     def update(self, dt: float):
         """
         Advance beacon by dt seconds — dispatches to profile-specific handler.
@@ -367,29 +328,11 @@ class Target:
         self._t += dt
         w, h = self.bounds
 
-        # ----------------------------------------------------
-        # STATIONARY — micro-jitter only
-        # ----------------------------------------------------
+        # Isolated strategies for stationary/linear
         if self.profile == MotionProfile.STATIONARY:
-            self.vx = 0.0; self.vy = 0.0
-            self.x += float(self._rng.normal(0, 0.12))
-            self.y += float(self._rng.normal(0, 0.12))
-            self.x = float(np.clip(self.x, 0, w)); self.y = float(np.clip(self.y, 0, h))
-
-        # ----------------------------------------------------
-        # LINEAR — heading diffusion + speed noise, bounce
-        # ----------------------------------------------------
+            StationaryStrategy().step(self, MotionContext(dt, self.bounds, self._t, self._rng))
         elif self.profile == MotionProfile.LINEAR:
-            heading_noise_std = 0.35
-            self._heading += float(self._rng.normal(0, heading_noise_std*math.sqrt(dt)))
-            speed_noise = float(self._rng.normal(0, 4.0*math.sqrt(dt)))
-            cur_speed = float(np.clip(self.speed + speed_noise, self.speed*0.7, self.speed*1.3))
-            tau = 0.12
-            target_vx = cur_speed * math.cos(self._heading)
-            target_vy = cur_speed * math.sin(self._heading)
-            alpha = dt/(tau+dt)
-            self.vx += alpha*(target_vx - self.vx)
-            self.vy += alpha*(target_vy - self.vy)
+            LinearStrategy().step(self, MotionContext(dt, self.bounds, self._t, self._rng))
             self.x += self.vx*dt; self.y += self.vy*dt
             if self.x <= 0:
                 self.x = 0.5; self.vx = abs(self.vx)*0.88; self._heading = math.atan2(self.vy, self.vx)
@@ -401,9 +344,7 @@ class Target:
                 self.y = h-0.5; self.vy = -abs(self.vy)*0.88; self._heading = math.atan2(self.vy, self.vx)
             self.x = float(np.clip(self.x, 0, w)); self.y = float(np.clip(self.y, 0, h))
 
-        # ----------------------------------------------------
         # SINUSOIDAL — horizontal sinusoid + slow vertical drift
-        # ----------------------------------------------------
         elif self.profile == MotionProfile.SINUSOIDAL:
             cx, cy = w/2, h/2
             drift_vy = 18.0 * math.sin(self._t*0.25 + self._sin_phase*0.5)
@@ -415,9 +356,7 @@ class Target:
             self._heading = math.atan2(self.vy, self.vx) if (self.vx or self.vy) else self._heading
             self.x = float(np.clip(self.x, 0, w)); self.y = float(np.clip(self.y, 0, h))
 
-        # ----------------------------------------------------
         # ZIGZAG — straight segments with periodic heading flips
-        # ----------------------------------------------------
         elif self.profile == MotionProfile.ZIGZAG:
             self._zz_next_turn -= dt
             if self._zz_next_turn <= 0:
@@ -436,9 +375,7 @@ class Target:
             if bounced: self._heading = math.atan2(self.vy, self.vx); self._zz_next_turn = float(self._rng.uniform(0.8, 1.6))
             self.x=float(np.clip(self.x,0,w)); self.y=float(np.clip(self.y,0,h))
 
-        # ----------------------------------------------------
         # CURVED — elliptical orbit with perturbation & breathing
-        # ----------------------------------------------------
         elif self.profile == MotionProfile.CURVED:
             cx, cy = w/2, h/2
             perturb = 1.0 + 0.08*math.sin(self._t*0.9 + self._orbit_ecc_phase)
@@ -453,9 +390,7 @@ class Target:
             self._heading = math.atan2(self.vy, self.vx)
             self.x=float(np.clip(self.x,0,w)); self.y=float(np.clip(self.y,0,h))
 
-        # ----------------------------------------------------
         # FIGURE_EIGHT — Lissajous with frequency wobble
-        # ----------------------------------------------------
         elif self.profile == MotionProfile.FIGURE_EIGHT:
             cx, cy = w/2, h/2
             omega = self._fe_omega
@@ -469,9 +404,7 @@ class Target:
             self._heading = math.atan2(self.vy, self.vx)
             self.x=float(np.clip(self.x,0,w)); self.y=float(np.clip(self.y,0,h))
 
-        # ----------------------------------------------------
         # SPIRAL — pulsating radius + tangential + radial velocity
-        # ----------------------------------------------------
         elif self.profile == MotionProfile.SPIRAL:
             cx, cy = w/2, h/2
             r_range = (self._sp_max_r - self._sp_r0)
@@ -487,9 +420,7 @@ class Target:
             self._heading = math.atan2(self.vy, self.vx)
             self.x=float(np.clip(self.x,0,w)); self.y=float(np.clip(self.y,0,h))
 
-        # ----------------------------------------------------
         # ACCELERATING — 1-D along heading, bounce resets speed
-        # ----------------------------------------------------
         elif self.profile == MotionProfile.ACCELERATING:
             self._cur_speed += self._acc*dt
             self.x += self._cur_speed * math.cos(self._heading)*dt
@@ -506,9 +437,7 @@ class Target:
             self.vy = self._cur_speed*math.sin(self._heading)
             self.x=float(np.clip(self.x,0,w)); self.y=float(np.clip(self.y,0,h))
 
-        # ----------------------------------------------------
         # WAYPOINT — steer toward waypoint with limited turn rate
-        # ----------------------------------------------------
         elif self.profile == MotionProfile.WAYPOINT:
             tx, ty = self._wp
             dx, dy = tx - self.x, ty - self.y
@@ -532,9 +461,7 @@ class Target:
             self.x += self.vx*dt; self.y += self.vy*dt
             self.x=float(np.clip(self.x,0,w)); self.y=float(np.clip(self.y,0,h))
 
-        # ----------------------------------------------------
         # RANDOM_WALK — Langevin / OU process with damping
-        # ----------------------------------------------------
         elif self.profile == MotionProfile.RANDOM_WALK:
             damping=self._rw_damping; scale=self._rw_noise
             noise_x=float(self._rng.normal(0,1)); noise_y=float(self._rng.normal(0,1))
@@ -552,19 +479,13 @@ class Target:
             self._heading=math.atan2(self.vy,self.vx) if (self.vx or self.vy) else self._heading
             self.x=float(np.clip(self.x,0,w)); self.y=float(np.clip(self.y,0,h))
 
-        # ----------------------------------------------------
         # Photometric scintillation — all profiles
-        # ----------------------------------------------------
         fast=0.06*math.sin(self._t*self._scint_freq + self._scint_phase)
         slow=0.04*math.sin(self._t*0.7)
         noise=float(self._rng.normal(0,0.015))
         scint=float(np.clip(1.0+fast+slow+noise,0.78,1.22))
         self.current_brightness=float(np.clip(self.brightness*scint,180,255))
         self.current_radius=float(np.clip(self.radius*(0.92+0.16*scint),1.0,self.radius*1.4))
-
-    # ========================================================
-    # SECTION: Accessors — position, velocity, photometry
-    # ========================================================
 
     def get_position(self) -> tuple[float,float]:
         return (float(self.x), float(self.y))
@@ -574,10 +495,6 @@ class Target:
         return (float(self.current_brightness), float(self.current_radius))
     def get_state_vector(self) -> np.ndarray:
         return np.array([self.x,self.y,self.vx,self.vy], dtype=np.float64)
-
-    # ========================================================
-    # SECTION: Hit Geometry — hitbox / center
-    # ========================================================
 
     def get_hitbox(self) -> tuple[float,float,int]:
         """Return (x,y, hitbox_radius) — large box for coarse lock."""
@@ -606,10 +523,6 @@ class Target:
             self.hitbox_radius = int(np.clip(int(hitbox_radius), 3, 80))
             if center_radius is not None:
                 self.center_radius = int(np.clip(int(center_radius), 1, 10))
-
-# ============================================================
-# SECTION: Factory — create_beacons (back-compat)
-# ============================================================
 
 def create_beacons(count: int, bounds: tuple[int,int], profile: MotionProfile,
                    speed: float, seed: int | None = 42,

@@ -1,40 +1,4 @@
-"""
-Module: tracking.state
-Purpose: Lock status state machine — orchestrator that delegates to isolated
-         searching / acquired / locked / lost handlers (well-commented).
-Public API: LockStatus, LockStateMachine
-Notes: Refactored 2026-09 — each lock phase now lives in its own directory:
-        - searching/handler.py  → SEARCHING (no estimate, first hit → ACQUIRED)
-        - acquired/handler.py   → ACQUIRED (probation, hits → TRACKING, miss → LOST)
-        - locked/handler.py     → LOCKED = TRACKING (stable, retention, miss → LOST)
-        - lost/handler.py       → LOST (hold estimate, hit → ACQUIRED, grace → SEARCHING)
-       This file is now a thin orchestrator: it owns counters & status, and
-       dispatches has_detection to the appropriate isolated handler (lazy import
-       to avoid circular). Fallback inline logic preserved for robustness.
-       Stateless detector input → stateful lock logic lives here, separate from smoothing.
-
-State Diagram (as specified):
-  SEARCHING ──(detection)──► ACQUIRED ──(≥acquire_hits consecutive hits)──► TRACKING
-      ▲                          │                                              │
-      │                          │ miss ≥ miss_limit                            │ miss ≥ miss_limit
-      │                          ▼                                              ▼
-      └──────(miss ≥ miss_limit×grace_mult, discard estimate)────── LOST ◄──────┘
-                                    ▲  │
-                                    │  └──(detection)──► ACQUIRED  (reacquisition, not full reset)
-
-Definitions (from spec):
-  Detection: raw per-frame (x,y) or None — runs every frame, regardless of lock.
-  Searching: no lock, estimate=None — nothing to report.
-  Acquired: first hit(s) — provisional, probation before commit (noise could be clutter).
-  Tracking/Locked: ≥acquire_hits (3) consecutive hits — sustained confirmation, counts toward
-                  lock retention rate (metrics). This is "locked".
-  Lost: misses ≥ miss_limit — detections stopped, but we remember last estimate and keep
-        trying nearby (reacquisition window). If hit → ACQUIRED, else after
-        miss ≥ miss_limit×grace_mult → SEARCHING and discard estimate.
-
-Maths: Hit/miss counters are sequential detection — simple SPRT with fixed thresholds.
-        No Bayesian; thresholds are config (acquire_hits, miss_limit, grace_mult).
-"""
+# tracking/state.py - Lock status state machine — orchestrator that delegates to isolated
 
 from __future__ import annotations
 

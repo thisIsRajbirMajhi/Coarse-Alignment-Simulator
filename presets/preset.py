@@ -1,18 +1,8 @@
-"""
-Module: presets.preset
-Purpose: Preset dataclass — full simulator configuration + goal (well-commented).
-Public API: Preset
-Notes: Each preset is a snapshot of all 7 subsystems. apply_to_window() is implemented
-       in presets.applier for GUI integration (keeps preset pure data).
-"""
+# presets/preset.py - Preset dataclass — full simulator configuration + goal (well-commented)
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-
-# ============================================================
-# SECTION: Preset — full simulator snapshot
-# ============================================================
 
 @dataclass
 class Preset:

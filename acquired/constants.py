@@ -1,14 +1,4 @@
-"""
-Module: acquired.constants
-Purpose: Single source for ACQUIRED-phase limits & defaults.
-Public API: ACQUIRED_LIMITS, ACQUIRED_DEFAULTS
-Notes: ACQUIRED is probation — first hit(s) before commit to LOCKED/TRACKING.
-       Thresholds: acquire_hits (consecutive hits to confirm), miss_limit (misses to LOST).
-"""
-
-# ============================================================
-# SECTION: Acquired limits — probation thresholds
-# ============================================================
+# acquired/constants.py - Single source for ACQUIRED-phase limits & defaults
 
 ACQUIRED_LIMITS: dict[str, tuple[float, float]] = {
     # Consecutive hits required to confirm TRACKING/LOCKED from ACQUIRED

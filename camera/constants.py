@@ -1,15 +1,6 @@
-"""
-Module: camera.constants
-Purpose: Single source for Camera limits & defaults (FOV, mechanics, display, optics).
-Public API: CAMERA_LIMITS, CAMERA_DEFAULTS, DISPLAY_LIMITS, DISPLAY_DEFAULTS
-Notes: Consumed by CameraConfig, PTZCamera, and CameraPanel for consistent clamping.
-"""
+# camera/constants.py - Single source for Camera limits & defaults (FOV, mechanics, display, optics)
 
 from environment.constants import MAX_RES
-
-# ============================================================
-# SECTION: Camera / Optics Limits
-# ============================================================
 
 CAMERA_LIMITS: dict[str, tuple[float, float]] = {
     # Field of View — actual sensor resolution (px)
@@ -49,10 +40,6 @@ CAMERA_DEFAULTS: dict = {
     "scene_width": 1000,      # helper for auto home/range when scene not yet known
     "scene_height": 1000,
 }
-
-# ============================================================
-# SECTION: Display Limits
-# ============================================================
 
 DISPLAY_LIMITS: dict[str, tuple[int, int]] = {
     "viewport_width": (100, MAX_RES),

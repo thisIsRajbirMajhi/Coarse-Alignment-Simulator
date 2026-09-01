@@ -1,23 +1,10 @@
-"""
-Module: environment.constants
-Purpose: Single source of truth for all Environment parameters — limits, defaults, and ranges.
-Public API: MAX_RES, MIN_RES, DEFAULTS, LIMITS
-Notes: Imported by Scene, EnvironmentConfig, and EnvironmentPanel to keep clamping consistent.
-"""
-
-# ============================================================
-# SECTION: Resolution Limits
-# ============================================================
+# environment/constants.py - Single source of truth for all Environment parameters — limits, defaults, and ra
 
 # World size bounds — validated and clamped everywhere (Scene, GUI, Config).
 # 50 px minimum keeps star/haze generation meaningful; 5000 px maximum caps
 # memory at ~100 MB (5000x5000x3 uint8) and keeps FFT-based disturbances tractable.
 MAX_RES: int = 5000
 MIN_RES: int = 50
-
-# ============================================================
-# SECTION: Parameter Defaults
-# ============================================================
 
 # Canonical defaults — match original Scene behaviour before modularisation.
 DEFAULTS: dict = {
@@ -33,10 +20,6 @@ DEFAULTS: dict = {
     "dynamic": False,             # bool — whether background animates
     "dynamic_speed": 1.0,         # float 0.1..5.0 — animation time multiplier
 }
-
-# ============================================================
-# SECTION: Parameter Limits
-# ============================================================
 
 # Each entry: (min, max) for validation via EnvironmentConfig.validate().
 # Used by GUI spinbox ranges and Scene clamping — single definition avoids drift.

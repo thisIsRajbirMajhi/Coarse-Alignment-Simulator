@@ -1,14 +1,4 @@
-"""
-Module: camera.optics
-Purpose: Optics helpers — pixel ↔ angle conversions for reporting.
-Public API: pixel_to_mrad, pixel_to_urad, mrad_to_pixel
-Notes: Stateless, used by CameraConfig, PTZCamera, and Dashboard reporting.
-       Real FSOC systems quote error in mrad/µrad; this bridges simulation px to angular units.
-"""
-
-# ============================================================
-# SECTION: Pixel ↔ Angle conversions
-# ============================================================
+# camera/optics.py - Optics helpers — pixel ↔ angle conversions for reporting
 
 def pixel_to_mrad(px: float, scale_mrad_per_px: float = 0.035) -> float:
     """

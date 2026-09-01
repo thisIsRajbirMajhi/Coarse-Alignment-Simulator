@@ -1,32 +1,4 @@
-"""
-Module: control.controller
-Purpose: PID controller — robust, modular, well-commented with maths/physics.
-Public API: PIDController, ProportionalController (backward compat shim)
-Architecture:
-  - constants.py : limits/defaults
-  - config.py    : ControllerConfig (typed, validated)
-  - controller.py: PIDController + ProportionalController shim
-Notes:
-  - P/PI/PID selectable via ControllerConfig.controller_type.
-  - Update rate decouples compute from render FPS (interval = 1/Hz).
-  - Dead zone avoids micro-jitter when beacon already centered.
-  - Output clamp respects camera max_slew_rate — controller never asks more than actuator can do.
-  - Anti-windup + derivative filtering for robustness.
-  - Stateless per call except for integral/derivative history (reset() clears).
-
-Maths:
-  Continuous PID: u(t) = Kp*e(t) + Ki*int(e) + Kd*de/dt
-  Discrete (per tick, dt = update_interval or actual dt):
-    P  = Kp * e
-    I += Ki * e * dt   -> with clamping (anti-windup) to output_clamp
-    D  = Kd * (e - e_prev)/dt  -> low-pass filtered (0.1*D + 0.9*D_prev) to damp noise
-    u_raw = P + I + D
-    Dead zone: if |e| < dead_zone -> u=0 (both axes)
-    Clamp: u = clip(u_raw, -output_clamp, +output_clamp)
-             and also clip to camera_max_slew*dt if camera limit tighter
-  Physics: Kp drives current error, Ki fixes steady-state offset (e.g., constant drift),
-           Kd damps overshoot when camera has slew/latency (inertia).
-"""
+# control/controller.py - PID controller — robust, modular, well-commented with maths/physics
 
 from __future__ import annotations
 
@@ -37,7 +9,6 @@ import numpy as np
 
 from control.config import ControllerConfig
 from control.constants import CONTROL_DEFAULTS
-
 
 class PIDController:
     """PID controller — per-axis (pan, tilt) with shared gains."""
@@ -173,7 +144,6 @@ class PIDController:
         self._prev_deriv_x = 0.0; self._prev_deriv_y = 0.0
         self._last_compute_time = None
         self._last_output = (0.0, 0.0)
-
 
 class ProportionalController(PIDController):
     """Shim for old code/tests: ProportionalController(gain=0.1) -> PID with P only."""

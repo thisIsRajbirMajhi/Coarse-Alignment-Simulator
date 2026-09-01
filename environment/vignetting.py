@@ -1,18 +1,8 @@
-"""
-Module: environment.vignetting
-Purpose: Radial edge-darkening (vignetting) for optical realism.
-Physics: Falloff  vig(r) = 1 - strength * (r/R)^1.8  clamped to [0.35, 1.0].
-Public API: apply_vignetting
-Notes: In-place scaling of float32 base buffer; no blur for sharpness.
-"""
+# environment/vignetting.py - Radial edge-darkening (vignetting) for optical realism
 
 import math
 
 import numpy as np
-
-# ============================================================
-# SECTION: Vignetting
-# ============================================================
 
 def apply_vignetting(base: np.ndarray, strength: float) -> np.ndarray:
     """

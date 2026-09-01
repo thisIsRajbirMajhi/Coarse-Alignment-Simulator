@@ -1,25 +1,9 @@
-"""
-Module: lost.handler
-Purpose: Isolated LOST algorithm — retain estimate, await reacquisition or timeout.
-Public API: LostHandler
-Notes: LOST holds last estimate (for reacquisition) and counts misses.
-       Hit → ACQUIRED (reacquisition, not direct LOCKED), miss → if grace exceeded → SEARCHING + clear.
-
-Maths:
-  LOST + hit  → ACQUIRED (hits=1, misses=0)
-  LOST + miss → if misses ≥ miss_limit·grace_mult → SEARCHING + clear else LOST
-       Miss threshold uses grace_mult (e.g., 5·2.0=10 frames) — longer than ACQUIRED/LOCKED.
-       Colour: #ef4444 (red) — loss-of-lock.
-"""
+# lost/handler.py - Isolated LOST algorithm — retain estimate, await reacquisition or timeout
 
 from __future__ import annotations
 
 from common.colors import lock_color_hex
 from tracking.types import LockStatus
-
-# ============================================================
-# SECTION: LostHandler — LOST algorithm
-# ============================================================
 
 class LostHandler:
     """

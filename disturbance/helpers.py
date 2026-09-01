@@ -1,17 +1,8 @@
-"""
-Module: disturbance.helpers
-Purpose: Shared physics helpers — r0 and Rytov mappings from intensity.
-Public API: r0_from_intensity, rytov_variance
-Notes: Stateless, pure functions. Used by turbulence module.
-"""
+# disturbance/helpers.py - Shared physics helpers — r0 and Rytov mappings from intensity
 
 import numpy as np
 
 from disturbance.constants import R0_0, R0_BETA, R0_MAX, R0_MIN
-
-# ============================================================
-# SECTION: Turbulence helpers — intensity → physics
-# ============================================================
 
 def r0_from_intensity(intensity: float, wavelength: float = 1.55e-6) -> float:
     """
@@ -27,7 +18,6 @@ def r0_from_intensity(intensity: float, wavelength: float = 1.55e-6) -> float:
         return float("inf")
     r0 = R0_0 * (1.0 + R0_BETA * float(intensity)) ** (-0.6)
     return float(np.clip(r0, R0_MIN, R0_MAX))
-
 
 def rytov_variance(intensity: float) -> float:
     """

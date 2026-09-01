@@ -1,9 +1,4 @@
-"""
-Module: tracking.config
-Purpose: Typed, validated configuration for tracking / lock.
-Public API: TrackerConfig
-Notes: Immediate migration — MainWindow can store TrackerConfig.
-"""
+# tracking/config.py - Typed, validated configuration for tracking / lock
 
 from __future__ import annotations
 
@@ -11,10 +6,6 @@ from dataclasses import dataclass
 
 from common.config_base import BaseValidatedConfig, clip_field
 from tracking.constants import TRACKER_DEFAULTS, TRACKER_LIMITS
-
-# ============================================================
-# SECTION: TrackerConfig — smoothing & miss/acquire thresholds
-# ============================================================
 
 @dataclass
 class TrackerConfig(BaseValidatedConfig):

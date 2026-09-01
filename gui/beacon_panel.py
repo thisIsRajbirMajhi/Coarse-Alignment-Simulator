@@ -1,19 +1,4 @@
-"""
-Module: gui.beacon_panel
-Purpose: Per-beacon control panel — 8 parameters for one Target/Beacon.
-Public API: BeaconPanel
-Params (8):
-  1) Toggle on/off          — QCheckBox
-  2) Motion profile         — QComboBox
-  3) Starting Position Seed — QSpinBox (0..999999) + Randomize button
-  4) Speed                 — QSpinBox px/s
-  5) Brightness            — QSpinBox 0..255
-  6) Radius                — QSpinBox px
-  7) Hit Box Radius        — QSpinBox px (≥ radius)
-  8) Center Hit Radius     — QSpinBox px (≤ hitbox)
-Also: Heading, X, Y (position) for precise placement — X/Y editable, seed drives randomization.
-Notes: Emits beaconConfigChanged(BeaconConfig) HOT on any edit. Modular + well commented.
-"""
+# gui/beacon_panel.py - Per-beacon control panel — 8 parameters for one Target/Beacon
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
@@ -32,10 +17,6 @@ from PyQt5.QtWidgets import (
 from target.config import BeaconConfig
 from target.constants import BEACON_LIMITS
 from target.motion import MotionProfile
-
-# ============================================================
-# SECTION: BeaconPanel — Single Beacon (8 params)
-# ============================================================
 
 class BeaconPanel(QGroupBox):
     """
@@ -59,10 +40,6 @@ class BeaconPanel(QGroupBox):
         self.set_config(self._initial, emit=False)
         self.setStyleSheet("QGroupBox { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; margin-top: 12px; padding-top: 10px; } QGroupBox::title { color: #1e40af; font-size:10px; font-weight:800; background:#eff6ff; border:1px solid #dbeafe; border-radius:6px; padding:2px 8px; }")
 
-    # ========================================================
-    # SECTION: UI — Grouped rows for 8 params
-    # ========================================================
-
     def _build_ui(self) -> None:
         grid = QGridLayout(self)
         grid.setContentsMargins(8, 12, 8, 8)
@@ -71,9 +48,7 @@ class BeaconPanel(QGroupBox):
         grid.setColumnStretch(1, 1)
         grid.setColumnStretch(3, 1)
 
-        # ----------------------------------------------------
         # Row 0: Enabled toggle + Motion profile
-        # ----------------------------------------------------
         # 1) Toggle beacon on/off — disabled beacons are excluded from
         #    detection/tracking but retain state for re-enable.
         self.chk_enabled = QCheckBox("Enabled")
@@ -90,9 +65,7 @@ class BeaconPanel(QGroupBox):
         grid.addWidget(self._label("Profile"), 0, 1)
         grid.addWidget(self.combo_profile, 0, 2, 1, 2)
 
-        # ----------------------------------------------------
         # Row 1: Position Seed + Speed
-        # ----------------------------------------------------
         # 3) Starting Position Seed — drives deterministic placement via RNG(seed)
         #    Also stored as _seed on Target for round-trip. Reroll via Random button.
         grid.addWidget(self._label("Pos Seed"), 1, 0)
@@ -113,9 +86,7 @@ class BeaconPanel(QGroupBox):
         self.spin_speed.setMinimumHeight(24)
         grid.addWidget(self.spin_speed, 1, 3)
 
-        # ----------------------------------------------------
         # Row 2: Brightness + Radius (photometric)
-        # ----------------------------------------------------
         # 5) Brightness — beacon intensity 0–255; scintillation modulates 180–255
         grid.addWidget(self._label("Bright"), 2, 0)
         self.spin_brightness = QSpinBox()
@@ -135,9 +106,7 @@ class BeaconPanel(QGroupBox):
         self.spin_radius.setMinimumHeight(24)
         grid.addWidget(self.spin_radius, 2, 3)
 
-        # ----------------------------------------------------
         # Row 3: Hit Box + Center Hit (detection geometry)
-        # ----------------------------------------------------
         # 7) Hit Box Radius — valid detection radius (≥ visual radius)
         grid.addWidget(self._label("Hitbox"), 3, 0)
         self.spin_hitbox = QSpinBox()
@@ -158,9 +127,7 @@ class BeaconPanel(QGroupBox):
         self.spin_center.setMinimumHeight(24)
         grid.addWidget(self.spin_center, 3, 3)
 
-        # ----------------------------------------------------
         # Row 4: Heading + X/Y (position placement)
-        # ----------------------------------------------------
         grid.addWidget(self._label("Heading"), 4, 0)
         self.spin_heading = QSpinBox()
         lo, hi = BEACON_LIMITS["heading"]
@@ -205,10 +172,6 @@ class BeaconPanel(QGroupBox):
         self.spin_y.valueChanged.connect(self._emit_config)
         self.btn_rand_pos.clicked.connect(lambda: self.randomizePositionRequested.emit(self.beacon_id))
 
-    # ========================================================
-    # SECTION: Helpers — hitbox/center cross-clamping
-    # ========================================================
-
     def _on_hitbox_changed(self, val: int) -> None:
         """Ensure center ≤ hitbox when hitbox shrinks."""
         if self.spin_center.value() > int(val):
@@ -229,10 +192,6 @@ class BeaconPanel(QGroupBox):
         lbl = QLabel(text)
         lbl.setStyleSheet("color:#334155; font-size:11px;")
         return lbl
-
-    # ========================================================
-    # SECTION: Config ↔ UI Sync
-    # ========================================================
 
     def collect_config(self) -> BeaconConfig:
         """Read current UI into a validated BeaconConfig."""

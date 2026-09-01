@@ -1,13 +1,4 @@
-"""
-Module: overlay.config
-Purpose: Typed, validated configuration for crosshair / tracking overlay (robust, modular).
-Public API: OverlayConfig, CrosshairStyleType, LockColors, ErrorUnits
-Groups:
-  - Crosshair: style, size, gap, thickness, centre_dot
-  - Lock: colors per state, circle radius, pulse
-  - Error: show line/text, units (px/mrad/urad)
-Notes: Single source for renderer and panel. HOT-reloaded, validated, serializable.
-"""
+# overlay/config.py - Typed, validated configuration for crosshair / tracking overlay (robust, modular
 
 from __future__ import annotations
 
@@ -18,10 +9,6 @@ import numpy as np
 
 from common.config_base import BaseValidatedConfig, clip_field
 from overlay.constants import CROSSHAIR_STYLES, ERROR_UNITS_OPTIONS, LOCK_COLOR_DEFAULTS, OVERLAY_DEFAULTS, OVERLAY_LIMITS
-
-# ============================================================
-# SECTION: Enums — style & units
-# ============================================================
 
 class CrosshairStyleType(str, Enum):
     CROSS = "cross"
@@ -62,10 +49,6 @@ class LockColors:
                 kwargs[k] = tuple(int(x) for x in v) if isinstance(v, (list, tuple)) else LOCK_COLOR_DEFAULTS[k]
         return cls(**kwargs)
 
-# ============================================================
-# SECTION: OverlayConfig — full overlay (3 groups)
-# ============================================================
-
 @dataclass
 class OverlayConfig(BaseValidatedConfig):
     """
@@ -82,9 +65,7 @@ class OverlayConfig(BaseValidatedConfig):
     LIMITS = OVERLAY_LIMITS
     DEFAULTS = OVERLAY_DEFAULTS
 
-    # --------------------------------------------------------
     # Crosshair
-    # --------------------------------------------------------
     crosshair_style: str = OVERLAY_DEFAULTS["crosshair_style"]
     crosshair_size: int = OVERLAY_DEFAULTS["crosshair_size"]
     crosshair_gap: int = OVERLAY_DEFAULTS["crosshair_gap"]
@@ -93,26 +74,20 @@ class OverlayConfig(BaseValidatedConfig):
     centre_dot_radius: int = OVERLAY_DEFAULTS["centre_dot_radius"]
     crosshair_color: tuple[int,int,int] = OVERLAY_DEFAULTS["crosshair_color"]
 
-    # --------------------------------------------------------
     # Lock status
-    # --------------------------------------------------------
     lock_colors: LockColors = field(default_factory=LockColors)
     lock_circle_radius: int = OVERLAY_DEFAULTS["lock_circle_radius"]
     lock_circle_thickness: int = OVERLAY_DEFAULTS["lock_circle_thickness"]
     pulse_enabled: bool = OVERLAY_DEFAULTS["pulse_enabled"]
     pulse_duration_ms: int = OVERLAY_DEFAULTS["pulse_duration_ms"]
 
-    # --------------------------------------------------------
     # Error visualization
-    # --------------------------------------------------------
     show_error_line: bool = OVERLAY_DEFAULTS["show_error_line"]
     show_error_text: bool = OVERLAY_DEFAULTS["show_error_text"]
     error_units: str = OVERLAY_DEFAULTS["error_units"]
     error_text_scale: float = OVERLAY_DEFAULTS["error_text_scale"]
 
-    # ========================================================
     # Validation
-    # ========================================================
 
     def validate(self) -> "OverlayConfig":
         if self.crosshair_style not in CROSSHAIR_STYLES:
@@ -137,9 +112,7 @@ class OverlayConfig(BaseValidatedConfig):
             self.lock_colors = LockColors()
         return self
 
-    # ========================================================
     # Helpers — style predicates
-    # ========================================================
 
     def has_cross(self) -> bool:
         return self.crosshair_style in ("cross", "cross+bracket", "cross+circle", "all")
@@ -153,9 +126,7 @@ class OverlayConfig(BaseValidatedConfig):
     def color_for(self, status_value: str) -> tuple[int,int,int]:
         return self.lock_colors.for_status(status_value)
 
-    # ========================================================
     # Serialization
-    # ========================================================
 
     def to_dict(self) -> dict:
         d = asdict(self)

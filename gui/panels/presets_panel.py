@@ -1,10 +1,4 @@
-"""
-Module: gui.panels.presets_panel
-Purpose: One-click presets — configure entire software + auto-run, with goal description.
-Public API: PresetsPanel
-Notes: Modular, well-commented, intuitive. Each button shows name, description, and brief end goal.
-       Emits presetSelected(Preset) when clicked — MainWindow then applies via presets.applier.
-"""
+# gui/panels/presets_panel.py - One-click presets — configure entire software + auto-run, with goal description
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
@@ -20,10 +14,6 @@ from PyQt5.QtWidgets import (
 
 from presets.library import PRESETS
 from presets.preset import Preset
-
-# ============================================================
-# SECTION: PresetsPanel — curated test cases
-# ============================================================
 
 class PresetsPanel(QWidget):
     """
@@ -43,9 +33,7 @@ class PresetsPanel(QWidget):
         super().__init__(parent)
         self._build_ui()
 
-    # ========================================================
     # Build UI — scrollable preset cards
-    # ========================================================
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)

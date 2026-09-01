@@ -1,13 +1,4 @@
-"""
-Module: common.config_base
-Purpose: Single source for Config validation pattern — eliminates 11× duplication
-         of validate()/to_dict()/from_dict() + np.clip loops.
-Public API: BaseValidatedConfig, clip_field
-Notes: Each dataclass config inherits and declares LIMITS class var or module-level
-       LIMITS import. validate() clips every field present in LIMITS.
-       Preserves int vs float typing (int fields stay int, float stay float).
-       to_dict/from_dict use dataclasses.asdict + DEFAULTS filtering.
-"""
+# common/config_base.py - Single source for Config validation pattern — eliminates 11× duplication
 
 from __future__ import annotations
 
@@ -15,7 +6,6 @@ from dataclasses import asdict, fields, is_dataclass
 from typing import Any, ClassVar
 
 import numpy as np
-
 
 def clip_field(value: Any, lo: float, hi: float) -> Any:
     """
@@ -29,7 +19,6 @@ def clip_field(value: Any, lo: float, hi: float) -> Any:
         return int(clipped) if is_int else float(clipped) if isinstance(value, float) else type(value)(clipped)  # type: ignore
     except Exception:
         return value
-
 
 class BaseValidatedConfig:
     """

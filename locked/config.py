@@ -1,11 +1,4 @@
-"""
-Module: locked.config
-Purpose: Typed, validated configuration for LOCKED (=TRACKING) phase.
-Public API: LockedConfig
-Notes: Stable lock tunables — smoothing filter and miss tolerance.
-       Alias for tracking config slice; re-exports TrackerConfig semantics
-       but scoped to LOCKED for isolated tuning.
-"""
+# locked/config.py - Typed, validated configuration for LOCKED (=TRACKING) phase
 
 from __future__ import annotations
 
@@ -13,10 +6,6 @@ from dataclasses import dataclass
 
 from common.config_base import BaseValidatedConfig, clip_field
 from locked.constants import LOCKED_DEFAULTS, LOCKED_LIMITS
-
-# ============================================================
-# SECTION: LockedConfig — stable tracking
-# ============================================================
 
 @dataclass
 class LockedConfig(BaseValidatedConfig):

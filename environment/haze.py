@@ -1,18 +1,7 @@
-"""
-Module: environment.haze
-Purpose: Low-frequency haze/fog texture generation and storage.
-Physics: Filtered white noise (downsampled 8× → cubic upscale → Gaussian
-         blur σ=12 → normalized to [-1,1]) scaled by haze_strength * 8.0.
-Public API: build_haze_field, haze_modulation
-Notes: haze field is stored as float32 (H, W) for cheap dynamic drift.
-"""
+# environment/haze.py - Low-frequency haze/fog texture generation and storage
 
 import cv2
 import numpy as np
-
-# ============================================================
-# SECTION: Haze Field Generation
-# ============================================================
 
 def build_haze_field(
     width: int,
@@ -47,10 +36,6 @@ def build_haze_field(
         noise_full = (noise_full - n_min) / (n_max - n_min) * 2 - 1  # -> [-1,1]
     haze = noise_full * float(haze_strength) * 8.0
     return haze.astype(np.float32)
-
-# ============================================================
-# SECTION: Dynamic Drift Helper
-# ============================================================
 
 def haze_modulation(time: float) -> float:
     """

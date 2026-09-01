@@ -1,17 +1,8 @@
-"""
-Module: disturbance.sensor_noise
-Purpose: Physics sensor model — shot/read/PRNU/hot pixels, well-commented.
-Public API: apply_sensor_noise
-Notes: Stateless (no temporal memory) — intensity maps to read/dark/PRNU.
-"""
+# disturbance/sensor_noise.py - Physics sensor model — shot/read/PRNU/hot pixels, well-commented
 
 import numpy as np
 
 from disturbance.constants import ELECTRONS_PER_DN, READ_SIGMA_BASE, T_EXP
-
-# ============================================================
-# SECTION: Sensor noise — physics model
-# ============================================================
 
 def apply_sensor_noise(
     frame: np.ndarray,

@@ -1,20 +1,4 @@
-"""
-Module: gui.panels.dashboard_panel
-Purpose: Intuitive, modular live performance dashboard + responsive, auto-scaling graph.
-Public API: DashboardPanel, GraphPanel
-Layout (per spec image, intuitive & informative):
-  LEFT (metrics):
-    - Dashboard: FPS | Duration (S) | Acquisition (S) | Proc. Time (S)
-    - Tracking: Average Tracking Error | Maximum Tracking Error (px / mrad, no %)
-    - Locking: Status | Retention Rate (%) | Total Acquisitions
-    - Detection / Searching / Center: Rate (%) | Time (S) for each (6 rows)
-  RIGHT (graph):
-    - Responsive, auto-scaling PlotWidget with 6 curves: FPS, Retention, Error, Center Hit, Detection, Searching
-    - Complete picture: ViewBox autoRange, downsample, legend, axis labels, grid, complete history without trimming.
-Notes: Modular rebuild 2026-09-01 — sections as helpers, GraphPanel encapsulated, tooltips, color-coded status.
-       HOT via update_from_summary(summary, tracker_status, error_px, camera_scale). Keeps stat_labels for backward compat.
-       2026-09-01 update: System Health card removed, tracking error % unit removed (px/mrad only).
-"""
+# gui/panels/dashboard_panel.py - Intuitive, modular live performance dashboard + responsive, auto-scaling graph
 
 from collections import deque
 import math
@@ -32,10 +16,6 @@ from PyQt5.QtWidgets import (
     QWidget,
     QSizePolicy,
 )
-
-# ============================================================
-# SECTION: Color & scaling helpers (intuitive, informative)
-# ============================================================
 
 STATUS_COLOR = {
     "tracking": "#22c55e",
@@ -92,10 +72,6 @@ def _error_pct_from_px(px: float) -> float:
         return max(0.0, min(100.0, float(px) / 15.0 * 100.0))
     except Exception:
         return 0.0
-
-# ============================================================
-# SECTION: GraphPanel — responsive, auto-scaling, complete picture
-# ============================================================
 
 class GraphPanel(QWidget):
     """
@@ -244,11 +220,6 @@ class GraphPanel(QWidget):
         except Exception:
             pass
 
-
-# ============================================================
-# SECTION: DashboardPanel — modular, intuitive sections
-# ============================================================
-
 class DashboardPanel(QWidget):
     """
     Modular dashboard — 4 spec sections + responsive graph.
@@ -330,9 +301,7 @@ class DashboardPanel(QWidget):
         self.graph.clear()
         self._last_graph_update = 0.0
 
-    # --------------------------------------------------------
     # Build UI — modular sections
-    # --------------------------------------------------------
 
     def _build_ui(self) -> None:
         outer = QHBoxLayout(self)
@@ -530,9 +499,7 @@ class DashboardPanel(QWidget):
         # e.g., proc_time_s maps to avg_processing_time_ms internally, but keep both
         # We expose mapping in update_from_summary, not here.
 
-    # ============================================================
     # Update — HOT, real-time, informative
-    # ============================================================
 
     def update_from_summary(self, summary: dict, tracker_status: str, tracking_error_px: float | None = None, camera_scale_mrad: float | None = None) -> None:
         """Update all labels and graph from PerformanceLogger summary. Real-time at ~30 Hz."""

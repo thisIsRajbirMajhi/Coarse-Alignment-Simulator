@@ -3,7 +3,6 @@ sys.path.insert(0, r"C:\Users\mrajb\OneDrive\Desktop\FSOC Simulator")
 
 from perf_log.metrics import PerformanceLogger
 
-
 def test_acquisition_time():
     pl = PerformanceLogger()
     pl.start()
@@ -13,7 +12,6 @@ def test_acquisition_time():
     assert s["acquisition_time_s"] is not None
     assert s["frame_count"] == 1
     assert s["lock_retention_rate_pct"] == 100.0
-
 
 def test_lock_retention():
     pl = PerformanceLogger()
@@ -26,7 +24,6 @@ def test_lock_retention():
     assert s["lock_retention_rate_pct"] == 30.0
     assert s["avg_tracking_error_px"] == 2.0
     assert s["max_tracking_error_px"] == 3.0
-
 
 def test_export_roundtrip():
     pl = PerformanceLogger()
@@ -43,7 +40,6 @@ def test_export_roundtrip():
     txt = pathlib.Path(p_csv).read_text()
     assert "frame_count" in txt
 
-
 def test_reset():
     pl = PerformanceLogger()
     pl.start()
@@ -51,7 +47,6 @@ def test_reset():
     pl.start()
     s = pl.summary()
     assert s["frame_count"] == 0
-
 
 if __name__ == "__main__":
     for name, fn in list(globals().items()):

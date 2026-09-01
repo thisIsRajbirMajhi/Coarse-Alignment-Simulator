@@ -3,7 +3,6 @@ sys.path.insert(0, r"C:\Users\mrajb\OneDrive\Desktop\FSOC Simulator")
 
 from tracking.tracker import Tracker, LockStatus
 
-
 def test_acquisition_sequence():
     t = Tracker(smoothing=0.4, miss_limit=5)
     assert t.status == LockStatus.SEARCHING
@@ -13,7 +12,6 @@ def test_acquisition_sequence():
     assert t.status == LockStatus.ACQUIRED
     t.update((102, 102))
     assert t.status == LockStatus.TRACKING
-
 
 def test_loss_after_misses():
     t = Tracker(smoothing=0.4, miss_limit=3)
@@ -26,7 +24,6 @@ def test_loss_after_misses():
     # reacquire
     t.update((60, 60))
     assert t.status == LockStatus.ACQUIRED
-
 
 def test_searching_after_double_miss():
     t = Tracker(smoothing=0.4, miss_limit=2)
@@ -41,7 +38,6 @@ def test_searching_after_double_miss():
     assert t.status == LockStatus.SEARCHING
     assert t.estimated_position is None
 
-
 def test_smoothing():
     t = Tracker(smoothing=0.8, miss_limit=5)
     t.update((0, 0))
@@ -49,12 +45,10 @@ def test_smoothing():
     # 0.8*0 + 0.2*100 = 20
     assert abs(est[0] - 20) < 1e-6
 
-
 def test_no_position_without_detection():
     t = Tracker()
     assert t.update(None) is None
     assert t.status == LockStatus.SEARCHING
-
 
 if __name__ == "__main__":
     for name, fn in list(globals().items()):

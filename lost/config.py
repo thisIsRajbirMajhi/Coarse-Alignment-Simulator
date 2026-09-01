@@ -1,9 +1,4 @@
-"""
-Module: lost.config
-Purpose: Typed, validated configuration for LOST phase.
-Public API: LostConfig
-Notes: Grace-period tuning — how long to retain estimate before discarding.
-"""
+# lost/config.py - Typed, validated configuration for LOST phase
 
 from __future__ import annotations
 
@@ -11,10 +6,6 @@ from dataclasses import dataclass
 
 from common.config_base import BaseValidatedConfig, clip_field
 from lost.constants import LOST_DEFAULTS, LOST_LIMITS
-
-# ============================================================
-# SECTION: LostConfig — reacquisition window
-# ============================================================
 
 @dataclass
 class LostConfig(BaseValidatedConfig):
