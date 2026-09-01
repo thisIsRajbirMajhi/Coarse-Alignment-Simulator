@@ -12,17 +12,19 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from presets.library import PRESETS
+from presets.library import PRESETS, PRESET_CATEGORIES
 from presets.preset import Preset
 
 class PresetsPanel(QWidget):
     """
-    Presets tab — 7 curated presets, one click configures entire simulator and runs.
+    Presets tab — 9 spec-aligned presets per ISRO FSOC PS-4, one click configures entire simulator and runs.
+    Covers: 2000×2000, 640×480 @4°×3° (0.109 mrad/px), 30Hz, centre, 10×10 beacon, linear/circular/fig8/random + spiral/sinusoidal,
+            5-10°/s slew, disturbances (Noise S&P/Gauss/Poisson, ±20 jitter/platform, Haze/Fog/Low-light).
 
     Each preset card shows:
-      [Button: "1 — Ideal · Baseline"]
-      Description: what it configures (disturbances, beacons, speed, etc.)
-      Goal: brief end goal — what to observe / expected metric
+      [Button: "1 — Spec Baseline ..."]
+      Description: what it configures (disturbances, beacons, speed, etc. + Sr. refs)
+      Goal: brief end goal — what to observe / expected metric (Sr.16-20)
 
     Emits presetSelected(Preset) — MainWindow applies via presets.applier.apply_preset()
     """
@@ -81,8 +83,9 @@ class PresetsPanel(QWidget):
         scroll.setWidget(container)
         layout.addWidget(scroll, 1)
 
-        # Category legend
-        legend = QLabel("Categories: baseline · turbulence · vibration · distractors · dynamics · snr · acquisition · stress")
+        # Category legend — dynamic from actual presets (spec-aligned)
+        cats = " · ".join(PRESET_CATEGORIES) if PRESET_CATEGORIES else "no presets"
+        legend = QLabel(f"Categories: {cats}  —  9 spec presets (Sr.1-21) · ISRO PS-4")
         legend.setStyleSheet("color:#94a3b8; font-size:9px; font-style:italic;")
         legend.setWordWrap(True)
         layout.addWidget(legend)
@@ -97,11 +100,14 @@ class PresetsPanel(QWidget):
         # Button — name with category chip feel
         btn = QPushButton(f"  {preset.name}")
         btn.setMinimumHeight(32)
-        # Color by category — deeper premium palette
+        # Color by category — spec palette (9 presets) + legacy fallback
         cat_colors = {
-            "baseline": "#16a34a", "turbulence": "#2563eb", "vibration": "#7c3aed",
-            "distractors": "#ea580c", "dynamics": "#db2777", "snr": "#475569",
-            "acquisition": "#0891b2", "stress": "#dc2626", "general": "#334155"
+            "baseline": "#16a34a", "circular": "#2563eb", "figure8": "#7c3aed",
+            "random": "#ea580c", "spiral": "#db2777", "noise": "#475569",
+            "jitter": "#e11d48", "acquisition": "#0891b2", "stress": "#dc2626",
+            # legacy aliases
+            "turbulence": "#2563eb", "vibration": "#7c3aed", "distractors": "#ea580c",
+            "dynamics": "#db2777", "snr": "#475569", "general": "#334155"
         }
         col = cat_colors.get(preset.category, "#2563eb")
         btn.setStyleSheet(f"QPushButton {{ background:{col}; color:white; font-weight:800; border:none; border-radius:7px; padding:7px 12px; text-align:left; font-size:11px; letter-spacing:0.2px; }} QPushButton:hover {{ background: #000000; }}")

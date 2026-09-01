@@ -510,20 +510,40 @@ class MainWindow(StateMixin, QMainWindow):
 
         main_splitter.addWidget(left_panel)
 
-        # ——— Right: Control Deck ———
-        self._build_control_panel_widget()
-
-        right_scroll = QScrollArea()
-        right_scroll.setWidgetResizable(True)
-        right_scroll.setWidget(self._control_widget)
-        right_scroll.setMinimumWidth(420)
-        right_scroll.setMaximumWidth(520)
-        right_scroll.setStyleSheet("QScrollArea { border: none; background: #f1f5f9; }")
-
-        main_splitter.addWidget(right_scroll)
+        # ——— Right: Dashboard (metrics only, graph removed) — replaces command deck per consolidation
+        self._build_dashboard_widget()
+        right_scroll_dashboard = QScrollArea()
+        right_scroll_dashboard.setWidgetResizable(True)
+        right_scroll_dashboard.setWidget(self.dashboard_panel)
+        right_scroll_dashboard.setMinimumWidth(420)
+        right_scroll_dashboard.setMaximumWidth(520)
+        right_scroll_dashboard.setStyleSheet("QScrollArea { border: none; background: #f1f5f9; }")
+        main_splitter.addWidget(right_scroll_dashboard)
         main_splitter.setSizes([920, 420])
         main_splitter.setStretchFactor(0, 1)
         main_splitter.setStretchFactor(1, 0)
+
+        # ——— Detached: Command Deck — separate window (control deck detached per user request)
+        self._build_control_panel_widget()
+        # Host control deck in separate window (ControlDashboardWindow)
+        try:
+            self.control_deck_window = ControlDashboardWindow(self, self._control_widget)
+            self.control_deck_window.show()
+        except Exception:
+            self.control_deck_window = None
+        # Keep legacy alias for compat (old code used dashboard_window)
+        try:
+            self.dashboard_window = None
+            class _DummyDashboardWindow:
+                def __init__(self, panel): self.dashboard_panel = panel
+                def show(self): pass
+                def hide(self): pass
+                def showMaximized(self): pass
+                def update_live_status(self, s): pass
+                def repaint(self): pass
+            self.dashboard_window = _DummyDashboardWindow(self.dashboard_panel)
+        except Exception:
+            pass
 
         root.addWidget(main_splitter)
 
@@ -536,6 +556,28 @@ class MainWindow(StateMixin, QMainWindow):
         self._fov_card = fov_card
         self._god_card = god_card
         self._telemetry_strip = telemetry
+        # Dashboard-only consolidation: hide external metric strips/footers (all metrics now in DashboardPanel)
+        # Telemetry strip and per-card footers previously duplicated dashboard metrics — hidden
+        try:
+            self._telemetry_strip.hide()
+            self._fov_footer.hide()
+            self._god_footer.hide()
+            # Header badges duplicated lock/FOV/world — hidden; dashboard's Live System Pose is single source
+            if hasattr(self, "_hdr_mode_badge"):
+                self._hdr_mode_badge.hide()
+            if hasattr(self, "_hdr_fov_badge"):
+                self._hdr_fov_badge.hide()
+            if hasattr(self, "_hdr_world_badge"):
+                self._hdr_world_badge.hide()
+            # Keep footer widgets exist for backward compat but not visible (tests still find them)
+            self.footer_lock.hide()
+            self.lock_dot.hide()
+            self.footer_fps.hide()
+            self.footer_info.hide()
+            self._fov_footer_info.hide()
+            self._god_footer_info.hide()
+        except Exception:
+            pass
 
         self._target_speed = 60
         self._det_thresh = 200
@@ -551,11 +593,22 @@ class MainWindow(StateMixin, QMainWindow):
         except Exception:
             pass
 
+    def _build_dashboard_widget(self):
+        """Build dashboard widget for MainWindow right side (metrics only, graph removed).
+        Dashboard replaces command deck per consolidation; command deck detached to separate window.
+        """
+        self.dashboard_panel = DashboardPanel()
+        self.stat_labels = self.dashboard_panel.stat_labels
+        # Dashboard now lives in MainWindow right side; no separate window needed for it
+        # Keep alias for backward compat
+        self.dashboard_window = None
+
     def _build_control_panel_widget(self):
-        """Build the entire control panel + live dashboard as a single widget
-        that will be hosted in the separate ControlDashboardWindow.
+        """Build the entire control panel as a separate widget
+        that will be hosted in the detached ControlDashboardWindow.
         Groups are clearly distinguished with icon headers and a QTabWidget:
-        Dashboard | Global | Beacons | Camera | Environment | Disturbances
+        Presets | Global | Beacons | Camera | Control | Overlay | Environment | Disturbances
+        Dashboard is now in MainWindow, not here.
         """
         # Root container for control deck — premium header + pill tabs
         self._control_widget = QWidget()
@@ -592,12 +645,12 @@ class MainWindow(StateMixin, QMainWindow):
         hot_badge.setObjectName("hotBadge")
         hot_badge.setToolTip("Every control is HOT — changes apply on next tick without restart")
         ch_lay.addWidget(hot_badge)
-        # Quick actions — open dashboard / pop-out
-        c_dash_btn = QPushButton("◉ DASH")
-        c_dash_btn.setToolTip("Open dashboard window (maximized, live graph)")
+        # Quick actions — dashboard now in MainWindow (graph removed), this button focuses main
+        c_dash_btn = QPushButton("◉ DASH in Main")
+        c_dash_btn.setToolTip("Dashboard now lives in MainWindow right side (metrics only, graph removed)")
         c_dash_btn.setFixedHeight(28)
         c_dash_btn.setStyleSheet("background:#2563eb; color:white; border:none; border-radius:7px; padding:5px 12px; font-weight:800; font-size:10px;")
-        c_dash_btn.clicked.connect(self._show_dashboard_window)
+        c_dash_btn.clicked.connect(lambda: (self.show(), self.raise_(), self.activateWindow()))
         ch_lay.addWidget(c_dash_btn)
         cw_layout.addWidget(ctrl_header)
 
@@ -615,12 +668,6 @@ class MainWindow(StateMixin, QMainWindow):
         self.presets_panel = PresetsPanel()
         tabs.addTab(self.presets_panel, "⬢  Presets")
         self.presets_panel.presetSelected.connect(self._on_preset_selected)
-
-        # ── Dashboard Window — Modular (DashboardPanel) ──
-        self.dashboard_panel = DashboardPanel()
-        self.stat_labels = self.dashboard_panel.stat_labels
-        self.dashboard_window = DashboardWindow(self, self.dashboard_panel)
-        self.dashboard_window.showMaximized()
 
         # ── Global Tab — Modular (GlobalPanel) ──
         self.global_panel = GlobalPanel()
@@ -788,12 +835,48 @@ class MainWindow(StateMixin, QMainWindow):
             self.control_window.show()
             self.control_window.raise_()
             self.control_window.activateWindow()
+        # New detached command deck window (control deck)
+        if hasattr(self, "control_deck_window") and self.control_deck_window:
+            try:
+                self.control_deck_window.show()
+                self.control_deck_window.raise_()
+                self.control_deck_window.activateWindow()
+            except Exception:
+                pass
+
+    def _show_control_deck_window(self):
+        """Show the detached command deck (control panels) window."""
+        if hasattr(self, "control_deck_window") and self.control_deck_window:
+            try:
+                self.control_deck_window.show()
+                self.control_deck_window.raise_()
+                self.control_deck_window.activateWindow()
+            except Exception:
+                pass
+        elif hasattr(self, "_control_widget") and self._control_widget:
+            # Fallback: show via old control_window
+            self._show_control_panel()
 
     def _show_dashboard_window(self):
-        if hasattr(self, "dashboard_window") and self.dashboard_window:
-            self.dashboard_window.showMaximized()
-            self.dashboard_window.raise_()
-            self.dashboard_window.activateWindow()
+        # Dashboard now lives in MainWindow right side (graph removed) — just raise main
+        try:
+            self.show()
+            self.raise_()
+            self.activateWindow()
+            if hasattr(self, "dashboard_panel"):
+                self.dashboard_panel.show()
+                self.dashboard_panel.raise_()
+        except Exception:
+            pass
+        # Backward compat: if a real dashboard_window still exists, show it
+        try:
+            if hasattr(self, "dashboard_window") and hasattr(self.dashboard_window, "showMaximized"):
+                # dummy does nothing; real window would show
+                self.dashboard_window.showMaximized()
+                self.dashboard_window.raise_()
+                self.dashboard_window.activateWindow()
+        except Exception:
+            pass
 
     def _sync_per_beacon_xy_ranges(self):
         """Keep X/Y spin max in sync with current world size (dynamic) — modular."""
@@ -814,32 +897,26 @@ class MainWindow(StateMixin, QMainWindow):
             except: pass
 
     def _update_live_indicators(self):
-        """Update LIVE badges + header mode badge for mission-control feel."""
-        running = bool(getattr(self, "_running", False))
-        mode = "TRACKING" if running else "STANDBY"
-        color_bg = "#10b981" if running else "#334155"
+        """Dashboard-only: all live metrics are in DashboardPanel; external header/footer badges hidden."""
+        # Previously updated header mode/FOV/world and LIVE badges with metrics — now hidden
+        # Keep method for compat but ensure external badges stay hidden (dashboard is single source)
         try:
-            if hasattr(self, "_hdr_mode_badge"):
-                self._hdr_mode_badge.setText(f"● {mode}")
-                self._hdr_mode_badge.setStyleSheet(
-                    f"background:{color_bg}; color:#ffffff; border:none; border-radius:6px; padding:4px 10px; font-weight:800; font-size:10px; letter-spacing:0.6px;"
-                )
+            for attr in ["_hdr_mode_badge", "_hdr_fov_badge", "_hdr_world_badge", "_telemetry_strip", "_fov_footer", "_god_footer"]:
+                w = getattr(self, attr, None)
+                if w is not None:
+                    try:
+                        w.hide()
+                    except Exception:
+                        pass
             for badge in [getattr(self, "_fov_live_badge", None), getattr(self, "_god_live_badge", None)]:
                 if badge is not None:
-                    badge.setProperty("active", running)
-                    badge.style().unpolish(badge); badge.style().polish(badge)
-                    badge.setStyleSheet(
-                        "background:%s; color:#ffffff; font-weight:800; font-size:9px; letter-spacing:0.6px; border-radius:4px; padding:3px 7px;" % (color_bg if running else "#334155")
-                    )
+                    try:
+                        badge.hide()
+                    except Exception:
+                        pass
         except Exception:
             pass
-        try:
-            if hasattr(self, "_hdr_fov_badge"):
-                self._hdr_fov_badge.setText(f"FOV {self._fov_size[0]}×{self._fov_size[1]}")
-            if hasattr(self, "_hdr_world_badge"):
-                self._hdr_world_badge.setText(f"WORLD {self._scene_size[0]}×{self._scene_size[1]}")
-        except Exception:
-            pass
+        # No external metric updates — dashboard handles all via _update_stats
 
     def _add_slider_row(self, layout, label, vmin, vmax, vinit, callback, key):
         # Deprecated — GlobalPanel now owns slider rows (modular). Kept for backward compat.
@@ -2234,17 +2311,64 @@ class MainWindow(StateMixin, QMainWindow):
         super().closeEvent(event)
 
     def _update_stats(self, tracking_error_px):
-        # Delegate to intuitive DashboardPanel (health header + progress, angular mrad) — FIX: ensure real-time even when dashboard hidden
+        # Dashboard-only: all metrics consolidated in DashboardPanel (single source)
         try:
             s = self.perf.summary()
         except Exception:
             return
+        # Inject live system pose metrics (previously footer/header) into summary for dashboard
+        try:
+            pan = float(getattr(self.camera, "pan", 0) if hasattr(self, "camera") else 0)
+            tilt = float(getattr(self.camera, "tilt", 0) if hasattr(self, "camera") else 0)
+            s["live_pan"] = round(pan, 1)
+            s["live_tilt"] = round(tilt, 1)
+            s["live_fov"] = f"{self._fov_size[0]}×{self._fov_size[1]}"
+            s["live_world"] = f"{self._scene_size[0]}×{self._scene_size[1]}"
+            try:
+                s["live_pixel_scale"] = float(getattr(getattr(self.camera, "config", {}), "pixel_scale_mrad", 0.035))
+            except Exception:
+                s["live_pixel_scale"] = float(getattr(self.camera_config, "pixel_scale_mrad", 0.035)) if hasattr(self, "camera_config") else 0.035
+            s["live_error_px"] = float(tracking_error_px) if tracking_error_px is not None else None
+            # Config snapshot — entire system (for dashboard G, dashboard-only)
+            try:
+                s["config_haze_pct"] = int(getattr(self.env_config, "haze_pct", 0)) if hasattr(self, "env_config") else 0
+                s["config_star_count"] = int(getattr(self.env_config, "star_count", 0)) if hasattr(self, "env_config") else 0
+                s["config_max_slew"] = float(getattr(self.camera_config, "max_slew_rate", 0)) if hasattr(self, "camera_config") else 0
+                s["config_latency_ms"] = int(getattr(self.camera_config, "latency_ms", 0)) if hasattr(self, "camera_config") else 0
+                s["config_beacon_count"] = f"{self._beacon_count} (target #{self._target_beacon_id})" if hasattr(self, "_beacon_count") else str(getattr(self.beacon_config, "beacon_count", 1)) if hasattr(self, "beacon_config") else "—"
+                try:
+                    prof = getattr(self.target, "profile", None)
+                    prof_str = prof.value if hasattr(prof, "value") else str(prof) if prof else "—"
+                    speed = getattr(self.target, "speed", 0)
+                    s["config_beacon_profile"] = f"{prof_str} @ {float(speed):.0f} px/s"
+                except Exception:
+                    s["config_beacon_profile"] = "—"
+                try:
+                    turb = self.sliders["Turbulence"].value() if hasattr(self, "sliders") and "Turbulence" in self.sliders else 0
+                    vib = self.sliders["Vibration"].value() if hasattr(self, "sliders") and "Vibration" in self.sliders else 0
+                    cam = self.sliders["Camera Motion"].value() if hasattr(self, "sliders") and "Camera Motion" in self.sliders else 0
+                    noise = self.sliders["Noise"].value() if hasattr(self, "sliders") and "Noise" in self.sliders else 0
+                    s["config_disturbances"] = f"T{turb} V{vib} C{cam} N{noise}"
+                except Exception:
+                    s["config_disturbances"] = "—"
+                try:
+                    ctrl_type = getattr(self.controller_config, "controller_type", "P") if hasattr(self, "controller_config") else "P"
+                    kp = getattr(self.controller_config, "kp", 0) if hasattr(self, "controller_config") else 0
+                    rate = getattr(self.controller_config, "update_rate_hz", 0) if hasattr(self, "controller_config") else 0
+                    s["config_controller"] = f"{ctrl_type} Kp{kp:.2f} @ {rate:.0f}Hz"
+                except Exception:
+                    s["config_controller"] = "—"
+            except Exception:
+                pass
+        except Exception:
+            pass
         try:
             if hasattr(self, "dashboard_panel"):
-                cam_scale = None
-                try:
-                    cam_scale = float(getattr(getattr(self, "camera", None).config, "pixel_scale_mrad", None))
-                except: pass
+                cam_scale = s.get("live_pixel_scale")
+                if cam_scale is None:
+                    try:
+                        cam_scale = float(getattr(getattr(self, "camera", None).config, "pixel_scale_mrad", None))
+                    except: pass
                 self.dashboard_panel.update_from_summary(s, self.tracker.status.value, tracking_error_px, camera_scale_mrad=cam_scale)
                 # Inform dashboard window status bar (intuitive live indicator)
                 try:
@@ -2260,50 +2384,14 @@ class MainWindow(StateMixin, QMainWindow):
                     self.stat_labels["lock_status"].setText(self.tracker.status.value)
         except: pass
 
-        # Footer + statusBar — premium telemetry with angular units
+        # Dashboard-only: external telemetry/header/footer metric displays hidden; dashboard is single source
         try:
-            col_map = {"tracking":"#22c55e","acquired":"#06b6d4","lost":"#ef4444","searching":"#64748b"}
-            col = col_map.get(self.tracker.status.value, "#64748b")
-            self.lock_dot.setStyleSheet(f"color:{col}; font-size:16px; background: transparent;")
-            self.footer_lock.setText(self.tracker.status.value.upper())
-            self.footer_lock.setStyleSheet(
-                f"color:{col}; font-weight:800; background:#f1f5f9; border:1px solid {col}40; border-radius:6px; padding:4px 10px; font-size:11px; letter-spacing:0.5px;"
-            )
-            # FPS pill — color-code
-            fps_val = float(s.get('fps', 0) or 0)
-            fps_col = "#22c55e" if fps_val >= 25 else "#eab308" if fps_val >= 15 else "#ef4444"
-            self.footer_fps.setText(f"FPS {s['fps']}")
-            self.footer_fps.setStyleSheet(f"background:#ffffff; border:1px solid #e2e8f0; border-left: 3px solid {fps_col}; border-radius:6px; padding:4px 10px; font-weight:800; color:{fps_col}; font-family:'Consolas','Courier New',monospace; font-size:11px;")
-            pan,tilt=self.camera.pan,self.camera.tilt
-            err_label = "—"
-            if tracking_error_px is not None:
-                try:
-                    units = getattr(getattr(self, "overlay_config", None), "error_units", "px")
-                    scale = float(getattr(getattr(self.camera, "config", None), "pixel_scale_mrad", 0.035))
-                    if units == "mrad":
-                        err_label = f"{tracking_error_px*scale:.3f} mrad"
-                    elif units == "urad":
-                        err_label = f"{tracking_error_px*scale*1000:.0f} µrad"
-                    elif units == "px+mrad":
-                        err_label = f"{tracking_error_px:.1f}px · {tracking_error_px*scale:.2f} mrad"
-                    else:
-                        err_label = f"{tracking_error_px:.1f} px"
-                except:
-                    err_label = f"{tracking_error_px:.1f} px"
-                # color error pill by threshold
-                err_col = "#22c55e" if tracking_error_px < 5 else "#eab308" if tracking_error_px < 15 else "#ef4444"
-                self.footer_info.setStyleSheet(f"background:#ffffff; border:1px solid #e2e8f0; border-left:3px solid {err_col}; border-radius:6px; padding:4px 10px; font-weight:700; color:{err_col}; font-family:'Consolas','Courier New',monospace; font-size:11px;")
-            else:
-                self.footer_info.setStyleSheet("background:#f8fafc; border:1px dashed #cbd5e1; border-radius:6px; padding:4px 10px; font-weight:600; color:#64748b; font-family:'Consolas','Courier New',monospace; font-size:11px;")
-            self.footer_info.setText(f"PAN {pan:.0f}  TILT {tilt:.0f}  •  ERR {err_label}  •  RMS {s.get('rms_tracking_error_px','—')}  •  JIT {s.get('jitter_ms','—')}ms" if tracking_error_px is not None else f"PAN {pan:.0f}  TILT {tilt:.0f}  •  NO LOCK  •  JIT {s.get('jitter_ms','—')}ms")
-            # Per-card footers — keep in sync
-            try:
-                if hasattr(self, "_fov_footer_info"):
-                    self._fov_footer_info.setText(f"PAN {pan:.0f} TILT {tilt:.0f} • {err_label}")
-                if hasattr(self, "_god_footer_info"):
-                    # God view shows scene coverage
-                    cov = f"{self._scene_size[0]}×{self._scene_size[1]}"
-                    self._god_footer_info.setText(f"SCENE {cov} • {self.tracker.status.value.upper()}")
-            except: pass
-            self.statusBar().showMessage(f"{self.tracker.status.value.upper()}  •  FPS {s['fps']}  •  Err {err_label}  •  Det {s['detection_rate_pct']}%" if tracking_error_px is not None else f"{self.tracker.status.value.upper()}  •  FPS {s['fps']}  •  Det {s['detection_rate_pct']}%", 1500)
+            for attr in ["_telemetry_strip", "_fov_footer", "_god_footer", "_hdr_mode_badge", "_hdr_fov_badge", "_hdr_world_badge", "footer_lock", "lock_dot", "footer_fps", "footer_info", "_fov_footer_info", "_god_footer_info"]:
+                w = getattr(self, attr, None)
+                if w is not None:
+                    try:
+                        w.hide()
+                    except: pass
+            # Status bar no longer shows metric values outside dashboard — points to dashboard (metrics dashboard-only)
+            self.statusBar().showMessage("Metrics -> Dashboard only -- see Dashboard tab/window for live FPS, error, retention, reacq, etc. (Sr.16-20)", 2000)
         except: pass

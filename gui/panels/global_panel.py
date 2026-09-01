@@ -135,17 +135,14 @@ class GlobalPanel(BaseConfigPanel):
             btn_row.addWidget(b, 1)
         tl.addLayout(btn_row)
 
-        self.export_btn = QPushButton("⬇  Export performance log")
-        self.export_btn.setMinimumHeight(34)
-        self.export_btn.setStyleSheet("QPushButton { background:#ffffff; border:1px solid #cbd5e1; border-radius:8px; padding:6px; color:#334155; font-weight:600; } QPushButton:hover { background:#f8fafc; border-color:#94a3b8; }")
+        # Export / Open Dashboard buttons removed entirely per user request (dashboard now in MainWindow, graph removed)
+        # Kept as hidden dummies for backward compat so MainWindow wiring does not break
+        self.export_btn = QPushButton()
+        self.export_btn.hide()
         self.export_btn.clicked.connect(self.exportRequested.emit)
-        tl.addWidget(self.export_btn)
-
-        self.dashboard_btn = QPushButton("◉  Open Dashboard Window")
-        self.dashboard_btn.setMinimumHeight(34)
-        self.dashboard_btn.setStyleSheet("QPushButton { background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #2563eb, stop:1 #1d4ed8); color:white; font-weight:800; border:none; border-radius:8px; font-size:11px; } QPushButton:hover { background:#1e40af; }")
+        self.dashboard_btn = QPushButton()
+        self.dashboard_btn.hide()
         self.dashboard_btn.clicked.connect(self.dashboardRequested.emit)
-        tl.addWidget(self.dashboard_btn)
 
         layout.addWidget(transport_card)
 

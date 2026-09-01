@@ -115,20 +115,30 @@ class PerformanceLogger:
 
             self.csv_file = open(os.path.join(self._run_dir, "timeseries.csv"), "w", newline="", encoding="utf-8")
             self.csv_writer = csv.writer(self.csv_file)
+            # Spec-aligned timeseries header — covers Sr.16-20 + centroiding/RMSE per PDF deliverables
             self.csv_writer.writerow([
-                "Total Duration (S)",
-                "Acquisition (S)",
-                "Proc Time (ms)",
-                "Average Tracking Error",
-                "Max Error",
-                "Error %",
-                "Retention %",
-                "Detection Rate %",
-                "Detection Time",
+                "Total Duration (S)",        # Sr. performance log: simulation duration / elapsed
+                "FPS",                       # Sr.20 processing speed ≥20 FPS
+                "Acquisition (S)",           # Sr.16 ≤2 sec
+                "Reacquisition Avg (S)",     # Sr.19 ≤1 sec
+                "Avg Tracking Error (px)",   # Sr.17 + centroiding — avg
+                "RMS Error (px)",            # RMSE for benchmark
+                "Max Error (px)",            # Sr. performance log
+                "P95 Error (px)",            # extended distribution
+                "Target Loss (%)",           # Sr.18 <5%  (100 - retention)
+                "Retention %",               # Sr.18 complement
+                "Lock Losses",               # reacquisition count validation
+                "Acquisitions",              # total entries into tracking
+                "Proc Time Avg (ms)",        # processing time per frame
+                "Proc Jitter (ms)",          # processing jitter
+                "Centroiding Avg (px)",      # centroiding error alias
+                "Centroiding RMSE (px)",     # centroiding RMSE
+                "Detection Rate %",          # extended
+                "Detection Time (S)",
                 "Searching Rate (%)",
-                "Searching Time",
-                "Center Hit Rate",
-                "Center Hit Time"
+                "Searching Time (S)",
+                "Center Hit Rate (%)",
+                "Center Hit Time (S)"
             ])
             self.csv_file.flush()
             self._last_csv_log_time = 0.0
@@ -226,19 +236,28 @@ class PerformanceLogger:
                 self.lock_losses += 1
         self._prev_locked = is_locked
 
-        # Auto-log every second (wall)
+        # Auto-log every second (wall) — spec-aligned columns
         elapsed = self._elapsed()
         if self.csv_writer and self.csv_file and not self.csv_file.closed and (elapsed - self._last_csv_log_time >= 1.0):
             try:
                 s = self.summary()
                 self.csv_writer.writerow([
                     s.get("simulation_duration_s", 0),
+                    s.get("fps", 0),
                     s.get("acquisition_time_s", 0) if s.get("acquisition_time_s") is not None else 0,
-                    s.get("avg_processing_time_ms", 0),
+                    s.get("avg_reacquisition_time_s", 0) if s.get("avg_reacquisition_time_s") is not None else 0,
                     s.get("avg_tracking_error_px", 0),
+                    s.get("rms_tracking_error_px", 0),
                     s.get("max_tracking_error_px", 0),
-                    s.get("tracking_error_pct", 0),
+                    s.get("p95_tracking_error_px", 0),
+                    s.get("target_loss_pct", 0),
                     s.get("lock_retention_rate_pct", 0),
+                    s.get("lock_losses", 0),
+                    s.get("acquisitions", 0),
+                    s.get("avg_processing_time_ms", 0),
+                    s.get("jitter_ms", 0),
+                    s.get("centroiding_error_avg_px", 0),
+                    s.get("centroiding_error_rmse_px", 0),
                     s.get("detection_rate_pct", 0),
                     s.get("detection_time_s", 0),
                     s.get("searching_rate_pct", 0),
@@ -301,6 +320,12 @@ class PerformanceLogger:
         tracking_error_pct = round((avg_error / max_error * 100) if max_error > 1e-9 else 0.0, 2)
         avg_tracking_error_pct = error_pct_from_px(avg_error)
         max_tracking_error_pct = error_pct_from_px(max_error)
+        # Spec aliases — centroiding (same as tracking) and RMSE per benchmark
+        centroiding_avg = round(avg_error, 3)
+        centroiding_rmse = round(rms, 3)
+        centroiding_max = round(max_error, 3)
+        # Target loss is inverse of retention per Sr.18 (<5% loss == >95% retention)
+        target_loss_pct = round(100.0 - lock_retention, 2) if self.frame_count else 0.0
         # Proc time in seconds for image spec (Dashboard: Proc. Time (S))
         proc_time_s = round(float(avg_proc), 6)  # avg_proc is seconds
         # Times: proportion of wall elapsed spent in that condition (correct for dashboard)
@@ -309,20 +334,26 @@ class PerformanceLogger:
         center_hit_time_s = round((self.center_hit_count / total * elapsed) if self.frame_count else 0.0, 3)
 
         return {
-            # core — Timing & rate
+            # core — Timing & rate (Sr.16, Sr.20)
             "simulation_duration_s": round(elapsed, 3),
             "frame_count": self.frame_count,
             "fps": round(fps, 2),
+            "processing_speed_fps": round(fps, 2),  # alias Sr.20
             "acquisition_time_s": round(self.acquisition_time, 3) if self.acquisition_time is not None else None,
             "avg_tracking_error_px": round(avg_error, 3),
             "max_tracking_error_px": round(max_error, 3),
             "lock_retention_rate_pct": round(lock_retention, 2),
+            "target_loss_pct": target_loss_pct,  # Sr.18
             "avg_processing_time_ms": round(avg_proc * 1000, 3),
             # extended — error distribution
             "min_tracking_error_px": round(min_error, 3),
             "median_tracking_error_px": round(median, 3),
             "p95_tracking_error_px": round(p95, 3),
             "rms_tracking_error_px": round(rms, 3),
+            "centroiding_error_avg_px": centroiding_avg,  # Sr. benchmark: centroiding = tracking
+            "centroiding_error_max_px": centroiding_max,
+            "centroiding_error_rmse_px": centroiding_rmse,  # RMSE alias for benchmark
+            "centroiding_error_p95_px": round(p95, 3),
             "std_tracking_error_px": round(std_err, 3),
             # extended — processing
             "min_processing_time_ms": round(min_proc, 3),
@@ -346,6 +377,11 @@ class PerformanceLogger:
             "proc_time_s": proc_time_s,
             "searching_rate_pct": state_pct["searching"],
             "searching_time_s": searching_time_s,
+            # spec aliases for re-acq and centroiding (benchmark naming)
+            "reacquisition_time_s": round(avg_reacq, 3) if self.reacquisition_times else None,  # Sr.19 avg
+            "reacquisition_time_avg_s": round(avg_reacq, 3) if self.reacquisition_times else None,
+            "centroiding_error_px": centroiding_avg,
+            "rmse_px": centroiding_rmse,  # short alias per evaluation table
             # extended — lock dynamics
             "lock_losses": self.lock_losses,
             "acquisitions": self.acquisitions,
