@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from common.config_base import BaseValidatedConfig, clip_field
 from target.constants import BEACON_DEFAULTS, BEACON_LIMITS, MULTI_BEACON_DEFAULTS, MULTI_BEACON_LIMITS
 
 if TYPE_CHECKING:
@@ -24,7 +25,7 @@ if TYPE_CHECKING:
 # ============================================================
 
 @dataclass
-class BeaconConfig:
+class BeaconConfig(BaseValidatedConfig):
     """
     Per-beacon typed configuration (8 parameters + metadata).
 
@@ -40,6 +41,9 @@ class BeaconConfig:
     + heading            — Initial heading deg (None=random) 0..360
     + beacon_id          — Stable index 0..15
     """
+
+    LIMITS = BEACON_LIMITS
+    DEFAULTS = BEACON_DEFAULTS
 
     # --------------------------------------------------------
     # Toggle & identity
@@ -74,33 +78,19 @@ class BeaconConfig:
     # ========================================================
 
     def validate(self) -> "BeaconConfig":
-        """Clamp all numeric fields to BEACON_LIMITS, return self."""
-        lo, hi = BEACON_LIMITS["brightness"]
-        self.brightness = int(np.clip(int(self.brightness), lo, hi))
-        lo, hi = BEACON_LIMITS["radius"]
-        self.radius = int(np.clip(int(self.radius), lo, hi))
-        lo, hi = BEACON_LIMITS["hitbox_radius"]
-        self.hitbox_radius = int(np.clip(int(self.hitbox_radius), lo, hi))
-        lo, hi = BEACON_LIMITS["center_radius"]
-        self.center_radius = int(np.clip(int(self.center_radius), lo, hi))
-        # Enforce center ≤ hitbox (precise hit is subset)
+        """Clamp all numeric fields via clip_field, return self."""
+        self.brightness = int(clip_field(self.brightness, *self.LIMITS["brightness"]))
+        self.radius = int(clip_field(self.radius, *self.LIMITS["radius"]))
+        self.hitbox_radius = int(clip_field(self.hitbox_radius, *self.LIMITS["hitbox_radius"]))
+        self.center_radius = int(clip_field(self.center_radius, *self.LIMITS["center_radius"]))
         if self.center_radius > self.hitbox_radius:
             self.center_radius = int(self.hitbox_radius)
-
-        lo, hi = BEACON_LIMITS["speed"]
-        self.speed = float(np.clip(float(self.speed), lo, hi))
-        lo, hi = BEACON_LIMITS["position_seed"]
-        self.position_seed = int(np.clip(int(self.position_seed), lo, hi))
-
-        # x/y are clamped to world bounds at Target level; keep within 0..5000 here
-        lo, hi = BEACON_LIMITS["x"]
-        self.x = float(np.clip(float(self.x), lo, hi))
-        lo, hi = BEACON_LIMITS["y"]
-        self.y = float(np.clip(float(self.y), lo, hi))
-
+        self.speed = float(clip_field(self.speed, *self.LIMITS["speed"]))
+        self.position_seed = int(clip_field(self.position_seed, *self.LIMITS["position_seed"]))
+        self.x = float(clip_field(self.x, *self.LIMITS["x"]))
+        self.y = float(clip_field(self.y, *self.LIMITS["y"]))
         if self.heading is not None:
-            lo, hi = BEACON_LIMITS["heading"]
-            self.heading = float(np.clip(float(self.heading) % 360, lo, hi))
+            self.heading = float(clip_field(float(self.heading) % 360, *self.LIMITS["heading"]))
 
         self.enabled = bool(self.enabled)
         self.beacon_id = int(self.beacon_id)
@@ -211,7 +201,7 @@ class BeaconConfig:
 # ============================================================
 
 @dataclass
-class MultiBeaconConfig:
+class MultiBeaconConfig(BaseValidatedConfig):
     """
     Multi-beacon collection configuration.
 
@@ -220,16 +210,17 @@ class MultiBeaconConfig:
     + beacons         — List[BeaconConfig] per-beacon configs (length == beacon_count)
     """
 
+    LIMITS = MULTI_BEACON_LIMITS
+    DEFAULTS = MULTI_BEACON_DEFAULTS
+
     beacon_count: int = MULTI_BEACON_DEFAULTS["beacon_count"]
     target_index: int = MULTI_BEACON_DEFAULTS["target_index"]
     beacons: list[BeaconConfig] | None = None  # None → generate defaults
 
     def validate(self) -> "MultiBeaconConfig":
-        lo, hi = MULTI_BEACON_LIMITS["beacon_count"]
-        self.beacon_count = int(np.clip(int(self.beacon_count), lo, hi))
-        lo, hi = MULTI_BEACON_LIMITS["target_index"]
-        # target_index clamped to 0..beacon_count-1 (not 0..15) for safety
-        self.target_index = int(np.clip(int(self.target_index), 0, max(0, self.beacon_count - 1)))
+        self.beacon_count = int(clip_field(self.beacon_count, *self.LIMITS["beacon_count"]))
+        # target_index clamped to 0..beacon_count-1 for safety
+        self.target_index = int(clip_field(self.target_index, 0, max(0, self.beacon_count - 1)))
 
         # Ensure beacons list length matches beacon_count
         if self.beacons is None:

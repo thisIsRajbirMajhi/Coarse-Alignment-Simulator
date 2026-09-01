@@ -11,7 +11,8 @@ import math
 import numpy as np
 
 from disturbance.constants import VIBRATION_BASE_AMPS, VIBRATION_FREQS, VIBRATION_OU_TAU
-from disturbance.state import _elapsed_dt, _vib_state
+from disturbance.dt_provider import DtProvider
+from disturbance.state import _vib_state
 
 # ============================================================
 # SECTION: Vibration — harmonic + OU
@@ -39,13 +40,7 @@ def apply_platform_vibration(
     """
     if intensity <= 0:
         return pan, tilt
-    if dt is None:
-        dt = _elapsed_dt(_vib_state)
-    else:
-        # Keep wall state in sync for fallback callers
-        import time
-        _vib_state["last_wall"] = time.time()
-        dt = float(np.clip(dt, 0.005, 0.08))
+    dt = DtProvider.resolve(_vib_state, dt)
 
     freqs = np.array(VIBRATION_FREQS, dtype=float)
     base_amps = np.array(VIBRATION_BASE_AMPS, dtype=float)

@@ -8,6 +8,7 @@ Notes: Extracted from gui.app — modular, well-commented.
 """
 
 from PyQt5.QtCore import Qt, pyqtSignal
+from gui.panels.base import BaseConfigPanel
 from PyQt5.QtWidgets import (
     QComboBox,
     QFrame,
@@ -25,7 +26,7 @@ from target.motion import MotionProfile
 # SECTION: GlobalPanel — Target + System global controls
 # ============================================================
 
-class GlobalPanel(QWidget):
+class GlobalPanel(BaseConfigPanel):
     """
     Global tab panel.
 

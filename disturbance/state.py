@@ -1,27 +1,69 @@
 """
 Module: disturbance.state
-Purpose: Global temporal state + reset for reproducible, wall-clock-decoupled simulation.
-Public API: _turb_state, _vib_state, _cam_motion_state_global, _elapsed_dt, reset_disturbance_state
-Notes: Extracted from disturbances.py monolith — centralizes wall-clock fallback
-       and provides explicit reset for GUI _reset() handler.
+Purpose: Temporal state + reset for reproducible, wall-clock-decoupled simulation.
+         Refactored to class DisturbanceState — isolates global mutable state for
+         testability (per-test isolated instances) while keeping module globals
+         for backward compat (singleton).
+Public API: DisturbanceState, _turb_state, _vib_state, _cam_motion_state_global, _elapsed_dt, reset_disturbance_state
+Notes: _elapsed_dt now delegates to disturbance.dt_provider.DtProvider for single-source dt logic.
 """
 
 import time
+from contextlib import contextmanager
 
 import numpy as np
 
+from disturbance.dt_provider import DtProvider
+
 # ============================================================
-# SECTION: Global state — temporal correlation
+# SECTION: DisturbanceState — isolated state class
 # ============================================================
 
-# Turbulence — displacement fields + phase + wall time
-_turb_state: dict = {"dx": None, "dy": None, "t": 0.0, "last_wall": None, "phase": None}
+class DisturbanceState:
+    """
+    Isolated disturbance state — per-simulation or per-test instance.
 
-# Vibration — harmonic phases + OU state + wall time
-_vib_state: dict = {"t": 0.0, "last_wall": None, "phases": None}
+    Holds turbulence, vibration, and camera drift dicts without global leakage.
+    Use isolated_state() context for test isolation:
 
-# Camera drift — global OU state (used by apply_camera_motion wrapper)
-_cam_motion_state_global: dict = {}
+      with DisturbanceState.isolated():
+          apply_turbulence(frame, intensity, dt=0.033)
+    """
+
+    def __init__(self):
+        self.turb: dict = {"dx": None, "dy": None, "t": 0.0, "last_wall": None, "phase": None}
+        self.vib: dict = {"t": 0.0, "last_wall": None, "phases": None}
+        self.cam_global: dict = {}
+
+    def reset(self) -> None:
+        self.turb.clear(); self.turb.update({"dx": None, "dy": None, "t": 0.0, "last_wall": None, "phase": None})
+        self.vib.clear(); self.vib.update({"t": 0.0, "last_wall": None, "phases": None})
+        self.vib.pop("ou_pan", None); self.vib.pop("ou_tilt", None)
+        self.cam_global.clear()
+
+    @contextmanager
+    def isolated(self):
+        # Context that temporarily swaps module globals with this instance's dicts
+        import disturbance.state as _mod
+        old_turb, old_vib, old_cam = _mod._turb_state, _mod._vib_state, _mod._cam_motion_state_global
+        _mod._turb_state, _mod._vib_state, _mod._cam_motion_state_global = self.turb, self.vib, self.cam_global
+        try:
+            yield self
+        finally:
+            _mod._turb_state, _mod._vib_state, _mod._cam_motion_state_global = old_turb, old_vib, old_cam
+
+    @classmethod
+    @contextmanager
+    def isolated_state(cls):
+        inst = cls()
+        with inst.isolated():
+            yield inst
+
+# Module globals — singleton for backward compat (points to default instance)
+_default_state = DisturbanceState()
+_turb_state: dict = _default_state.turb
+_vib_state: dict = _default_state.vib
+_cam_motion_state_global: dict = _default_state.cam_global
 
 # ============================================================
 # SECTION: Wall-clock fallback — dt inference
@@ -29,19 +71,18 @@ _cam_motion_state_global: dict = {}
 
 def _elapsed_dt(state: dict, fallback: float = 0.033) -> float:
     """
-    Derive dt from wall time when explicit dt not supplied.
-
-    - Updates state["last_wall"] to now.
-    - Returns clipped dt in [0.005, 0.08] s.
-    - Falls back to 0.033 s on first call.
+    Derive dt from wall time when explicit dt not supplied — delegates to DtProvider.
     """
-    now = time.time()
-    last = state.get("last_wall")
-    state["last_wall"] = now
-    if last is None:
-        return float(fallback)
-    dt = now - last
-    return float(np.clip(dt, 0.005, 0.08))
+    # Use DtProvider for single-source clipping; fallback via clip
+    dt = DtProvider.resolve(state, None, clip=(0.005, 0.08))
+    # First call fallback: DtProvider returns 0.005 on first, but we want 0.033
+    if state.get("_first_call_done") is None:
+        # Detect first call: if dx/dy etc were None previously, DtProvider already set last_wall
+        # For backward compat, return fallback on first if state was fresh
+        # Heuristic: if t == 0.0 and phases is None, it's first call — return fallback
+        if state.get("t", 0.0) == 0.0 and state.get("phases") is None:
+            return float(fallback)
+    return dt
 
 # ============================================================
 # SECTION: Explicit reset — for GUI reproducibility

@@ -16,6 +16,7 @@ Notes:
 """
 
 from PyQt5.QtCore import Qt, pyqtSignal
+from gui.panels.base import BaseConfigPanel
 from PyQt5.QtWidgets import (
     QCheckBox,
     QDoubleSpinBox,
@@ -36,7 +37,7 @@ from environment.constants import DEFAULTS, LIMITS, MAX_RES, MIN_RES
 # SECTION: EnvironmentPanel — Grouped Control Widget
 # ============================================================
 
-class EnvironmentPanel(QWidget):
+class EnvironmentPanel(BaseConfigPanel):
     """
     Grouped Environment controls for the Environment tab.
 

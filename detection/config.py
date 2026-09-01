@@ -8,10 +8,9 @@ Notes: Immediate migration — MainWindow can store DetectorConfig as single sou
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 
-import numpy as np
-
+from common.config_base import BaseValidatedConfig, clip_field
 from detection.constants import DETECTOR_DEFAULTS, DETECTOR_LIMITS
 
 # ============================================================
@@ -19,7 +18,7 @@ from detection.constants import DETECTOR_DEFAULTS, DETECTOR_LIMITS
 # ============================================================
 
 @dataclass
-class DetectorConfig:
+class DetectorConfig(BaseValidatedConfig):
     """
     Detector thresholds — stateless per-frame segmentation.
 
@@ -28,23 +27,15 @@ class DetectorConfig:
     - max_beacons (1..20): cap detections per frame (sorted by confidence)
     """
 
+    LIMITS = DETECTOR_LIMITS
+    DEFAULTS = DETECTOR_DEFAULTS
+
     brightness_threshold: int = DETECTOR_DEFAULTS["brightness_threshold"]
     min_area: int = DETECTOR_DEFAULTS["min_area"]
     max_beacons: int = DETECTOR_DEFAULTS["max_beacons"]
 
     def validate(self) -> "DetectorConfig":
-        lo, hi = DETECTOR_LIMITS["brightness_threshold"]
-        self.brightness_threshold = int(np.clip(int(self.brightness_threshold), lo, hi))
-        lo, hi = DETECTOR_LIMITS["min_area"]
-        self.min_area = int(np.clip(int(self.min_area), lo, hi))
-        lo, hi = DETECTOR_LIMITS["max_beacons"]
-        self.max_beacons = int(np.clip(int(self.max_beacons), lo, hi))
+        self.brightness_threshold = int(clip_field(self.brightness_threshold, *self.LIMITS["brightness_threshold"]))
+        self.min_area = int(clip_field(self.min_area, *self.LIMITS["min_area"]))
+        self.max_beacons = int(clip_field(self.max_beacons, *self.LIMITS["max_beacons"]))
         return self
-
-    def to_dict(self) -> dict:
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "DetectorConfig":
-        known = {k: v for k, v in data.items() if k in DETECTOR_DEFAULTS}
-        return cls(**{**DETECTOR_DEFAULTS, **known}).validate()

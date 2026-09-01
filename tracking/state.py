@@ -1,8 +1,16 @@
 """
 Module: tracking.state
-Purpose: Lock status state machine — SEARCHING, ACQUIRED, TRACKING, LOST (well-commented).
+Purpose: Lock status state machine — orchestrator that delegates to isolated
+         searching / acquired / locked / lost handlers (well-commented).
 Public API: LockStatus, LockStateMachine
-Notes: Extracted from Tracker — explicit transitions, hit/miss counters, grace periods.
+Notes: Refactored 2026-09 — each lock phase now lives in its own directory:
+        - searching/handler.py  → SEARCHING (no estimate, first hit → ACQUIRED)
+        - acquired/handler.py   → ACQUIRED (probation, hits → TRACKING, miss → LOST)
+        - locked/handler.py     → LOCKED = TRACKING (stable, retention, miss → LOST)
+        - lost/handler.py       → LOST (hold estimate, hit → ACQUIRED, grace → SEARCHING)
+       This file is now a thin orchestrator: it owns counters & status, and
+       dispatches has_detection to the appropriate isolated handler (lazy import
+       to avoid circular). Fallback inline logic preserved for robustness.
        Stateless detector input → stateful lock logic lives here, separate from smoothing.
 
 State Diagram (as specified):
@@ -25,20 +33,14 @@ Definitions (from spec):
         miss ≥ miss_limit×grace_mult → SEARCHING and discard estimate.
 
 Maths: Hit/miss counters are sequential detection — simple SPRT with fixed thresholds.
-       No Bayesian; thresholds are config (acquire_hits, miss_limit, grace_mult).
+        No Bayesian; thresholds are config (acquire_hits, miss_limit, grace_mult).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
 
-
-class LockStatus(Enum):
-    SEARCHING = "searching"
-    ACQUIRED = "acquired"
-    TRACKING = "tracking"
-    LOST = "lost"
+from tracking.types import LockStatus  # single source — also re-exported for backward compat
 
 @dataclass
 class StateTransition:
@@ -77,8 +79,15 @@ class LockStateMachine:
         """
         Feed whether this frame had a detection (True) or not (False).
 
-        Returns new status. Side effects: updates hit/miss counters, sets
-        should_clear_estimate when transitioning LOST→SEARCHING.
+        Delegates to isolated phase handlers:
+          - SEARCHING → searching.handler.SearchingHandler
+          - ACQUIRED  → acquired.handler.AcquiredHandler
+          - TRACKING  → locked.handler.LockedHandler (TRACKING == LOCKED)
+          - LOST      → lost.handler.LostHandler
+        Fallback inline logic preserved if isolated modules unavailable.
+
+        Returns new status. Side effects: updates hit/miss counters via handlers,
+        sets should_clear_estimate when transitioning LOST→SEARCHING.
 
         Transition table (has_detection):
           SEARCHING + hit → ACQUIRED (hits=1, misses=0)
@@ -94,32 +103,54 @@ class LockStateMachine:
         should_clear = False
         new_status = prev
 
-        if has_detection:
-            self._consecutive_hits += 1
-            self._consecutive_misses = 0
+        # Try delegated isolated handlers (lazy imports avoid circular)
+        try:
             if self.status == LockStatus.SEARCHING:
-                new_status = LockStatus.ACQUIRED
+                from searching.handler import SearchingHandler
+
+                new_status, should_clear = SearchingHandler.update(self, bool(has_detection))
             elif self.status == LockStatus.ACQUIRED:
-                if self._consecutive_hits >= int(self.acquire_hits):
-                    new_status = LockStatus.TRACKING
-                else:
-                    new_status = LockStatus.ACQUIRED
-            elif self.status == LockStatus.LOST:
-                new_status = LockStatus.ACQUIRED
+                from acquired.handler import AcquiredHandler
+
+                new_status, should_clear = AcquiredHandler.update(self, bool(has_detection))
             elif self.status == LockStatus.TRACKING:
-                new_status = LockStatus.TRACKING
-        else:
-            self._consecutive_hits = 0
-            self._consecutive_misses += 1
-            if self.status in (LockStatus.ACQUIRED, LockStatus.TRACKING):
-                if self._consecutive_misses >= int(self.miss_limit):
-                    new_status = LockStatus.LOST
+                from locked.handler import LockedHandler
+
+                new_status, should_clear = LockedHandler.update(self, bool(has_detection))
             elif self.status == LockStatus.LOST:
-                if self._consecutive_misses >= int(self.miss_limit * float(self.lost_grace_mult)):
+                from lost.handler import LostHandler
+
+                new_status, should_clear = LostHandler.update(self, bool(has_detection))
+            else:
+                raise ImportError("unknown status")
+        except Exception:
+            # Fallback — inline original logic (robust if isolated dirs not yet on path)
+            if has_detection:
+                self._consecutive_hits += 1
+                self._consecutive_misses = 0
+                if self.status == LockStatus.SEARCHING:
+                    new_status = LockStatus.ACQUIRED
+                elif self.status == LockStatus.ACQUIRED:
+                    if self._consecutive_hits >= int(self.acquire_hits):
+                        new_status = LockStatus.TRACKING
+                    else:
+                        new_status = LockStatus.ACQUIRED
+                elif self.status == LockStatus.LOST:
+                    new_status = LockStatus.ACQUIRED
+                elif self.status == LockStatus.TRACKING:
+                    new_status = LockStatus.TRACKING
+            else:
+                self._consecutive_hits = 0
+                self._consecutive_misses += 1
+                if self.status in (LockStatus.ACQUIRED, LockStatus.TRACKING):
+                    if self._consecutive_misses >= int(self.miss_limit):
+                        new_status = LockStatus.LOST
+                elif self.status == LockStatus.LOST:
+                    if self._consecutive_misses >= int(self.miss_limit * float(self.lost_grace_mult)):
+                        new_status = LockStatus.SEARCHING
+                        should_clear = True
+                elif self.status == LockStatus.SEARCHING:
                     new_status = LockStatus.SEARCHING
-                    should_clear = True
-            elif self.status == LockStatus.SEARCHING:
-                new_status = LockStatus.SEARCHING
 
         self.should_clear_estimate = bool(should_clear)
         if new_status != prev:

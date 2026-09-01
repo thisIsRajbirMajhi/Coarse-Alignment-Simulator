@@ -13,8 +13,9 @@ import cv2
 import numpy as np
 
 from disturbance.constants import INNER_SCALE, OUTER_SCALE, RYTOV_CAP, TILT_TAU, WAVELENGTH
+from disturbance.dt_provider import DtProvider
 from disturbance.helpers import r0_from_intensity, rytov_variance
-from disturbance.state import _elapsed_dt, _turb_state
+from disturbance.state import _turb_state
 
 # ============================================================
 # SECTION: Kolmogorov displacement — FFT synthesis
@@ -94,16 +95,8 @@ def apply_turbulence(
         return frame
     h, w = frame.shape[:2]
 
-    # dt — explicit sim-scaled preferred, else wall-clock fallback
-    if dt is None:
-        dt = _elapsed_dt(_turb_state)
-    else:
-        # Keep wall state in sync for any fallback callers (update last_wall)
-        # but don't derive dt from wall when explicit dt supplied.
-        # Touch last_wall to avoid huge jump on next fallback call.
-        import time
-        _turb_state["last_wall"] = time.time()
-        dt = float(np.clip(dt, 0.005, 0.08))
+    # dt — single source via DtProvider (was 3× duplicated)
+    dt = DtProvider.resolve(_turb_state, dt)
 
     r0 = r0_from_intensity(float(intensity), float(wavelength))
     sigma_R2 = rytov_variance(float(intensity))

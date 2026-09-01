@@ -20,17 +20,17 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QVBoxLayout,
-    QWidget,
 )
 
 from control.config import ControllerConfig
 from control.constants import CONTROL_LIMITS, CONTROLLER_TYPES
+from gui.panels.base import BaseConfigPanel
 
 # ============================================================
 # SECTION: ControlPanel — PID controller tuning
 # ============================================================
 
-class ControlPanel(QWidget):
+class ControlPanel(BaseConfigPanel):
     """
     Control tab — PID tuning for pan-tilt.
 
@@ -188,13 +188,8 @@ class ControlPanel(QWidget):
         self.kp_spin.valueChanged.connect(self._on_kp_sync_gain)
 
     # ========================================================
-    # Helpers
+    # Helpers — _label now from BaseConfigPanel
     # ========================================================
-
-    def _label(self, text: str) -> QLabel:
-        lbl = QLabel(text)
-        lbl.setStyleSheet("color:#334155; font-size:11px;")
-        return lbl
 
     def _on_type_changed(self, txt: str) -> None:
         # Enable Ki/Kd per type
@@ -236,9 +231,8 @@ class ControlPanel(QWidget):
 
     def set_config(self, cfg: ControllerConfig, emit: bool = False) -> None:
         cfg = cfg.validate()
-        for w in [self.type_combo, self.kp_spin, self.ki_spin, self.kd_spin, self.rate_spin, self.dead_spin, self.clamp_spin, self.gain_spin]:
-            w.blockSignals(True)
-        try:
+        widgets = [self.type_combo, self.kp_spin, self.ki_spin, self.kd_spin, self.rate_spin, self.dead_spin, self.clamp_spin, self.gain_spin]
+        with self._blocked(widgets):
             idx = self.type_combo.findText(cfg.controller_type)
             if idx >= 0:
                 self.type_combo.setCurrentIndex(idx)
@@ -250,9 +244,6 @@ class ControlPanel(QWidget):
             self.clamp_spin.setValue(float(cfg.output_clamp))
             self.gain_spin.setValue(float(np.clip(cfg.kp, 0.02, 0.50)))
             self._on_type_changed(cfg.controller_type)
-        finally:
-            for w in [self.type_combo, self.kp_spin, self.ki_spin, self.kd_spin, self.rate_spin, self.dead_spin, self.clamp_spin, self.gain_spin]:
-                w.blockSignals(False)
         if emit:
             self._emit_config()
 

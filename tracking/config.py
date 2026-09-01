@@ -7,10 +7,9 @@ Notes: Immediate migration — MainWindow can store TrackerConfig.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 
-import numpy as np
-
+from common.config_base import BaseValidatedConfig, clip_field
 from tracking.constants import TRACKER_DEFAULTS, TRACKER_LIMITS
 
 # ============================================================
@@ -18,7 +17,7 @@ from tracking.constants import TRACKER_DEFAULTS, TRACKER_LIMITS
 # ============================================================
 
 @dataclass
-class TrackerConfig:
+class TrackerConfig(BaseValidatedConfig):
     """
     Tracker tuning — controls lock state machine and smoothing.
 
@@ -28,26 +27,17 @@ class TrackerConfig:
     - lost_grace_mult (1.5..3.0): LOST→SEARCHING after miss_limit * grace_mult
     """
 
+    LIMITS = TRACKER_LIMITS
+    DEFAULTS = TRACKER_DEFAULTS
+
     smoothing: float = TRACKER_DEFAULTS["smoothing"]
     miss_limit: int = TRACKER_DEFAULTS["miss_limit"]
     acquire_hits: int = TRACKER_DEFAULTS["acquire_hits"]
     lost_grace_mult: float = TRACKER_DEFAULTS["lost_grace_mult"]
 
     def validate(self) -> "TrackerConfig":
-        lo, hi = TRACKER_LIMITS["smoothing"]
-        self.smoothing = float(np.clip(float(self.smoothing), lo, hi))
-        lo, hi = TRACKER_LIMITS["miss_limit"]
-        self.miss_limit = int(np.clip(int(self.miss_limit), lo, hi))
-        lo, hi = TRACKER_LIMITS["acquire_hits"]
-        self.acquire_hits = int(np.clip(int(self.acquire_hits), lo, hi))
-        lo, hi = TRACKER_LIMITS["lost_grace_mult"]
-        self.lost_grace_mult = float(np.clip(float(self.lost_grace_mult), lo, hi))
+        self.smoothing = float(clip_field(self.smoothing, *self.LIMITS["smoothing"]))
+        self.miss_limit = int(clip_field(self.miss_limit, *self.LIMITS["miss_limit"]))
+        self.acquire_hits = int(clip_field(self.acquire_hits, *self.LIMITS["acquire_hits"]))
+        self.lost_grace_mult = float(clip_field(self.lost_grace_mult, *self.LIMITS["lost_grace_mult"]))
         return self
-
-    def to_dict(self) -> dict:
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "TrackerConfig":
-        known = {k: v for k, v in data.items() if k in TRACKER_DEFAULTS}
-        return cls(**{**TRACKER_DEFAULTS, **known}).validate()

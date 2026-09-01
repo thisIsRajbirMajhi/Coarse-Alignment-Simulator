@@ -1,17 +1,22 @@
 """
 Module: tracking.tracker
-Purpose: Continuous tracking — combines smoothing filter + lock state machine (modular, well-commented).
+Purpose: Continuous tracking — orchestrates isolated phase handlers + smoothing filter.
 Public API: Tracker, LockStatus
-Architecture:
-  - constants.py : limits/defaults
-  - config.py    : TrackerConfig
-  - filter.py    : ExponentialFilter (y=α·y_prev+(1-α)·x)
-  - state.py     : LockStateMachine (SEARCHING→ACQUIRED→TRACKING→LOST)
-  - tracker.py   : Tracker — orchestrates filter + state, owns estimate lifecycle
+Architecture (refactored 2026-09 — isolated phase directories):
+  - detection/      : BeaconDetector (stateless per-frame blob via moments)
+  - searching/      : SearchingHandler + SearchingStrategy (SEARCHING → ACQUIRED)
+  - acquired/       : AcquiredHandler (ACQUIRED probation → LOCKED/TRACKING or LOST)
+  - locked/         : LockedHandler + LockedFilter (LOCKED/TRACKING stable, → LOST)
+  - lost/           : LostHandler (LOST hold, hit → ACQUIRED, grace → SEARCHING)
+  - tracking/       : Tracker (this file) — orchestrates filter + LockStateMachine
+    - tracking/filter.py : ExponentialFilter (y=α·y_prev+(1-α)·x) — now also aliased as locked.filter.LockedFilter
+    - tracking/state.py  : LockStateMachine — thin dispatcher to searching/acquired/locked/lost handlers
+    - tracking/config.py : TrackerConfig (smoothing, miss_limit, acquire_hits, grace)
 Notes:
-  - Detection runs every frame (stateless) — Tracker owns continuity (stateful).
+  - Detection runs every frame (stateless) — Tracker owns continuity (stateful) by delegating hits/misses
+    to isolated handlers per phase. Each handler lives in its own directory for independent evolution.
   - Physics: Exponential filter is RC low-pass (τ=-1/ln α frames), rejects scintillation jitter.
-  - Lock definitions per spec: SEARCHING (estimate None), ACQUIRED (probation), TRACKING (≥3 hits, counts toward retention), LOST (keeps last estimate for reacquisition, else SEARCHING).
+  - Lock definitions per spec: SEARCHING (estimate None), ACQUIRED (probation), TRACKING/LOCKED (≥3 hits, retention), LOST (keep estimate, grace).
 """
 
 from __future__ import annotations

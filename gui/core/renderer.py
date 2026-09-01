@@ -15,7 +15,9 @@ import numpy as np
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QImage, QPixmap
 
-from tracking.tracker import LockStatus
+from tracking.types import LockStatus
+
+from common.colors import LOCK_STATUS_COLORS_BGR, lock_color_bgr
 
 # Optional overlay integration — fallback to legacy if not available
 try:
@@ -148,12 +150,12 @@ class Renderer:
             Renderer.draw_corner_brackets(display, margin=4, length=max(8, min(w,h)//20), color=(180, 180, 180), thickness=1)
 
         status = tracker.status
-        # Lock colors — overlay or legacy map
+        # Lock colors — single source via common.colors, overlay if present
         if use_overlay:
             base_color = overlay.lock_color(status.value)  # type: ignore
         else:
-            color_map = {LockStatus.TRACKING: (90, 220, 90), LockStatus.ACQUIRED: (90, 220, 220), LockStatus.LOST: (255, 80, 80), LockStatus.SEARCHING: (170, 170, 170)}
-            base_color = color_map.get(status, (170, 170, 170))
+            # Single source fallback — common BGR map (replaces inline color_map duplication)
+            base_color = lock_color_bgr(status.value, default=(170, 170, 170))
 
         # Beacons — hitbox/center + lock circle with pulse
         fov_x0, fov_y0, _, _ = camera.get_fov_rect()

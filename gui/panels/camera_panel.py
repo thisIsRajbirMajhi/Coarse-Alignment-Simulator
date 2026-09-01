@@ -11,6 +11,7 @@ Notes: Modular, well-commented, HOT via configChanged. Each section is a QGroupB
 """
 
 from PyQt5.QtCore import Qt, pyqtSignal
+from gui.panels.base import BaseConfigPanel
 from PyQt5.QtWidgets import (
     QDoubleSpinBox,
     QGridLayout,
@@ -31,7 +32,7 @@ from environment.constants import MAX_RES
 # SECTION: CameraPanel — 11 camera/viewport params (grouped)
 # ============================================================
 
-class CameraPanel(QWidget):
+class CameraPanel(BaseConfigPanel):
     """
     Camera tab — 4 grouped sections, 11 params.
 

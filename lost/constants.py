@@ -1,0 +1,26 @@
+"""
+Module: lost.constants
+Purpose: Single source for LOST-phase limits & defaults.
+Public API: LOST_LIMITS, LOST_DEFAULTS
+Notes: LOST retains last estimate for grace period before discarding.
+       grace_mult scales miss_limit for LOST→SEARCHING timeout.
+"""
+
+# ============================================================
+# SECTION: Lost limits — reacquisition window
+# ============================================================
+
+LOST_LIMITS: dict[str, tuple[float, float]] = {
+    # Misses before ACQUIRED/TRACKING → LOST (same as locked)
+    "miss_limit": (1, 20),
+    # Multiplier for LOST → SEARCHING (grace window): timeout = miss_limit * grace_mult
+    "lost_grace_mult": (1.5, 3.0),
+    # Also retain acquire_hits for LOST → ACQUIRED promotion (via next hit)
+    "acquire_hits": (2, 5),
+}
+
+LOST_DEFAULTS: dict = {
+    "miss_limit": 5,
+    "lost_grace_mult": 2.0,  # LOST→SEARCHING after 10 misses (5*2)
+    "acquire_hits": 3,
+}

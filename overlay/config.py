@@ -16,6 +16,7 @@ from enum import Enum
 
 import numpy as np
 
+from common.config_base import BaseValidatedConfig, clip_field
 from overlay.constants import CROSSHAIR_STYLES, ERROR_UNITS_OPTIONS, LOCK_COLOR_DEFAULTS, OVERLAY_DEFAULTS, OVERLAY_LIMITS
 
 # ============================================================
@@ -66,7 +67,7 @@ class LockColors:
 # ============================================================
 
 @dataclass
-class OverlayConfig:
+class OverlayConfig(BaseValidatedConfig):
     """
     Crosshair / tracking overlay configuration.
 
@@ -77,6 +78,9 @@ class OverlayConfig:
     Error:
       show_error_line, show_error_text, error_units, error_text_scale
     """
+
+    LIMITS = OVERLAY_LIMITS
+    DEFAULTS = OVERLAY_DEFAULTS
 
     # --------------------------------------------------------
     # Crosshair
@@ -113,32 +117,21 @@ class OverlayConfig:
     def validate(self) -> "OverlayConfig":
         if self.crosshair_style not in CROSSHAIR_STYLES:
             self.crosshair_style = OVERLAY_DEFAULTS["crosshair_style"]
-        lo, hi = OVERLAY_LIMITS["crosshair_size"]
-        self.crosshair_size = int(np.clip(int(self.crosshair_size), lo, hi))
-        lo, hi = OVERLAY_LIMITS["crosshair_gap"]
-        self.crosshair_gap = int(np.clip(int(self.crosshair_gap), lo, hi))
-        lo, hi = OVERLAY_LIMITS["crosshair_thickness"]
-        self.crosshair_thickness = int(np.clip(int(self.crosshair_thickness), lo, hi))
-        lo, hi = OVERLAY_LIMITS["centre_dot_radius"]
-        self.centre_dot_radius = int(np.clip(int(self.centre_dot_radius), lo, hi))
+        self.crosshair_size = int(clip_field(self.crosshair_size, *self.LIMITS["crosshair_size"]))
+        self.crosshair_gap = int(clip_field(self.crosshair_gap, *self.LIMITS["crosshair_gap"]))
+        self.crosshair_thickness = int(clip_field(self.crosshair_thickness, *self.LIMITS["crosshair_thickness"]))
+        self.centre_dot_radius = int(clip_field(self.centre_dot_radius, *self.LIMITS["centre_dot_radius"]))
         self.centre_dot = bool(self.centre_dot)
-        # Clamp color BGR 0..255
-        self.crosshair_color = tuple(int(np.clip(int(c), 0, 255)) for c in self.crosshair_color)
-
-        lo, hi = OVERLAY_LIMITS["lock_circle_radius"]
-        self.lock_circle_radius = int(np.clip(int(self.lock_circle_radius), lo, hi))
-        lo, hi = OVERLAY_LIMITS["lock_circle_thickness"]
-        self.lock_circle_thickness = int(np.clip(int(self.lock_circle_thickness), lo, hi))
+        self.crosshair_color = tuple(int(clip_field(int(c), 0, 255)) for c in self.crosshair_color)
+        self.lock_circle_radius = int(clip_field(self.lock_circle_radius, *self.LIMITS["lock_circle_radius"]))
+        self.lock_circle_thickness = int(clip_field(self.lock_circle_thickness, *self.LIMITS["lock_circle_thickness"]))
         self.pulse_enabled = bool(self.pulse_enabled)
-        lo, hi = OVERLAY_LIMITS["pulse_duration_ms"]
-        self.pulse_duration_ms = int(np.clip(int(self.pulse_duration_ms), lo, hi))
-
+        self.pulse_duration_ms = int(clip_field(self.pulse_duration_ms, *self.LIMITS["pulse_duration_ms"]))
         self.show_error_line = bool(self.show_error_line)
         self.show_error_text = bool(self.show_error_text)
         if self.error_units not in ERROR_UNITS_OPTIONS:
             self.error_units = OVERLAY_DEFAULTS["error_units"]
-        # error_text_scale kept 0.2..0.6
-        self.error_text_scale = float(np.clip(float(self.error_text_scale), 0.2, 0.6))
+        self.error_text_scale = float(clip_field(self.error_text_scale, 0.2, 0.6))
         # lock_colors validate
         if not isinstance(self.lock_colors, LockColors):
             self.lock_colors = LockColors()

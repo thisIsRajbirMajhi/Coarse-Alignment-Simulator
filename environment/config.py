@@ -9,11 +9,10 @@ Notes: Single source of truth — consumed by Scene and EnvironmentPanel.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING
 
-import numpy as np
-
+from common.config_base import BaseValidatedConfig, clip_field
 from environment.constants import (
     DEFAULTS,
     LIMITS,
@@ -31,7 +30,7 @@ if TYPE_CHECKING:
 # ============================================================
 
 @dataclass
-class EnvironmentConfig:
+class EnvironmentConfig(BaseValidatedConfig):
     """
     Typed configuration for all 10 Environment parameters.
 
@@ -45,6 +44,9 @@ class EnvironmentConfig:
     All fields validated via validate() — clamps to LIMITS and returns self
     for fluent usage. Call validate() before passing to Scene.
     """
+
+    LIMITS = LIMITS
+    DEFAULTS = DEFAULTS
 
     # --------------------------------------------------------
     # World (px) — full 2D scene size
@@ -83,42 +85,20 @@ class EnvironmentConfig:
 
     def validate(self) -> "EnvironmentConfig":
         """
-        Clamp all fields to LIMITS in-place and return self.
-
-        Mirrors the np.clip behaviour previously scattered across
-        Scene.__init__ and Scene.regenerate, now centralised.
+        Clamp all fields to LIMITS in-place and return self — now via clip_field.
         """
-        lo, hi = LIMITS["world_width"]
-        self.world_width = int(np.clip(int(self.world_width), lo, hi))
-        lo, hi = LIMITS["world_height"]
-        self.world_height = int(np.clip(int(self.world_height), lo, hi))
-
-        # Seed: None stays None (means "randomise on build"); int is clamped.
+        self.world_width = int(clip_field(self.world_width, *LIMITS["world_width"]))
+        self.world_height = int(clip_field(self.world_height, *LIMITS["world_height"]))
         if self.seed is not None:
-            lo, hi = LIMITS["seed"]
-            self.seed = int(np.clip(int(self.seed), lo, hi))
-
-        lo, hi = LIMITS["bg_top"]
-        self.bg_top = int(np.clip(int(self.bg_top), lo, hi))
-        lo, hi = LIMITS["bg_bottom"]
-        self.bg_bottom = int(np.clip(int(self.bg_bottom), lo, hi))
-
-        lo, hi = LIMITS["vignetting_pct"]
-        self.vignetting_pct = int(np.clip(int(self.vignetting_pct), lo, hi))
-        lo, hi = LIMITS["haze_pct"]
-        self.haze_pct = int(np.clip(int(self.haze_pct), lo, hi))
-
-        lo, hi = LIMITS["star_count"]
-        self.star_count = int(np.clip(int(self.star_count), lo, hi))
-
-        lo, hi = LIMITS["star_brightness"]
-        self.star_brightness = float(np.clip(float(self.star_brightness), lo, hi))
-
+            self.seed = int(clip_field(self.seed, *LIMITS["seed"]))
+        self.bg_top = int(clip_field(self.bg_top, *LIMITS["bg_top"]))
+        self.bg_bottom = int(clip_field(self.bg_bottom, *LIMITS["bg_bottom"]))
+        self.vignetting_pct = int(clip_field(self.vignetting_pct, *LIMITS["vignetting_pct"]))
+        self.haze_pct = int(clip_field(self.haze_pct, *LIMITS["haze_pct"]))
+        self.star_count = int(clip_field(self.star_count, *LIMITS["star_count"]))
+        self.star_brightness = float(clip_field(self.star_brightness, *LIMITS["star_brightness"]))
         self.dynamic = bool(self.dynamic)
-
-        lo, hi = LIMITS["dynamic_speed"]
-        self.dynamic_speed = float(np.clip(float(self.dynamic_speed), lo, hi))
-
+        self.dynamic_speed = float(clip_field(self.dynamic_speed, *LIMITS["dynamic_speed"]))
         return self
 
     # ========================================================

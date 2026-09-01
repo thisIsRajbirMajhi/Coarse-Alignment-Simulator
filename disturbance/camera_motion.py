@@ -13,6 +13,7 @@ import time
 import numpy as np
 
 from disturbance.constants import CAMERA_TAU
+from disturbance.dt_provider import DtProvider
 from disturbance.state import _cam_motion_state_global
 
 # ============================================================
@@ -59,17 +60,7 @@ def apply_camera_motion_with_state(
         return pan, tilt
     if state is None:
         state = {}
-
-    # dt — explicit sim-scaled preferred, else wall-clock fallback
-    if dt is None:
-        now = time.time()
-        last = state.get("_last_wall")
-        dt = 0.033 if last is None else float(np.clip(now - last, 0.005, 0.08))
-        state["_last_wall"] = now
-    else:
-        # Keep wall in sync for fallback callers
-        state["_last_wall"] = time.time()
-        dt = float(np.clip(float(dt), 0.005, 0.08))
+    dt = DtProvider.resolve(state, dt, key="_last_wall")
 
     tau = float(CAMERA_TAU)
     sigma_v = 0.42 * float(intensity) * (float(intensity)/5.0)**0.25

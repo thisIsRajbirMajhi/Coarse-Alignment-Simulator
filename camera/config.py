@@ -18,6 +18,7 @@ from dataclasses import asdict, dataclass
 import numpy as np
 
 from camera.constants import CAMERA_DEFAULTS, CAMERA_LIMITS, DISPLAY_DEFAULTS, DISPLAY_LIMITS
+from common.config_base import BaseValidatedConfig, clip_field
 from environment.constants import MAX_RES, MIN_RES
 
 # ============================================================
@@ -25,7 +26,7 @@ from environment.constants import MAX_RES, MIN_RES
 # ============================================================
 
 @dataclass
-class CameraConfig:
+class CameraConfig(BaseValidatedConfig):
     """
     Camera configuration — covers FOV, mechanics, display, and optics.
 
@@ -47,6 +48,9 @@ class CameraConfig:
     Units/Reporting:
       pixel_scale_mrad — mrad per px for angular error reporting
     """
+
+    LIMITS = {**CAMERA_LIMITS, **DISPLAY_LIMITS}
+    DEFAULTS = {**CAMERA_DEFAULTS, **DISPLAY_DEFAULTS}
 
     # --------------------------------------------------------
     # Field of View / Optics
@@ -85,32 +89,17 @@ class CameraConfig:
     # ========================================================
 
     def validate(self, scene_bounds: tuple[int,int] | None = None) -> "CameraConfig":
-        """Clamp numeric fields to limits; resolve None autos against scene_bounds."""
-        # FOV
-        lo, hi = CAMERA_LIMITS["fov_width"]
-        self.fov_width = int(np.clip(int(self.fov_width), lo, hi))
-        lo, hi = CAMERA_LIMITS["fov_height"]
-        self.fov_height = int(np.clip(int(self.fov_height), lo, hi))
-
-        # Mechanics — resolution / slew / latency
-        lo, hi = CAMERA_LIMITS["max_slew_rate"]
-        self.max_slew_rate = float(np.clip(float(self.max_slew_rate), lo, hi))
-        lo, hi = CAMERA_LIMITS["resolution"]
-        self.resolution = float(np.clip(float(self.resolution), lo, hi))
-        lo, hi = CAMERA_LIMITS["latency_ms"]
-        self.latency_ms = int(np.clip(int(self.latency_ms), lo, hi))
-        lo, hi = CAMERA_LIMITS["pixel_scale_mrad"]
-        self.pixel_scale_mrad = float(np.clip(float(self.pixel_scale_mrad), lo, hi))
-
-        # Display
-        lo, hi = DISPLAY_LIMITS["viewport_width"]
-        self.viewport_width = int(np.clip(int(self.viewport_width), lo, hi))
-        lo, hi = DISPLAY_LIMITS["viewport_height"]
-        self.viewport_height = int(np.clip(int(self.viewport_height), lo, hi))
-        lo, hi = DISPLAY_LIMITS["god_width"]
-        self.god_width = int(np.clip(int(self.god_width), lo, hi))
-        lo, hi = DISPLAY_LIMITS["god_height"]
-        self.god_height = int(np.clip(int(self.god_height), lo, hi))
+        """Clamp numeric fields to limits via clip_field; resolve None autos against scene_bounds."""
+        self.fov_width = int(clip_field(self.fov_width, *CAMERA_LIMITS["fov_width"]))
+        self.fov_height = int(clip_field(self.fov_height, *CAMERA_LIMITS["fov_height"]))
+        self.max_slew_rate = float(clip_field(self.max_slew_rate, *CAMERA_LIMITS["max_slew_rate"]))
+        self.resolution = float(clip_field(self.resolution, *CAMERA_LIMITS["resolution"]))
+        self.latency_ms = int(clip_field(self.latency_ms, *CAMERA_LIMITS["latency_ms"]))
+        self.pixel_scale_mrad = float(clip_field(self.pixel_scale_mrad, *CAMERA_LIMITS["pixel_scale_mrad"]))
+        self.viewport_width = int(clip_field(self.viewport_width, *DISPLAY_LIMITS["viewport_width"]))
+        self.viewport_height = int(clip_field(self.viewport_height, *DISPLAY_LIMITS["viewport_height"]))
+        self.god_width = int(clip_field(self.god_width, *DISPLAY_LIMITS["god_width"]))
+        self.god_height = int(clip_field(self.god_height, *DISPLAY_LIMITS["god_height"]))
 
         # Pan/Tilt ranges and home — resolve autos if scene known
         if scene_bounds is not None:
@@ -121,38 +110,33 @@ class CameraConfig:
             if self.pan_min is None:
                 self.pan_min = int(hw)
             else:
-                lo, hi = CAMERA_LIMITS["pan_min"]
-                self.pan_min = int(np.clip(int(self.pan_min), lo, hi))
+                self.pan_min = int(clip_field(self.pan_min, *CAMERA_LIMITS["pan_min"]))
             if self.pan_max is None:
                 self.pan_max = int(sw - hw)
             else:
-                lo, hi = CAMERA_LIMITS["pan_max"]
-                self.pan_max = int(np.clip(int(self.pan_max), lo, hi))
+                self.pan_max = int(clip_field(self.pan_max, *CAMERA_LIMITS["pan_max"]))
             if self.pan_min is not None and self.pan_max is not None and self.pan_min > self.pan_max:
                 self.pan_min, self.pan_max = int(self.pan_max), int(self.pan_min)
-            # Tilt
             if self.tilt_min is None:
                 self.tilt_min = int(hh)
             else:
-                self.tilt_min = int(np.clip(int(self.tilt_min), *CAMERA_LIMITS["tilt_min"]))
+                self.tilt_min = int(clip_field(self.tilt_min, *CAMERA_LIMITS["tilt_min"]))
             if self.tilt_max is None:
                 self.tilt_max = int(sh - hh)
             else:
-                self.tilt_max = int(np.clip(int(self.tilt_max), *CAMERA_LIMITS["tilt_max"]))
+                self.tilt_max = int(clip_field(self.tilt_max, *CAMERA_LIMITS["tilt_max"]))
             if self.tilt_min is not None and self.tilt_max is not None and self.tilt_min > self.tilt_max:
                 self.tilt_min, self.tilt_max = int(self.tilt_max), int(self.tilt_min)
-            # Home autos
             if self.home_pan is None:
                 self.home_pan = float(sw/2)
             else:
-                self.home_pan = float(np.clip(float(self.home_pan), float(self.pan_min), float(self.pan_max)))
+                self.home_pan = float(clip_field(self.home_pan, float(self.pan_min), float(self.pan_max)))
             if self.home_tilt is None:
                 self.home_tilt = float(sh/2)
             else:
-                self.home_tilt = float(np.clip(float(self.home_tilt), float(self.tilt_min), float(self.tilt_max)))
-            # Clamp home to range
-            self.home_pan = float(np.clip(float(self.home_pan), float(self.pan_min), float(self.pan_max)))
-            self.home_tilt = float(np.clip(float(self.home_tilt), float(self.tilt_min), float(self.tilt_max)))
+                self.home_tilt = float(clip_field(self.home_tilt, float(self.tilt_min), float(self.tilt_max)))
+            self.home_pan = float(clip_field(self.home_pan, float(self.pan_min), float(self.pan_max)))
+            self.home_tilt = float(clip_field(self.home_tilt, float(self.tilt_min), float(self.tilt_max)))
 
         return self
 

@@ -11,6 +11,7 @@ Notes: Modular, well-commented, HOT via configChanged. Each control emits valida
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor
+from gui.panels.base import BaseConfigPanel
 from PyQt5.QtWidgets import (
     QCheckBox,
     QColorDialog,
@@ -33,7 +34,7 @@ from overlay.constants import CROSSHAIR_STYLES, ERROR_UNITS_OPTIONS, LOCK_COLOR_
 # SECTION: OverlayPanel — Crosshair / Tracking Overlay
 # ============================================================
 
-class OverlayPanel(QWidget):
+class OverlayPanel(BaseConfigPanel):
     """
     Overlay tab — controls for crosshair, lock, and error.
 

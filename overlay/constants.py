@@ -44,16 +44,18 @@ OVERLAY_DEFAULTS: dict = {
     "error_text_scale": 0.28,
 }
 
-# Default lock colors — intuitive, color-blind friendly where possible
-# Gray=searching, Cyan=acquired, Green=tracking, Red=lost, Blue=detecting
-LOCK_COLOR_DEFAULTS: dict[str, tuple[int,int,int]] = {
-    "searching": (170, 170, 170),  # gray
-    "acquired": (90, 220, 220),    # cyan (was yellow/cyan per spec)
-    "tracking": (90, 220, 90),     # green
-    "lost": (255, 80, 80),         # red (actually BGR? keep as defined)
-    "detecting": (255, 130, 130),  # blue-ish (BGR: 130,130,255 is blue)
-    # Note: BGR ordering; renderer uses these directly as BGR
-}
+# Default lock colors — single source via common.colors (hex + BGR)
+# Re-export from common/colors.py to keep 1 source; fallback defined here if common not available
+try:
+    from common.colors import LOCK_STATUS_COLORS_BGR as LOCK_COLOR_DEFAULTS  # type: ignore
+except Exception:
+    LOCK_COLOR_DEFAULTS: dict[str, tuple[int,int,int]] = {
+        "searching": (170, 170, 170),  # gray
+        "acquired": (90, 220, 220),    # cyan
+        "tracking": (90, 220, 90),     # green
+        "lost": (255, 80, 80),         # red
+        "detecting": (255, 130, 130),  # blue-ish
+    }
 
 # Allowed style strings
 CROSSHAIR_STYLES: list[str] = [

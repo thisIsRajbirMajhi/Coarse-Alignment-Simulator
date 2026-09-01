@@ -8,10 +8,9 @@ Notes: Single source for GUI and PIDController. HOT-reloaded, serializable.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 
-import numpy as np
-
+from common.config_base import BaseValidatedConfig, clip_field
 from control.constants import CONTROL_DEFAULTS, CONTROL_LIMITS, CONTROLLER_TYPES
 
 # ============================================================
@@ -19,7 +18,7 @@ from control.constants import CONTROL_DEFAULTS, CONTROL_LIMITS, CONTROLLER_TYPES
 # ============================================================
 
 @dataclass
-class ControllerConfig:
+class ControllerConfig(BaseValidatedConfig):
     """
     Controller configuration — P/PI/PID + dead zone + clamp + rate.
 
@@ -32,6 +31,9 @@ class ControllerConfig:
     19) output_clamp — px/tick, max correction (enforce ≤ camera slew*dt)
     """
 
+    LIMITS = CONTROL_LIMITS
+    DEFAULTS = CONTROL_DEFAULTS
+
     controller_type: str = CONTROL_DEFAULTS["controller_type"]
     kp: float = CONTROL_DEFAULTS["kp"]
     ki: float = CONTROL_DEFAULTS["ki"]
@@ -43,32 +45,18 @@ class ControllerConfig:
     def validate(self) -> "ControllerConfig":
         if self.controller_type not in CONTROLLER_TYPES:
             self.controller_type = CONTROL_DEFAULTS["controller_type"]
-        lo, hi = CONTROL_LIMITS["kp"]
-        self.kp = float(np.clip(float(self.kp), lo, hi))
-        lo, hi = CONTROL_LIMITS["ki"]
-        self.ki = float(np.clip(float(self.ki), lo, hi))
-        lo, hi = CONTROL_LIMITS["kd"]
-        self.kd = float(np.clip(float(self.kd), lo, hi))
-        lo, hi = CONTROL_LIMITS["update_rate_hz"]
-        self.update_rate_hz = float(np.clip(float(self.update_rate_hz), lo, hi))
-        lo, hi = CONTROL_LIMITS["dead_zone"]
-        self.dead_zone = float(np.clip(float(self.dead_zone), lo, hi))
-        lo, hi = CONTROL_LIMITS["output_clamp"]
-        self.output_clamp = float(np.clip(float(self.output_clamp), lo, hi))
+        self.kp = float(clip_field(self.kp, *self.LIMITS["kp"]))
+        self.ki = float(clip_field(self.ki, *self.LIMITS["ki"]))
+        self.kd = float(clip_field(self.kd, *self.LIMITS["kd"]))
+        self.update_rate_hz = float(clip_field(self.update_rate_hz, *self.LIMITS["update_rate_hz"]))
+        self.dead_zone = float(clip_field(self.dead_zone, *self.LIMITS["dead_zone"]))
+        self.output_clamp = float(clip_field(self.output_clamp, *self.LIMITS["output_clamp"]))
         # Enforce type → zero irrelevant gains for cleaner behavior
         if self.controller_type == "P":
             self.ki = 0.0; self.kd = 0.0
         elif self.controller_type == "PI":
             self.kd = 0.0
         return self
-
-    def to_dict(self) -> dict:
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "ControllerConfig":
-        known = {k: v for k, v in data.items() if k in CONTROL_DEFAULTS}
-        return cls(**{**CONTROL_DEFAULTS, **known}).validate()
 
     # Back-compat: old ProportionalController had .gain
     @property

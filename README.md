@@ -30,7 +30,7 @@ high enough) lose and reacquire lock.
   - *Noise* — additive Gaussian sensor noise.
 - **Start / Pause / Reset / Export performance log** (CSV or JSON).
 
-## Module map
+## Module map — refactored 2026-09: isolated phase algorithms
 
 | Package | Responsibility |
 |---|---|
@@ -38,26 +38,31 @@ high enough) lose and reacquire lock.
 | `target/` | Beacon true position; linear / curved / random-walk motion, bounce/clamp per profile |
 | `camera/` | Virtual pan-tilt camera, FOV cropping, clamped movement (`set_position` added) |
 | `disturbance/` | Turbulence, platform vibration, **camera motion** (correlated drift), sensor noise |
-| `detection/` | Brightness-threshold + contour centroid, per-frame, no memory |
-| `tracking/` | Exponential smoothing + lock-status state machine (searching/acquired/tracking/lost) |
-| `control/` | Proportional controller: tracking error → pan/tilt correction |
+| `detection/` | **Isolated detection** — stateless per-frame blob (grayscale→threshold→closing→contour moments→centroid). Own `config.py`/`constants.py`/`preprocessing.py`. No lock memory; runs every frame. |
+| `searching/` | **Isolated SEARCHING** — `SearchingHandler` (no estimate, first hit→ACQUIRED) + `SearchingStrategy` (spiral/raster/random offsets for active scan). Own `constants.py`/`config.py`/`handler.py`/`scanner.py`. |
+| `acquired/` | **Isolated ACQUIRED** — probation (`AcquiredHandler`: hits≥3→LOCKED, misses≥5→LOST). Own `constants.py`/`config.py`/`handler.py`. |
+| `locked/` | **Isolated LOCKED (=TRACKING)** — stable tracking, retention (`LockedHandler`: hit→LOCKED, miss≥5→LOST) + `LockedFilter` (IIR α·y+(1-α)·x, alias for `tracking.filter`). Own `constants.py`/`config.py`/`handler.py`/`filter.py`. |
+| `lost/` | **Isolated LOST** — hold last estimate, reacquisition window (`LostHandler`: hit→ACQUIRED, miss≥5·2.0→SEARCHING+clear). Own `constants.py`/`config.py`/`handler.py`. |
+| `tracking/` | Orchestrator — `Tracker` + `LockStateMachine` (dispatches to `searching`/`acquired`/`locked`/`lost` handlers) + `ExponentialFilter` + `TrackerConfig`. Backward-compat entry: `from tracking.tracker import Tracker, LockStatus`. |
+| `control/` | PID/P controller: tracking error → pan/tilt correction (respects `camera.max_slew*dt`) |
 | `perf_log/` | Per-frame stats, exports FPS/error/lock-retention/processing-time as CSV or JSON |
-| `gui/` | PyQt5 window; only module wiring others each tick (QTimer ~30 FPS, real-dt) |
-| `tests/` | Headless unit tests for each module (run: `python tests/test_*.py`) |
+| `gui/` | PyQt5 premium mission-control window (dark video stage `#0f172a`, light deck `#f1f5f9`, pill tabs, telemetry strip). Only wires others each tick (~30 FPS). |
+| `tests/` | Headless unit tests for each module (run: `python -m pytest tests -q`) |
 
-## Simulation loop (one tick, in `gui/app.py::_tick`)
+## Simulation loop (one tick, in `gui/main_window.py::_tick` — detection→phase→track→control)
 
 1. `target.update(dt)` — advance beacon (dt = real elapsed, clamped 5–100 ms)
-2. `scene.get_frame()` + draw beacon onto it
-3. `disturbance.apply_platform_vibration(...)` + `apply_camera_motion_with_state(...)`
+2. `scene.get_frame()` + `gui.core.renderer.Renderer.draw_targets()` onto it
+3. `disturbance.apply_platform_vibration(...)` + `apply_camera_motion_with_state(...)` (vibration=white jitter, camera motion=correlated drift `state={vx,vy}` decay 0.85)
 4. `camera.capture(...)` crops FOV (temporarily perturbed, then restored)
 5. `disturbance.apply_turbulence(...)`, `apply_sensor_noise(...)` degrade FOV frame
-6. `detector.detect(...)` finds beacon (or `None`)
-7. `tracker.update(detection)` updates smoothed estimate + lock status
-8. `controller.compute_correction(...)` → `camera.move(...)` closes loop
-9. `perf.log_frame(...)` records outcome
-10. viewport, minimap (with FOV rect + estimated position dot), and stat labels redrawn
-11. `QImage.copy()` used to avoid numpy-buffer lifetime bug; pixmap scaled with `SmoothTransformation`
+6. `detection.BeaconDetector.detect_all(...)` — **isolated `detection/`** (grayscale→threshold→closing→contours→moments→centroid, stateless)
+7. Hitbox-gated target check → `detection = hit` or `None` (only primary beacon in `hitbox_radius`, distractors ignored)
+8. `tracking.Tracker.update(detection)` — **delegates to isolated phase handlers**: `searching/SearchingHandler` → `acquired/AcquiredHandler` → `locked/LockedHandler` → `lost/LostHandler` via `tracking.state.LockStateMachine`; filter `locked/filter.LockedFilter` (IIR) smooths hits
+9. `control.PIDController.compute_correction(...)` → `camera.move(...)` closes loop (respects `camera.max_slew*dt` & `controller.output_clamp`)
+10. `perf_log.PerformanceLogger.log_frame(...)` records locked/retention/detection/searching/lost
+11. `gui.core.renderer.Renderer.render_viewport/minimap(...)` + overlay pulse, then `_update_stats()` + premium telemetry strip
+12. `QImage.copy()` used to avoid numpy-buffer lifetime bug; pixmap scaled with `SmoothTransformation`
 
 ## Design notes & future upgrades
 
