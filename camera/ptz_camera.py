@@ -20,12 +20,15 @@ class PTZCamera:
       Pan-Tilt: pan_min/max, tilt_min/max, home_pan/tilt, max_slew_rate, resolution, latency_ms
       Display: viewport_width/height, god_width/height (used by GUI, stored here for snapshot)
       Units: pixel_scale_mrad (px → mrad)
+      Optics: vignetting (sensor/image-space radial falloff, follows camera FOV)
 
     Mechanics:
       - Slew limiting: |delta| ≤ max_slew_rate * dt  (per axis)
       - Resolution: delta quantized to nearest resolution step
       - Latency: commands queued for latency_ms, executed on update(dt)
       - Ranges: pan/tilt clamped to [pan_min, pan_max] ∩ [fov/2, W-fov/2]
+      - Vignetting: radial darkening centered on FOV (image-space), NOT world centre.
+        Applied at capture stage so it follows camera pan/tilt.
     """
 
     def __init__(
@@ -36,6 +39,7 @@ class PTZCamera:
         tilt: float = 0.0,
         scene_bounds: tuple[int, int] = (1000, 1000),
         config: CameraConfig | None = None,
+        vignetting: float = 0.0,
     ):
         # If config supplied, it drives construction (validated against scene)
         if config is not None:
@@ -61,6 +65,23 @@ class PTZCamera:
             self.fov_width = int(fov_width)
             self.fov_height = int(fov_height)
             self.scene_bounds = scene_bounds
+
+        # Vignetting — image-space (sensor) effect, follows camera FOV.
+        # Stored here so capture() can apply without Scene world-baking.
+        # vignetting param overrides config if explicitly passed, else check
+        # config.vignetting (if CameraConfig carries it) or default 0.
+        _vign = float(vignetting)
+        if _vign == 0.0 and config is not None and hasattr(config, "vignetting"):
+            try:
+                _vign = float(getattr(config, "vignetting", 0.0) or 0.0)
+            except:
+                _vign = 0.0
+        if _vign == 0.0 and config is not None and hasattr(config, "vignetting_strength"):
+            try:
+                _vign = float(getattr(config, "vignetting_strength", 0.0) or 0.0)
+            except:
+                _vign = 0.0
+        self.vignetting: float = float(np.clip(_vign, 0.0, 0.92))
 
         # Internal time for latency queue (seconds)
         self._time: float = 0.0
@@ -201,11 +222,16 @@ class PTZCamera:
         """Move to home/centre (configured or scene centre)."""
         self.set_position(float(self.config.home_pan), float(self.config.home_tilt))
 
+    def set_vignetting(self, strength: float) -> None:
+        """Set vignetting strength (0..0.92) for camera image-space effect."""
+        self.vignetting = float(np.clip(float(strength), 0.0, 0.92))
+
     def apply_config(self, config: CameraConfig, scene_bounds: tuple[int,int] | None = None) -> None:
         """
         Hot-apply a new CameraConfig (preserves pan/tilt, updates FOV/ranges).
 
         If scene_bounds provided, re-validates ranges against new scene.
+        Also syncs vignetting if config carries it (for camera-stage vignetting).
         """
         if scene_bounds is not None:
             self.scene_bounds = scene_bounds
@@ -214,6 +240,17 @@ class PTZCamera:
             config.validate(self.scene_bounds)
         self.config = config
         self._sync_fov_from_config()
+        # Sync vignetting if present on config (camera-stage migration)
+        if hasattr(config, "vignetting"):
+            try:
+                self.set_vignetting(float(getattr(config, "vignetting", self.vignetting) or 0.0))
+            except:
+                pass
+        if hasattr(config, "vignetting_strength"):
+            try:
+                self.set_vignetting(float(getattr(config, "vignetting_strength", self.vignetting) or 0.0))
+            except:
+                pass
         # Re-clamp current pan/tilt to new ranges
         self._clamp_to_range()
         # Clear stale pending that may exceed new limits
@@ -236,8 +273,14 @@ class PTZCamera:
     def get_home(self) -> tuple[float, float]:
         return (float(self.config.home_pan), float(self.config.home_tilt))
 
-    def capture(self, scene_frame: np.ndarray) -> np.ndarray:
-        """Crop the camera's current FOV window out of the full scene frame."""
+    def capture(self, scene_frame: np.ndarray, vignetting: float | None = None) -> np.ndarray:
+        """
+        Crop the camera's current FOV window out of the full scene frame.
+
+        Applies vignetting at camera image stage (sensor-space) so dark corners
+        follow the camera FOV, not the world centre. Pass vignetting strength
+        explicitly (0..0.92) or rely on self.vignetting set via set_vignetting().
+        """
         h, w = scene_frame.shape[:2]
         x0, y0, x1, y1 = self.get_fov_rect()
         x0c, y0c = max(x0, 0), max(y0, 0)
@@ -248,6 +291,51 @@ class PTZCamera:
             crop = scene_frame[y0c:y1c, x0c:x1c]
             out[y0c - y0: y0c - y0 + crop.shape[0],
                 x0c - x0: x0c - x0 + crop.shape[1]] = crop
+
+        # Vignetting — image-space (follows camera)
+        vig = float(vignetting) if vignetting is not None else float(self.vignetting)
+        if vig > 1e-3:
+            try:
+                from environment.vignetting import apply_vignetting
+                out = apply_vignetting(out, vig)
+            except Exception:
+                pass
+        return out
+
+    def capture_region(self, scene, vignetting: float | None = None) -> np.ndarray:
+        """
+        Optimized capture directly from Scene without rebuilding full 5000×5000.
+
+        Uses Scene.get_region(x0,y0,x1,y1) to crop first (1.2M pixels for 640×640)
+        then applies vignetting. This avoids the 5000×5000 float32 rebuild every
+        33 ms. Prefer this over capture(scene.get_frame()) in hot loop.
+        """
+        x0, y0, x1, y1 = self.get_fov_rect()
+        # Scene.get_region handles dynamic stars/haze on cropped region only
+        if hasattr(scene, "get_region"):
+            out = scene.get_region(x0, y0, x1, y1)
+        elif hasattr(scene, "get_cropped_frame"):
+            out = scene.get_cropped_frame(x0, y0, x1, y1)
+        else:
+            # Fallback old path
+            out = self.capture(scene.get_frame(), vignetting=0)
+            # vignetting will be applied below once
+            vig = float(vignetting) if vignetting is not None else float(self.vignetting)
+            if vig > 1e-3:
+                try:
+                    from environment.vignetting import apply_vignetting
+                    out = apply_vignetting(out, vig)
+                except Exception:
+                    pass
+            return out
+
+        vig = float(vignetting) if vignetting is not None else float(self.vignetting)
+        if vig > 1e-3:
+            try:
+                from environment.vignetting import apply_vignetting
+                out = apply_vignetting(out, vig)
+            except Exception:
+                pass
         return out
 
     # Reporting — angular errors

@@ -251,6 +251,12 @@ class MainWindow(StateMixin, QMainWindow):
         self.target = self.beacons[tgt_id] if self.beacons else self.beacons[0]
         # Camera — full mechanics (slew, resolution, latency, ranges, home, optics)
         self.camera = PTZCamera(config=cam_cfg, scene_bounds=(scene_w, scene_h))
+        # Sync vignetting (camera image-space, follows FOV — not world)
+        try:
+            vig = float(getattr(cfg, 'vignetting_pct', 0) if 'cfg' in locals() else getattr(self.env_config, 'vignetting_pct', 0)) / 100.0
+            self.camera.set_vignetting(vig)
+        except:
+            pass
         self.detector = BeaconDetector(brightness_threshold=thresh, min_area=min_area)
         self.tracker = Tracker(smoothing=smoothing, miss_limit=miss_limit)
         # Controller — P/PI/PID with dead zone, clamp, update rate (robust, modular)
@@ -1405,6 +1411,12 @@ class MainWindow(StateMixin, QMainWindow):
                 self._build_simulation()
                 self.scene.regenerate_from_config(cfg)
         # Camera — update scene bounds and re-validate ranges/home against new world (modular)
+        # Sync vignetting (camera image-space) from env config to camera
+        try:
+            vig = float(cfg.vignetting_pct) / 100.0 if 'cfg' in locals() else float(getattr(self.env_config, 'vignetting_pct', 0)) / 100.0
+            self.camera.set_vignetting(vig)
+        except:
+            pass
         try:
             if hasattr(self, "camera_panel"):
                 self.camera_panel.set_scene_bounds((sw, sh))
@@ -1826,23 +1838,25 @@ class MainWindow(StateMixin, QMainWindow):
         try:
             self.camera.update(dt)
         except: pass
-        scene_frame=self.scene.get_frame()
-        self._draw_targets(scene_frame)
+        # ── PERFORMANCE FIX: Optimized FOV rendering — crop first (640×640 ≈1.2M px)
+        #   instead of rebuilding full 5000×5000 (75M px, 300 MB float32) every 33 ms.
+        #   Scene.get_region(x0,y0,x1,y1) applies haze shimmer + twinkle only to
+        #   visible FOV stars. Vignetting is now camera image-space (follows FOV),
+        #   applied AFTER beacon photometry at capture stage.
+        #   God-view (minimap) uses a lightweight static-background path.
         # ── Disturbances (full spec) — dt_eff ensures sim-speed lockstep ──
-        # Order positional: Vibration (harmonic) → Platform Motion (Linear default + 6 optional, ±20px/f) → Jitter (±20) → Drift (OU 6s)
-        # Order image: Turbulence → Atmospheric (Clear/Haze/Fog/Rain/Low Light + User contrast/brightness) → Sensor → Image Noise (S&P 10% + Gaussian σ 20+User + Poisson)
-        # Try to use DisturbanceConfig as single source; fallback to legacy sliders if not available
+        # Order positional: Vibration → Platform Motion → Jitter → Drift (OU)
+        # Order image: Vignetting (camera) → Turbulence → Atmospheric → Sensor/Image Noise
+        # Try to use DisturbanceConfig as single source; fallback to legacy sliders
         try:
             dc = getattr(self, "disturbance_config", None)
             if dc is not None:
                 dc = dc.validate() if hasattr(dc, "validate") else dc
         except:
             dc = None
-        # Fallback if panel never initialized but sliders exist → build minimal dc from sliders
         if dc is None and hasattr(self, "sliders") and self.sliders:
             try:
                 from disturbance.config import DisturbanceConfig as _FallbackDC
-                # Build minimal legacy-only dc
                 dc = _FallbackDC(
                     turbulence=int(self.sliders["Turbulence"].value()) if "Turbulence" in self.sliders else 0,
                     vibration=int(self.sliders["Vibration"].value()) if "Vibration" in self.sliders else 0,
@@ -1851,15 +1865,60 @@ class MainWindow(StateMixin, QMainWindow):
                 ).validate()
             except:
                 dc = None
+
+        # Determine vignetting strength for camera image-space (follows FOV)
+        try:
+            vig_strength = float(getattr(self.scene, 'vignetting', 0.0) or 0.0)
+            if hasattr(self, 'env_config') and hasattr(self.env_config, 'vignetting_pct'):
+                vig_strength = float(self.env_config.vignetting_pct) / 100.0
+        except:
+            vig_strength = 0.0
+        try:
+            self.camera.set_vignetting(vig_strength)
+        except:
+            pass
+        # Decide path: optimized if Scene has get_region
+        use_optimized = hasattr(self.scene, 'get_region')
+        # For detection, remember disturbed FOV origin (camera-stage vignetting follows disturbed pose)
+        fov_capture_x0 = None
+        fov_capture_y0 = None
+
+        # Helper to get base FOV (gradient+haze+stars, no beacons, no vignetting)
+        def _get_fov_base(disturbed_pan, disturbed_tilt):
+            if use_optimized:
+                # Temporarily set camera to disturbed pose to get correct FOV rect,
+                # then fetch cropped region (only 640×640 work)
+                rp2, rt2 = self.camera.pan, self.camera.tilt
+                self.camera.pan, self.camera.tilt = float(disturbed_pan), float(disturbed_tilt)
+                try:
+                    x0, y0, x1, y1 = self.camera.get_fov_rect()
+                    base = self.scene.get_region(int(x0), int(y0), int(x1), int(y1))
+                finally:
+                    self.camera.pan, self.camera.tilt = rp2, rt2
+                return base, (x0, y0)
+            else:
+                # Fallback heavy path: full frame then crop (for compat without get_region)
+                full = self.scene.get_frame()
+                return full, None
+
+        # For god-view minimap, build lightweight static base (avoid dynamic full rebuild)
+        try:
+            if hasattr(self.scene, '_static_background') and self.scene._static_background is not None:
+                scene_frame = self.scene._static_background.copy()
+            else:
+                scene_frame = self.scene.get_frame()
+        except:
+            scene_frame = self.scene.get_frame()
+        # Draw beacon photometry onto god-view world buffer (for minimap overview)
+        self._draw_targets(scene_frame)
+
+        # Now handle disturbances + FOV capture
         if dc is not None:
-            # Ensure per-instance states exist
             if not hasattr(self, "_platform_motion_state") or self._platform_motion_state is None:
                 self._platform_motion_state = {}
             if not hasattr(self, "_camera_drift_state") or self._camera_drift_state is None:
                 self._camera_drift_state = {}
-            # 1) Vibration (legacy harmonic)
             pan_a, tilt_a = dist.apply_platform_vibration(self.camera.pan, self.camera.tilt, int(getattr(dc, "vibration", 0)), dt=dt_eff)
-            # 2) Platform Motion — Linear mandatory default + Circular/Random/Spiral/Figure 8/Sin/Zig-Zag, ±20 px/frame MAX user configurable
             if float(getattr(dc, "platform_speed", 0.0)) > 1e-9:
                 pan_b, tilt_b = dist.apply_platform_motion(
                     pan_a, tilt_a,
@@ -1871,22 +1930,34 @@ class MainWindow(StateMixin, QMainWindow):
                 )
             else:
                 pan_b, tilt_b = pan_a, tilt_a
-            # 3) Camera Jitter — uniform ±20 px/frame user configurable
             if float(getattr(dc, "camera_jitter", 0.0)) > 1e-9:
                 pan_c, tilt_c = dist.apply_camera_jitter(pan_b, tilt_b, jitter_px=float(getattr(dc, "camera_jitter")))
             else:
                 pan_c, tilt_c = pan_b, tilt_b
-            # 4) Camera Drift — OU thermal/mount
             pan_dist, tilt_dist = dist.apply_camera_motion_with_state(
                 pan_c, tilt_c, int(getattr(dc, "camera_motion", 0)), self._camera_drift_state, dt=dt_eff
             )
-            rp, rt = self.camera.pan, self.camera.tilt
-            self.camera.pan, self.camera.tilt = pan_dist, tilt_dist
-            fov_frame = self.camera.capture(scene_frame)
-            self.camera.pan, self.camera.tilt = rp, rt
-            # Image: Turbulence
+            # Optimized FOV base fetch
+            if use_optimized:
+                fov_frame, fov_origin = _get_fov_base(pan_dist, tilt_dist)
+                fov_x0, fov_y0 = int(fov_origin[0]), int(fov_origin[1])
+                fov_capture_x0, fov_capture_y0 = fov_x0, fov_y0
+                # Draw beacons in FOV coords (projected)
+                self._draw_targets_fov(fov_frame, fov_x0, fov_y0)
+                # Vignetting camera-stage (image-space, follows FOV)
+                if vig_strength > 1e-3:
+                    from environment.vignetting import apply_vignetting
+                    fov_frame = apply_vignetting(fov_frame, vig_strength)
+            else:
+                # Heavy fallback
+                rp, rt = self.camera.pan, self.camera.tilt
+                self.camera.pan, self.camera.tilt = pan_dist, tilt_dist
+                fov_frame = self.camera.capture(scene_frame)
+                self.camera.pan, self.camera.tilt = rp, rt
+                # vignetting already applied via camera.capture if set
+                fov_capture_x0, fov_capture_y0 = None, None
+            # Image disturbances after vignetting
             fov_frame = dist.apply_turbulence(fov_frame, int(getattr(dc, "turbulence", 0)), dt=dt_eff)
-            # Atmospheric — Clear/Haze/Fog/Rain/Low Light/User Defined (contrast/brightness reduction)
             preset = str(getattr(dc, "atmospheric_preset", "Clear"))
             contrast = float(getattr(dc, "atmospheric_contrast", 0.0))
             brightness = float(getattr(dc, "atmospheric_brightness", 0.0))
@@ -1894,10 +1965,8 @@ class MainWindow(StateMixin, QMainWindow):
                 fov_frame = dist.apply_atmospheric_disturbance(
                     fov_frame, preset=preset, contrast_reduction=contrast, brightness_reduction=brightness
                 )
-            # Sensor noise — legacy
             if int(getattr(dc, "noise", 0)) > 0:
                 fov_frame = dist.apply_sensor_noise(fov_frame, int(getattr(dc, "noise")))
-            # Image Noise — S&P (density + ratio) + Gaussian (σ max 20 + User to 50) + Poisson (scale+peak) — one or more at once, only visible params apply
             if bool(getattr(dc, "enable_salt_pepper", False) or getattr(dc, "enable_gaussian", False) or getattr(dc, "enable_poisson", False)):
                 fov_frame = dist.apply_image_noise(
                     fov_frame,
@@ -1912,19 +1981,33 @@ class MainWindow(StateMixin, QMainWindow):
                     poisson_peak=float(getattr(dc, "poisson_peak", 100.0)),
                 )
         else:
-            # Legacy fallback (no config) — original 4 impairments only
+            # Legacy fallback (no config)
             pan_vib, tilt_vib = dist.apply_platform_vibration(self.camera.pan, self.camera.tilt, self.sliders["Vibration"].value(), dt=dt_eff)
             pan_dist, tilt_dist = dist.apply_camera_motion_with_state(pan_vib, tilt_vib, self.sliders["Camera Motion"].value(), self._camera_drift_state, dt=dt_eff)
-            rp, rt = self.camera.pan, self.camera.tilt
-            self.camera.pan, self.camera.tilt = pan_dist, tilt_dist
-            fov_frame = self.camera.capture(scene_frame)
-            self.camera.pan, self.camera.tilt = rp, rt
+            if use_optimized:
+                fov_frame, fov_origin = _get_fov_base(pan_dist, tilt_dist)
+                fov_x0, fov_y0 = int(fov_origin[0]), int(fov_origin[1])
+                fov_capture_x0, fov_capture_y0 = fov_x0, fov_y0
+                self._draw_targets_fov(fov_frame, fov_x0, fov_y0)
+                if vig_strength > 1e-3:
+                    from environment.vignetting import apply_vignetting
+                    fov_frame = apply_vignetting(fov_frame, vig_strength)
+            else:
+                rp, rt = self.camera.pan, self.camera.tilt
+                self.camera.pan, self.camera.tilt = pan_dist, tilt_dist
+                fov_frame = self.camera.capture(scene_frame)
+                self.camera.pan, self.camera.tilt = rp, rt
+                fov_capture_x0, fov_capture_y0 = None, None
             fov_frame = dist.apply_turbulence(fov_frame, self.sliders["Turbulence"].value(), dt=dt_eff)
             fov_frame = dist.apply_sensor_noise(fov_frame, self.sliders["Noise"].value())
         # ── Target-only realtime check (not hardcoded, hitbox-gated) ──
         all_dets = self.detector.detect_all(fov_frame)
         self._last_all_detections = all_dets
-        fov_x0, fov_y0, _, _ = self.camera.get_fov_rect()
+        # Use disturbed FOV origin for detection when optimized path was used (camera moved)
+        if fov_capture_x0 is not None and fov_capture_y0 is not None:
+            fov_x0, fov_y0 = int(fov_capture_x0), int(fov_capture_y0)
+        else:
+            fov_x0, fov_y0, _, _ = self.camera.get_fov_rect()
         primary = self.target
         # If target beacon itself is disabled, treat as not in viewport — ignore distractors
         if not getattr(primary, "enabled", True):
@@ -2011,6 +2094,55 @@ class MainWindow(StateMixin, QMainWindow):
 
     def _draw_targets(self, scene_frame: np.ndarray):
         Renderer.draw_targets(scene_frame, getattr(self, "beacons", [self.target]), self.target)
+
+    def _draw_targets_fov(self, fov_frame: np.ndarray, fov_x0: int, fov_y0: int):
+        """Draw beacon photometry onto a 640×640 FOV frame (projected, optimized).
+
+        This is the optimized equivalent of _draw_targets for the cropped path:
+        draws each beacon at (beacon.x - fov_x0, beacon.y - fov_y0) so we avoid
+        drawing on a 5000×5000 world buffer just to crop to 640×640.
+        """
+        beacons = getattr(self, "beacons", [self.target]) if hasattr(self, "beacons") else [self.target]
+        h, w = fov_frame.shape[:2]
+        for beacon in beacons:
+            if not getattr(beacon, "enabled", True):
+                continue
+            if getattr(beacon, "blinking", False) and not getattr(beacon, "_blink_visible", True):
+                continue
+            try:
+                px = float(beacon.x) - float(fov_x0)
+                py = float(beacon.y) - float(fov_y0)
+            except:
+                continue
+            # Cull far outside view (+ margin for size)
+            if px < -40 or px > w + 40 or py < -40 or py > h + 40:
+                continue
+            try:
+                brightness, radius = beacon.get_photometry()
+            except:
+                brightness, radius = float(getattr(beacon, "brightness", 200)), float(getattr(beacon, "radius", 5))
+            ix, iy = int(round(px)), int(round(py))
+            try:
+                vib = Renderer.beacon_vibrant_color(int(getattr(beacon, "beacon_id", 0)), float(brightness))
+            except:
+                vib = (0, 255, 255)
+            shape = str(getattr(beacon, "shape", "square"))
+            size_w = int(getattr(beacon, "size_w", 10))
+            size_h = int(getattr(beacon, "size_h", 10))
+            if shape == "square":
+                hw, hh = size_w // 2, size_h // 2
+                if max(size_w, size_h) > 6:
+                    glow = tuple(int(c * 0.55) for c in vib)
+                    cv2.rectangle(fov_frame, (ix - hw - 1, iy - hh - 1), (ix + hw + 1, iy + hh + 1), glow, -1, cv2.LINE_AA)
+                cv2.rectangle(fov_frame, (ix - hw, iy - hh), (ix + hw, iy + hh), vib, -1, cv2.LINE_AA)
+                cv2.rectangle(fov_frame, (ix - hw, iy - hh), (ix + hw, iy + hh), (255, 255, 255), 1, cv2.LINE_AA)
+            else:
+                r = max(1, int(round(max(size_w, size_h) / 2)) if size_w and size_h else int(round(radius)))
+                if r > 3:
+                    glow = tuple(int(c * 0.55) for c in vib)
+                    cv2.circle(fov_frame, (ix, iy), r+1, glow, -1, cv2.LINE_AA)
+                cv2.circle(fov_frame, (ix, iy), max(1, r), vib, -1, cv2.LINE_AA)
+                cv2.circle(fov_frame, (ix, iy), 1, (255, 255, 255), -1, cv2.LINE_AA)
 
     def _draw_target(self, scene_frame: np.ndarray):
         return self._draw_targets(scene_frame)

@@ -25,7 +25,9 @@ def generate_starfield(
         sizes       : (N,) int32 — 1 or 2 (1=single pixel, 2=3×3)
         phases      : (N,) float32 — twinkle phase [0,2π)
         freqs       : (N,) float32 — twinkle freq [0.8,3.5)
-        subpix      : (N,2) float — subpixel jitter hint
+    Notes:
+      subpix jitter was previously generated but never used; removed for
+      clarity and to avoid unused allocation.
     ------------------------------------------------------------
     """
     star_count = int(np.clip(star_count, 0, 4000))
@@ -36,7 +38,6 @@ def generate_starfield(
             "sizes": np.array([], dtype=np.int32),
             "phases": np.array([], dtype=np.float32),
             "freqs": np.array([], dtype=np.float32),
-            "subpix": np.zeros((0, 2)),
         }
 
     xy = rng.integers(low=[0, 0], high=[width, height], size=(star_count, 2))
@@ -60,7 +61,6 @@ def generate_starfield(
 
     phases = rng.uniform(0, 2 * np.pi, size=star_count).astype(np.float32)
     freqs = rng.uniform(0.8, 3.5, size=star_count).astype(np.float32)
-    subpix = rng.normal(0, 0.15, size=(star_count, 2))
 
     return {
         "xy": xy,
@@ -68,7 +68,6 @@ def generate_starfield(
         "sizes": sizes,
         "phases": phases,
         "freqs": freqs,
-        "subpix": subpix,
     }
 
 def _draw_star_into(frame: np.ndarray, x: int, y: int, brightness: float, size: int) -> None:

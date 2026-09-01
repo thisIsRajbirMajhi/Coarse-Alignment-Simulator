@@ -1,5 +1,3 @@
-# environment/config.py - Typed, validated configuration for the Environment (10 parameters)
-
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass

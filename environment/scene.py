@@ -1,4 +1,17 @@
-# environment/scene.py - Realistic 2D sky/background — thin orchestrator delegating to modular sub-builde
+# environment/scene.py - Realistic 2D sky/background — thin orchestrator delegating to modular sub-builders
+#
+# World-size policy: production world is EXPLICITLY FIXED 5000×5000 (God View).
+#   - environment.constants.LIMITS["world_width/height"] = (5000,5000) enforces fixed via
+#     EnvironmentConfig.validate(). GUI hides world-size spinners (fixed).
+#   - Scene(...) as generic engine still supports 50..5000 for headless tests (MIN_RES..MAX_RES),
+#     but production path via EnvironmentConfig is fixed 5000×5000. This resolves the
+#     world-size configuration inconsistency: FIXED in production, generic for tests.
+#
+# Vignetting policy: REAL lens vignetting is sensor/image-space (centered on camera FOV),
+#   NOT world-space (centered on world 2500,2500). Previous Scene._build_background baked
+#   vignetting into the 5000×5000 world buffer (dark corners at world centre). Now vignetting
+#   is NOT applied in Scene; it is applied at camera-capture stage (PTZCamera.capture or
+#   MainWindow post-capture) so it follows the camera FOV.
 
 import numpy as np
 
@@ -7,7 +20,6 @@ from environment.constants import MAX_RES, MIN_RES, DEFAULTS
 from environment.gradient import build_gradient
 from environment.haze import build_haze_field, haze_modulation
 from environment.stars import draw_static_stars, draw_twinkling_stars, generate_starfield
-from environment.vignetting import apply_vignetting
 
 # Optional typed config (avoid hard import cycle at runtime)
 try:
@@ -19,30 +31,38 @@ class Scene:
     """
     2D scene composer — owns world size, RNG, and layered background.
 
+    Production world is EXPLICITLY FIXED 5000×5000 (God View). See module header.
+    Generic engine still supports 50..5000 for tests, but EnvironmentConfig clamps
+    to 5000×5000.
+
     10 configurable parameters (grouped per EnvironmentPanel):
-      1) World Width/Height (px)     — 50..5000
+      1) World Width/Height (px)     — FIXED 5000×5000 in production (LIMITS 5000,5000);
+                                      generic engine 50..5000 for tests
       2) Seed (reproducible RNG)    — 0..999999
       3) Randomize button            — rerolls seed (GUI)
       4) BG Top/Bottom colors        — 0..60 / 0..80
-      5) Vignetting (%)              — 0..92
-      6) Haze (%)                    — 0..100
+      5) Vignetting (%)              — 0..92  (STORED here for config round-trip,
+                                      but APPLIED at camera image stage, not world)
+      6) Haze (%)                    — 0..100 (static field + scalar shimmer; see haze.py)
       7) Star/clutter count          — 0..4000
       8) Star brightness scale       — 0.5..1.8
       9) Dynamic toggle              — bool
-     10) Dynamic speed               — 0.1..5.0 x
+      10) Dynamic speed               — 0.1..5.0 x
 
     Lifecycle:
       Scene(...) -> _build_background() -> get_frame() [static copy or dynamic twinkle]
                                             update(dt) advances _time
                                             regenerate() / regenerate_from_config() rebuilds
+      Optimized path: get_region(x0,y0,x1,y1) returns 640×640 FOV crop without
+      rebuilding full 5000×5000 float32 buffer each tick (60× cheaper).
     """
 
     # Constructor — supports legacy kwargs and new config object
 
     def __init__(
         self,
-        width: int = 1000,
-        height: int = 1000,
+        width: int = 5000,
+        height: int = 5000,
         seed: int | None = 42,
         num_clutter_points: int = 60,
         clutter_brightness_range: tuple[int, int] = (35, 85),  # legacy, kept for API compat
@@ -92,7 +112,6 @@ class Scene:
         self._star_sizes: np.ndarray = np.array([], dtype=np.int32)
         self._star_phases: np.ndarray = np.array([], dtype=np.float32)
         self._star_freqs: np.ndarray = np.array([], dtype=np.float32)
-        self._star_subpix: np.ndarray = np.zeros((0, 2))
 
         self._build_background()
 
@@ -155,9 +174,11 @@ class Scene:
         """
         Compose the full background in layered order:
           1) Gradient (zenith→horizon)  [gradient.py]
-          2) Vignetting (radial)         [vignetting.py]
-          3) Haze field                  [haze.py]
-          4) Starfield metadata + static composite [stars.py]
+          2) Haze field                  [haze.py]
+          3) Starfield metadata + static composite [stars.py]
+        NOTE: Vignetting is NOT applied here — it is a camera/image-space effect
+        (radial falloff centered on FOV, not world). Applied at capture stage via
+        environment.vignetting.apply_vignetting on the 640×640 FOV frame.
         Caches _base_no_stars (without stars) and _static_background (with stars).
         """
         rng = self._rng
@@ -166,10 +187,7 @@ class Scene:
         # 1) Sky gradient
         base = build_gradient(w, h, self.bg_top, self.bg_bottom)
 
-        # 2) Vignetting — edge darkening
-        base = apply_vignetting(base, self.vignetting)
-
-        # 3) Haze — low-frequency filtered noise
+        # 2) Haze — low-frequency filtered noise (adds ±8 DN, static field)
         self._haze_base = build_haze_field(w, h, rng, self.haze_strength)
         if self.haze_strength > 1e-6:
             base += self._haze_base[:, :, None]
@@ -178,14 +196,13 @@ class Scene:
         # Save base without stars for dynamic twinkle path — crystal sharp
         self._base_no_stars = base.astype(np.uint8)
 
-        # 4) Starfield — magnitude-tiered generation
+        # 3) Starfield — magnitude-tiered generation (subpix removed — unused)
         star_data = generate_starfield(w, h, rng, self._star_count, self.star_brightness_scale)
         self._stars_xy = star_data["xy"]
         self._star_base_brightness = star_data["brightness"]
         self._star_sizes = star_data["sizes"]
         self._star_phases = star_data["phases"]
         self._star_freqs = star_data["freqs"]
-        self._star_subpix = star_data["subpix"]
         self._star_count = int(self._stars_xy.shape[0])
         self.num_clutter_points = self._star_count
 
@@ -206,23 +223,33 @@ class Scene:
         Return current full-scene image as uint8 (H, W, 3).
 
         - Static (dynamic=False): returns fast copy of precomputed background.
-        - Dynamic (dynamic=True): recomposes base + haze modulation + twinkling stars.
+        - Dynamic (dynamic=True): recomposes base + scalar haze shimmer + twinkling stars.
+          NOTE: For production 5000×5000, prefer get_region(x0,y0,x1,y1) to avoid
+          rebuilding a full 5000×5000 float32 RGB buffer every 33 ms just to
+          produce a 640×640 FOV crop. This full-frame path is kept for
+          backward compat (tests, god-view fallback) but is ~60× heavier than
+          the cropped path.
         Returns a copy so callers can safely draw beacons without mutating cache.
         """
         if not self.dynamic:
             return self._static_background.copy()
 
-        # Dynamic path — start from base without stars
-        base = self._base_no_stars.astype(np.float32)
+        # Dynamic path — optimized to avoid 5000×5000 float32 allocation where possible.
+        # Haze modulation is scalar ±1.2 DN, so we use int16 path on uint8 rather than
+        # float32 75M buffer. Still copies full frame (heavy); prefer get_region for FOV.
+        if self.haze_strength > 1e-6:
+            mod = haze_modulation(self._time)
+            if abs(mod) > 1e-6:
+                # int16 addition with clipping (no float32 300 MB temp)
+                tmp = self._base_no_stars.astype(np.int16) + int(round(mod))
+                np.clip(tmp, 0, 255, out=tmp)
+                frame = tmp.astype(np.uint8)
+            else:
+                frame = self._base_no_stars.copy()
+        else:
+            frame = self._base_no_stars.copy()
 
-        # Haze wind shimmer — small sinusoidal modulation (cheap, plausible)
-        if self.haze_strength > 1e-6 and self._haze_base is not None:
-            base += haze_modulation(self._time)
-            base = np.clip(base, 0, 255)
-
-        frame = base.astype(np.uint8).copy()
-
-        # Twinkling stars — ±18% variation per star
+        # Twinkling stars — ±18% variation per star (all stars, full frame)
         draw_twinkling_stars(
             frame,
             self._stars_xy,
@@ -233,6 +260,86 @@ class Scene:
             self._time,
         )
         return frame
+
+    def get_region(self, x0: int, y0: int, x1: int, y1: int) -> np.ndarray:
+        """
+        Optimized cropped rendering — returns (y1-y0, x1-x0, 3) uint8 region.
+
+        This is the PERFORMANCE FIX for dynamic 5000×5000 rendering: instead of
+        rebuilding a full 5000×5000 RGB buffer every tick and then cropping to
+        640×640, we crop first (640×640 ≈ 1.2M pixels vs 75M) and apply haze
+        shimmer + twinkle only to the visible FOV stars. ~60× fewer pixels,
+        no 300 MB float32 temp.
+
+        Handles out-of-bounds FOV (clamped pan at edges) by zero-padding.
+        Vignetting is NOT applied here — caller applies vignetting at camera
+        image stage (image-space).
+
+        Args:
+          x0,y0,x1,y1 : world coords (from PTZCamera.get_fov_rect())
+        Returns:
+          uint8 (h,w,3) crop.
+        """
+        w = int(x1 - x0)
+        h = int(y1 - y0)
+        if w <= 0 or h <= 0:
+            return np.zeros((max(1, h), max(1, w), 3), dtype=np.uint8)
+        out = np.zeros((h, w, 3), dtype=np.uint8)
+        # Intersection with world bounds
+        sx0 = int(max(0, x0)); sy0 = int(max(0, y0))
+        sx1 = int(min(self.width, x1)); sy1 = int(min(self.height, y1))
+        if sx1 <= sx0 or sy1 <= sy0:
+            return out
+        dx0 = int(sx0 - x0); dy0 = int(sy0 - y0)
+        dh = int(sy1 - sy0); dw = int(sx1 - sx0)
+
+        if not self.dynamic:
+            # Static: direct crop from precomputed static background (with stars)
+            crop = self._static_background[sy0:sy1, sx0:sx1]
+            out[dy0:dy0+dh, dx0:dx0+dw] = crop
+            return out
+
+        # Dynamic: crop from base_no_stars, add scalar haze shimmer, draw subset twinkle
+        base_crop = self._base_no_stars[sy0:sy1, sx0:sx1]
+        if self.haze_strength > 1e-6:
+            mod = haze_modulation(self._time)
+            if abs(mod) > 1e-6:
+                tmp = base_crop.astype(np.int16) + int(round(mod))
+                np.clip(tmp, 0, 255, out=tmp)
+                base_crop = tmp.astype(np.uint8)
+            else:
+                base_crop = base_crop.copy()
+        else:
+            base_crop = base_crop.copy()
+        out[dy0:dy0+dh, dx0:dx0+dw] = base_crop
+
+        # Twinkling stars subset — only those visible in FOV
+        if self._stars_xy.shape[0] > 0:
+            xs = self._stars_xy[:, 0]; ys = self._stars_xy[:, 1]
+            # vectorized filter for stars inside intersected region (world coords)
+            mask = (xs >= sx0) & (xs < sx1) & (ys >= sy0) & (ys < sy1)
+            if np.any(mask):
+                xy_sub = self._stars_xy[mask]
+                brightness_sub = self._star_base_brightness[mask]
+                sizes_sub = self._star_sizes[mask]
+                phases_sub = self._star_phases[mask]
+                freqs_sub = self._star_freqs[mask]
+                # translate to output-local coords (relative to x0,y0)
+                xy_local = xy_sub - np.array([x0, y0], dtype=int)
+                draw_twinkling_stars(
+                    out,
+                    xy_local,
+                    brightness_sub,
+                    sizes_sub,
+                    phases_sub,
+                    freqs_sub,
+                    self._time,
+                )
+        return out
+
+    def get_cropped_frame(self, x0: int, y0: int, x1: int, y1: int) -> np.ndarray:
+        """Alias for get_region for backward compat."""
+        return self.get_region(x0, y0, x1, y1)
 
     def regenerate(
         self,

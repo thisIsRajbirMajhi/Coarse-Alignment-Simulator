@@ -42,7 +42,10 @@ class EnvironmentPanel(BaseConfigPanel):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(10)
 
-        # World fixed 5000x5000 — removed from UI per user request
+        # World FIXED 5000×5000 — production world size explicitly fixed (God View).
+        # Generic Scene engine still supports 50..5000 for headless tests, but
+        # EnvironmentConfig LIMITS (5000,5000) locks production to 5000×5000.
+        # Spinners hidden per user request; world size not user-configurable.
         self.scene_w_spin = QSpinBox()
         self.scene_w_spin.setRange(5000, 5000)
         self.scene_w_spin.setValue(5000)
@@ -109,7 +112,7 @@ class EnvironmentPanel(BaseConfigPanel):
         self.env_vignetting_spin = QSpinBox()
         self.env_vignetting_spin.setRange(*LIMITS["vignetting_pct"])
         self.env_vignetting_spin.setSuffix("%")
-        self.env_vignetting_spin.setToolTip("Edge darkening — radial falloff 1 - strength*(r/R)^1.8 clamped [0.35,1]. 0%=off, 92%=max.")
+        self.env_vignetting_spin.setToolTip("Camera lens vignetting (image-space) — radial falloff 1 - strength*(r/R)^1.8 centered on FOV, not world. 0%=off, 92%=max. Follows camera pan/tilt.")
         self.env_vignetting_spin.setMinimumHeight(26)
         atmo_grid.addWidget(self.env_vignetting_spin, 1, 1)
 

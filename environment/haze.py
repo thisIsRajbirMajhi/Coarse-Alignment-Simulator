@@ -1,4 +1,13 @@
 # environment/haze.py - Low-frequency haze/fog texture generation and storage
+#
+# PHYSICAL NOTE: This world haze adds low-frequency brightness noise (±8 DN)
+#   to the sky gradient — it is a plausible ambient skylight variation, NOT
+#   true fog attenuation (which would reduce contrast and desaturate toward
+#   grey, as done by disturbance.atmospheric for image-space fog). The scalar
+#   haze_modulation (±1.2 DN shimmer) is also a cheap wind hint, NOT true
+#   advected haze (which would require scrolling the noise field). This is
+#   intentional: cheap, visually plausible, and avoids double-adding haze if
+#   we rolled the field each tick.
 
 import cv2
 import numpy as np
@@ -41,7 +50,8 @@ def haze_modulation(time: float) -> float:
     """
     Small sinusoidal brightness modulation for dynamic mode.
 
-    Replaces true advection (np.roll) which would double-add haze.
-    Adds ±1.2 DN at 0.3 rad/s — subtle wind shimmer.
+    Replaces true advection (np.roll) which would double-add haze and require
+    full-frame scroll each tick. Adds ±1.2 DN at 0.3 rad/s — subtle wind
+    shimmer, cheap and plausible. NOT true moving fog (see module header).
     """
     return float(np.sin(time * 0.3) * 1.2)
