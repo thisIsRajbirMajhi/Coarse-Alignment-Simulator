@@ -18,7 +18,8 @@ Notes: This package remains the entry point for `from tracking.tracker import Tr
 from tracking.config import TrackerConfig  # noqa: F401
 from tracking.constants import TRACKER_DEFAULTS, TRACKER_LIMITS  # noqa: F401
 from tracking.filter import ExponentialFilter  # noqa: F401
+from tracking.kalman import KalmanFilter  # noqa: F401
 from tracking.state import LockStateMachine, LockStatus, StateTransition  # noqa: F401
 from tracking.tracker import Tracker  # noqa: F401
 
-__all__ = ["Tracker", "LockStatus", "LockStateMachine", "ExponentialFilter", "TrackerConfig", "StateTransition"]
+__all__ = ["Tracker", "LockStatus", "LockStateMachine", "ExponentialFilter", "KalmanFilter", "TrackerConfig", "StateTransition"]

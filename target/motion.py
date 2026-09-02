@@ -326,8 +326,42 @@ class Target:
         # Center must be ≤ hitbox
         max_center = min(int(hi), int(self.hitbox_radius))
         self.center_radius = int(rng.integers(int(lo), max(int(lo), max_center)+1))
-        # Position via seed
+        # Position via seed (reinitializes 5 anchors: orbit, sinusoidal, figure_eight, spiral, waypoint)
         self.randomize_position(seed=int(rng.integers(0, 999999)))
+        # Complete reinit — randomize_position misses zigzag timers, accelerating state, and random_walk velocities.
+        # Call all 8 _init_*_params to make randomize_all truly complete for the new profile.
+        try:
+            self._init_orbit_params()
+        except:
+            pass
+        try:
+            self._init_random_walk_params()
+        except:
+            pass
+        try:
+            self._init_sinusoidal_params()
+        except:
+            pass
+        try:
+            self._init_zigzag_params()
+        except:
+            pass
+        try:
+            self._init_figure_eight_params()
+        except:
+            pass
+        try:
+            self._init_spiral_params()
+        except:
+            pass
+        try:
+            self._init_accelerating_params()
+        except:
+            pass
+        try:
+            self._init_waypoint_params()
+        except:
+            pass
 
     def update(self, dt: float):
         """

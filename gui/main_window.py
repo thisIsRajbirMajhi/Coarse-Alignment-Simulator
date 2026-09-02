@@ -2028,19 +2028,42 @@ class MainWindow(StateMixin, QMainWindow):
                 # Target leaves viewport — do NOT bother with distractors, report miss
                 detection = None
             else:
-                # Target is in viewport — look ONLY for a detection inside its hitbox (realtime, per-beacon radius)
-                # No hardcoded 40px or brightest fallback; purely hitbox-gated and distance-sorted
+                # Multi-beacon robust gating: nearest-neighbor against last known target position
+                # rather than blind brightest. Prevents latching onto brighter non-target distractor.
+                # Gate center prefers tracker estimate (Kalman-predicted last position) over ground-truth
+                # cheat, fallback to ground truth when no estimate (SEARCHING).
+                gate_x, gate_y = proj_x, proj_y
+                gate_radius = primary.hitbox_radius
+                if self.tracker.estimated_position is not None and self.tracker.status != LockStatus.SEARCHING:
+                    try:
+                        # Use last filtered/Kalman estimate as gate (continuity)
+                        gate_x, gate_y = float(self.tracker.estimated_position[0]), float(self.tracker.estimated_position[1])
+                    except:
+                        gate_x, gate_y = proj_x, proj_y
                 detection = None
                 min_dist = float("inf")
+                # First try gate around last estimate (or ground truth if no estimate)
                 for d in all_dets:
-                    dist_c = math.hypot(d["x"] - proj_x, d["y"] - proj_y)
-                    if dist_c <= primary.hitbox_radius and dist_c < min_dist:
+                    dist_c = math.hypot(d["x"] - gate_x, d["y"] - gate_y)
+                    if dist_c <= gate_radius and dist_c < min_dist:
                         min_dist = dist_c
                         detection = (d["x"], d["y"])
+                # Fallback: if gate missed (e.g., fast maneuver) try ground-truth projection
+                if detection is None and (gate_x != proj_x or gate_y != proj_y):
+                    min_dist = float("inf")
+                    for d in all_dets:
+                        dist_c = math.hypot(d["x"] - proj_x, d["y"] - proj_y)
+                        if dist_c <= primary.hitbox_radius and dist_c < min_dist:
+                            min_dist = dist_c
+                            detection = (d["x"], d["y"])
                 if detection is not None:
                     hitbox_hit = True
                     center_hit = min_dist <= primary.center_radius
-        estimate=self.tracker.update(detection)
+        # Kalman-aware update: pass dt_eff so filter can coast through dropout/occlusion
+        try:
+            estimate = self.tracker.update(detection, dt=float(dt_eff))
+        except TypeError:
+            estimate = self.tracker.update(detection)
         tracking_error_px=None
         # Error to perfect center (not hitbox edge) for precision metrics
         if estimate is not None:

@@ -11,7 +11,6 @@ from target.constants import BEACON_DEFAULTS, BEACON_LIMITS, MULTI_BEACON_DEFAUL
 if TYPE_CHECKING:
     from target.motion import Target
 
-
 @dataclass
 class BeaconConfig(BaseValidatedConfig):
     """
