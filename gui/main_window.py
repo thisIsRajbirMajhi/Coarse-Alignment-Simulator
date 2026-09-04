@@ -301,13 +301,11 @@ class MainWindow(StateMixin, QMainWindow):
         try:
             from searching.scanner import Scanner, ScanPattern
             from searching.config import SearchingConfig
-            # derive pattern/dwell from config (defaults to random/spiral)
+            # P2 fix: force random per spec (was spiral default causing center shake)
+            # Random waypoint pursuit moves gradually toward uniform waypoints, not small spiral jitter
             s_cfg = SearchingConfig().validate()
-            # prefer random per spec, but allow config override
-            pat = getattr(s_cfg, "scan_pattern", "random")
-            if str(pat).lower() not in ("random", "spiral", "raster"):
-                pat = "random"
-            self.scanner = Scanner(pattern=pat, scan_radius=90.0, dwell_frames=int(getattr(s_cfg, "scan_dwell_frames", 2)), seed=int(getattr(self.env_config, "seed", 42) or 42) + 7919)
+            pat = "random"  # force random per user spec: must move gradually until found
+            self.scanner = Scanner(pattern=pat, scan_radius=120.0, dwell_frames=1, seed=int(getattr(self.env_config, "seed", 42) or 42) + 7919)
             self._last_search_status = None
             self._last_est_world = None
         except Exception:
