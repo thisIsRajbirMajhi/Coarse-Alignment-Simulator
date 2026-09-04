@@ -188,6 +188,37 @@ class Tracker:
             return self._kalman.predict(float(dt))
         return self.estimated_position
 
+    def get_innovation_cov(self) -> np.ndarray | None:
+        """Return 2x2 innovation covariance S for blind gating, or None."""
+        try:
+            if hasattr(self._kalman, "get_innovation_cov"):
+                return self._kalman.get_innovation_cov()
+        except Exception:
+            pass
+        return None
+
+    def peek_predict(self, dt: float) -> tuple[float, float] | None:
+        """
+        Non-mutating prediction for gating: returns predicted position without
+        advancing Kalman state. Used for association gate before update().
+        """
+        try:
+            if not self._kalman.is_initialized():
+                return self.estimated_position
+            # copy state, predict on copy
+            x = self._kalman.x.copy() if self._kalman.x is not None else None
+            P = self._kalman.P.copy() if self._kalman.P is not None else None
+            if x is None or P is None:
+                return self.estimated_position
+            dt = float(dt)
+            if dt < 1e-6:
+                return (float(x[0]), float(x[1]))
+            F = np.array([[1, 0, dt, 0], [0, 1, 0, dt], [0, 0, 1, 0], [0, 0, 0, 1]], dtype=float)
+            x_pred = F @ x
+            return (float(x_pred[0]), float(x_pred[1]))
+        except Exception:
+            return self.estimated_position
+
     def get_state_vector(self) -> np.ndarray | None:
         """Return Kalman state [x,y,vx,vy] or None — mirrors Target.get_state_vector()."""
         if self._kalman.is_initialized():

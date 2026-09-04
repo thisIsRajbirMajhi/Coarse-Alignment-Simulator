@@ -296,6 +296,24 @@ class MainWindow(StateMixin, QMainWindow):
         self._minimap_thumb: np.ndarray | None = None
         self._minimap_thumb_size: tuple[int,int] | None = None
         self._minimap_scene_id: int | None = None
+        # P1 Autonomous search scanner — moves camera randomly when SEARCHING/LOST until target found
+        # Uses SearchingStrategy random pattern, respects camera slew via camera.move(d_pan,d_tilt,dt)
+        try:
+            from searching.scanner import Scanner, ScanPattern
+            from searching.config import SearchingConfig
+            # derive pattern/dwell from config (defaults to random/spiral)
+            s_cfg = SearchingConfig().validate()
+            # prefer random per spec, but allow config override
+            pat = getattr(s_cfg, "scan_pattern", "random")
+            if str(pat).lower() not in ("random", "spiral", "raster"):
+                pat = "random"
+            self.scanner = Scanner(pattern=pat, scan_radius=90.0, dwell_frames=int(getattr(s_cfg, "scan_dwell_frames", 2)), seed=int(getattr(self.env_config, "seed", 42) or 42) + 7919)
+            self._last_search_status = None
+            self._last_est_world = None
+        except Exception:
+            self.scanner = None
+            self._last_search_status = None
+            self._last_est_world = None
 
     def _build_ui(self):
         central = QWidget()
@@ -2047,57 +2065,56 @@ class MainWindow(StateMixin, QMainWindow):
             fov_x0, fov_y0 = int(fov_capture_x0), int(fov_capture_y0)
         else:
             fov_x0, fov_y0, _, _ = self.camera.get_fov_rect()
-        primary = self.target
-        # If target beacon itself is disabled, treat as not in viewport — ignore distractors
-        if not getattr(primary, "enabled", True):
-            detection = None
-            proj_x = proj_y = float("nan")
-            target_in_fov = False
-        else:
-            proj_x = primary.x - fov_x0
-            proj_y = primary.y - fov_y0
-            # Realtime hitbox-aware FOV test (large hitbox, not single pixel; dynamic per beacon)
-            target_in_fov = (
-                -primary.hitbox_radius <= proj_x <= self.camera.fov_width + primary.hitbox_radius and
-                -primary.hitbox_radius <= proj_y <= self.camera.fov_height + primary.hitbox_radius
-            )
+        # ── P0 Blind PAT: no truth oracle for association ──
+        # Association uses only detector output + Kalman prediction, no target.x/y.
+        # Truth is used only post-hoc for scoring (hitbox_hit/center_hit), not gating.
+        try:
+            from tracking.association import associate_detections
+            pred_xy = self.tracker.peek_predict(float(dt_eff)) if hasattr(self.tracker, "peek_predict") else getattr(self.tracker, "estimated_position", None)
+            cov = self.tracker.get_innovation_cov() if hasattr(self.tracker, "get_innovation_cov") else None
+            # P1: adaptive gate — tight when TRACKING, loose during SEARCH/ACQUIRED/LOST
+            # so camera motion during search/acquisition does not reject true beacon
+            _st = getattr(self.tracker, "status", None)
+            try:
+                _st_val = _st.value if hasattr(_st, "value") else str(_st)
+            except Exception:
+                _st_val = "searching"
+            if _st_val == "tracking":
+                _chi2, _fb = 9.21, 35.0
+            elif _st_val == "lost":
+                _chi2, _fb = 16.0, 60.0
+            else:  # searching / acquired
+                _chi2, _fb = 25.0, 80.0
+            detection = associate_detections(all_dets, pred_xy, cov, chi2_threshold=_chi2, fallback_radius_px=_fb)
+            # Note: associate already does circular fallback (fallback_radius) for
+            # SEARCH/ACQUIRED/LOST so camera-motion shift (~30px) is tolerated
+            # without jumping to distant distractor (>80px). No extra brightest fallback.
+        except Exception:
+            # Fallback: brightest blob (detector already sorted by confidence)
+            try:
+                detection = (float(all_dets[0]["x"]), float(all_dets[0]["y"])) if all_dets else None
+            except Exception:
+                detection = None
+        # Truth-based scoring for metrics only (does not influence detection)
+        try:
+            primary = self.target
+            proj_x = float(primary.x) - float(fov_x0)
+            proj_y = float(primary.y) - float(fov_y0)
+            if detection is not None:
+                dist_to_truth = math.hypot(float(detection[0]) - proj_x, float(detection[1]) - proj_y)
+                hitbox_hit = dist_to_truth <= float(getattr(primary, "hitbox_radius", 14))
+                center_hit = dist_to_truth <= float(getattr(primary, "center_radius", 2))
+            else:
+                hitbox_hit = False
+                center_hit = False
+            # If target beacon disabled, it is truly not beaconing: score as miss
+            # (blind association may still latch onto distractor — scored as miss correctly)
+            if not getattr(primary, "enabled", True):
+                hitbox_hit = False
+                center_hit = False
+        except Exception:
             hitbox_hit = False
             center_hit = False
-            if not target_in_fov:
-                # Target leaves viewport — do NOT bother with distractors, report miss
-                detection = None
-            else:
-                # Multi-beacon robust gating: nearest-neighbor against last known target position
-                # rather than blind brightest. Prevents latching onto brighter non-target distractor.
-                # Gate center prefers tracker estimate (Kalman-predicted last position) over ground-truth
-                # cheat, fallback to ground truth when no estimate (SEARCHING).
-                gate_x, gate_y = proj_x, proj_y
-                gate_radius = primary.hitbox_radius
-                if self.tracker.estimated_position is not None and self.tracker.status != LockStatus.SEARCHING:
-                    try:
-                        # Use last filtered/Kalman estimate as gate (continuity)
-                        gate_x, gate_y = float(self.tracker.estimated_position[0]), float(self.tracker.estimated_position[1])
-                    except:
-                        gate_x, gate_y = proj_x, proj_y
-                detection = None
-                min_dist = float("inf")
-                # First try gate around last estimate (or ground truth if no estimate)
-                for d in all_dets:
-                    dist_c = math.hypot(d["x"] - gate_x, d["y"] - gate_y)
-                    if dist_c <= gate_radius and dist_c < min_dist:
-                        min_dist = dist_c
-                        detection = (d["x"], d["y"])
-                # Fallback: if gate missed (e.g., fast maneuver) try ground-truth projection
-                if detection is None and (gate_x != proj_x or gate_y != proj_y):
-                    min_dist = float("inf")
-                    for d in all_dets:
-                        dist_c = math.hypot(d["x"] - proj_x, d["y"] - proj_y)
-                        if dist_c <= primary.hitbox_radius and dist_c < min_dist:
-                            min_dist = dist_c
-                            detection = (d["x"], d["y"])
-                if detection is not None:
-                    hitbox_hit = True
-                    center_hit = min_dist <= primary.center_radius
         # Kalman-aware update: pass dt_eff so filter can coast through dropout/occlusion
         try:
             estimate = self.tracker.update(detection, dt=float(dt_eff))
@@ -2124,8 +2141,82 @@ class MainWindow(StateMixin, QMainWindow):
             except TypeError:
                 # Back-compat fallback (PTZCamera without dt)
                 self.camera.move(d_pan, d_tilt)
+        # ── P1/P2 Autonomous search + LOST prediction chase ──
+        # SEARCHING: no estimate -> random waypoint search (blind, covers world)
+        # LOST: has coasting estimate (Kalman predicts) -> chase prediction via PID above,
+        #       plus tiny expanding spiral if coast drifts (not random uniform)
+        # ACQUIRED/TRACKING: PID only (probation/locked)
+        try:
+            status = self.tracker.status
+            is_searching = (status == LockStatus.SEARCHING)
+            is_lost = (status == LockStatus.LOST)
+            # Only SEARCHING (or no estimate at all) gets random scanner drive.
+            # LOST with coasting estimate is handled by PID chase above, not random.
+            should_search = is_searching or (estimate is None and status != LockStatus.TRACKING and status != LockStatus.LOST)
+            # Special: if LOST but estimate is None (grace expired -> SEARCHING soon) treat as SEARCHING
+            if is_lost and estimate is None:
+                should_search = True
+                is_searching = True
+            # Keep last estimate world for reacquisition bias (P2)
+            try:
+                if estimate is not None:
+                    # estimate is FOV coords, convert to world via current fov origin
+                    _est_wx = float(fov_x0) + float(estimate[0])
+                    _est_wy = float(fov_y0) + float(estimate[1])
+                    self._last_est_world = (_est_wx, _est_wy)
+                elif not hasattr(self, "_last_est_world"):
+                    self._last_est_world = None
+            except Exception:
+                pass
+            if should_search and hasattr(self, "scanner") and self.scanner is not None:
+                if getattr(self, "_last_search_status", None) != status:
+                    if status == LockStatus.SEARCHING or (is_lost and estimate is None):
+                        try:
+                            self.scanner.reset()
+                        except Exception:
+                            pass
+                        # P2: bias search around last predicted world (if we have it) for reacquisition
+                        try:
+                            if getattr(self, "_last_est_world", None) is not None and status == LockStatus.SEARCHING:
+                                # only bias if we recently lost (not cold start)
+                                prev = getattr(self, "_last_search_status", None)
+                                if prev == LockStatus.LOST or prev == LockStatus.ACQUIRED:
+                                    wx, wy = self._last_est_world  # type: ignore
+                                    self.scanner.set_search_center(float(wx), float(wy))
+                        except Exception:
+                            pass
+                try:
+                    dx, dy = self.scanner.next(dt=float(dt), fov_w=float(self.camera.fov_width), fov_h=float(self.camera.fov_height), current_pan=float(self.camera.pan), current_tilt=float(self.camera.tilt), scene_bounds=self._scene_size)
+                except TypeError:
+                    dx, dy = self.scanner.next(dt=float(dt), fov_w=float(self.camera.fov_width), fov_h=float(self.camera.fov_height))
+                try:
+                    self.camera.move(float(dx), float(dy), float(dt))
+                except TypeError:
+                    self.camera.move(float(dx), float(dy))
+            elif is_lost and estimate is not None:
+                # LOST with coast: PID above already chased predicted position.
+                # Add tiny expanding search bias only if coast is stale (misses >5)
+                # so FOV spirals around predicted point to reacquire after occlusion.
+                try:
+                    misses = int(getattr(self.tracker._state, "misses", 0) or getattr(self.tracker, "_consecutive_misses", 0))
+                except Exception:
+                    misses = 6
+                if misses > 7:
+                    # small spiral around predicted point (expanding)
+                    import math
+                    r = 12.0 * math.sqrt(max(0, misses - 7))
+                    theta = misses * 1.2
+                    sx = r * math.cos(theta)
+                    sy = r * math.sin(theta)
+                    try:
+                        self.camera.move(float(sx) * 0.15, float(sy) * 0.15, float(dt))
+                    except Exception:
+                        pass
+            self._last_search_status = status
+        except Exception:
+            pass
         is_locked=self.tracker.status==LockStatus.TRACKING
-        # Real-time accurate: detected = primary hitbox hit (not any distractor) + dt for time accounting
+        # Real-time accurate: detected = blind association hit (penalizes distractor latch) + dt for time accounting
         self.perf.log_frame(is_locked, tracking_error_px, time.time()-frame_start,
                             detected=hitbox_hit, hitbox_hit=hitbox_hit, center_hit=center_hit,
                             lock_state=self.tracker.status.value, dt=dt)
