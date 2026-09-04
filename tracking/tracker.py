@@ -58,8 +58,8 @@ class Tracker:
         self._filter = ExponentialFilter(smoothing=float(smoothing))
         self._state = LockStateMachine(miss_limit=int(miss_limit), acquire_hits=int(acquire_hits), lost_grace_mult=float(grace_mult))
         self.status = self._state.status
-        # Kalman predictor for occlusion handling — seeded on first hit, coasts on miss
-        self._kalman = KalmanFilter(process_var=40.0, meas_var=4.0)
+        # Kalman predictor for occlusion handling — seeded on first hit, coasts on miss (H4 fixed 40→12)
+        self._kalman = KalmanFilter(process_var=12.0, meas_var=4.0)
 
         # Mirror for backward compat (tests read _consecutive_hits etc.)
         self._consecutive_hits: int = 0
@@ -107,7 +107,20 @@ class Tracker:
           3) State machine + lifecycle same as legacy
         Returns estimate for controller/GUI (None when SEARCHING).
         """
-        has_det = detection is not None
+        # validate detection tuple
+        if detection is not None:
+            try:
+                if not (isinstance(detection, (tuple, list)) and len(detection) == 2):
+                    has_det = False
+                    detection = None
+                else:
+                    float(detection[0]); float(detection[1])
+                    has_det = True
+            except Exception:
+                has_det = False
+                detection = None
+        else:
+            has_det = False
 
         # Filter path selection
         if dt is not None and dt > 1e-9:

@@ -1,11 +1,9 @@
 # environment/scene.py - Realistic 2D sky/background — thin orchestrator delegating to modular sub-builders
 #
-# World-size policy: production world is EXPLICITLY FIXED 5000×5000 (God View).
-#   - environment.constants.LIMITS["world_width/height"] = (5000,5000) enforces fixed via
-#     EnvironmentConfig.validate(). GUI hides world-size spinners (fixed).
-#   - Scene(...) as generic engine still supports 50..5000 for headless tests (MIN_RES..MAX_RES),
-#     but production path via EnvironmentConfig is fixed 5000×5000. This resolves the
-#     world-size configuration inconsistency: FIXED in production, generic for tests.
+# World-size policy: Per PDF Sr.1 — Screen Size (min.) 2000×2000, Optional User-defined up to 5000.
+#   - environment.constants.LIMITS["world_width/height"] = (2000,5000) per spec (min 2000).
+#   - DEFAULTS = 2000×2000 for best FPS (4 MP vs 25 MP at 5000, ~6× cheaper).
+#   - Scene(...) as generic engine still supports 50..5000 for headless tests (MIN_RES..MAX_RES).
 #
 # Vignetting policy: REAL lens vignetting is sensor/image-space (centered on camera FOV),
 #   NOT world-space (centered on world 2500,2500). Previous Scene._build_background baked
@@ -31,13 +29,12 @@ class Scene:
     """
     2D scene composer — owns world size, RNG, and layered background.
 
-    Production world is EXPLICITLY FIXED 5000×5000 (God View). See module header.
-    Generic engine still supports 50..5000 for tests, but EnvironmentConfig clamps
-    to 5000×5000.
+    Per PDF Sr.1 — world configurable 2000..5000 (min 2000, default 2000 for FPS).
+    Generic engine supports 50..5000 for tests.
 
     10 configurable parameters (grouped per EnvironmentPanel):
-      1) World Width/Height (px)     — FIXED 5000×5000 in production (LIMITS 5000,5000);
-                                      generic engine 50..5000 for tests
+      1) World Width/Height (px)     — configurable 2000..5000 in production (default 2000);
+                                       generic engine 50..5000 for tests
       2) Seed (reproducible RNG)    — 0..999999
       3) Randomize button            — rerolls seed (GUI)
       4) BG Top/Bottom colors        — 0..60 / 0..80
@@ -61,8 +58,8 @@ class Scene:
 
     def __init__(
         self,
-        width: int = 5000,
-        height: int = 5000,
+        width: int = 2000,
+        height: int = 2000,
         seed: int | None = 42,
         num_clutter_points: int = 60,
         clutter_brightness_range: tuple[int, int] = (35, 85),  # legacy, kept for API compat
@@ -189,7 +186,7 @@ class Scene:
 
         # 2) Haze — low-frequency filtered noise (adds ±8 DN, static field)
         self._haze_base = build_haze_field(w, h, rng, self.haze_strength)
-        if self.haze_strength > 1e-6:
+        if self.haze_strength > 1e-6 and self._haze_base is not None:
             base += self._haze_base[:, :, None]
             base = np.clip(base, 0, 255)
 
@@ -283,7 +280,8 @@ class Scene:
         w = int(x1 - x0)
         h = int(y1 - y0)
         if w <= 0 or h <= 0:
-            return np.zeros((max(1, h), max(1, w), 3), dtype=np.uint8)
+            # return requested size (at least 1) to avoid 1x1 leak that breaks renderer scale
+            return np.zeros((max(1, h if h>0 else 1), max(1, w if w>0 else 1), 3), dtype=np.uint8)
         out = np.zeros((h, w, 3), dtype=np.uint8)
         # Intersection with world bounds
         sx0 = int(max(0, x0)); sy0 = int(max(0, y0))
@@ -292,6 +290,9 @@ class Scene:
             return out
         dx0 = int(sx0 - x0); dy0 = int(sy0 - y0)
         dh = int(sy1 - sy0); dw = int(sx1 - sx0)
+        # clamp destination to out bounds (prevent OOB when x0 negative beyond -w)
+        dx0 = int(np.clip(dx0, 0, w - dw))
+        dy0 = int(np.clip(dy0, 0, h - dh))
 
         if not self.dynamic:
             # Static: direct crop from precomputed static background (with stars)

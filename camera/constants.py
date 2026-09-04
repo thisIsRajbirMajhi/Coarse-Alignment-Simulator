@@ -29,7 +29,7 @@ CAMERA_LIMITS: dict[str, tuple[float, float]] = {
 
 CAMERA_DEFAULTS: dict = {
     "fov_width": 640,
-    "fov_height": 640,
+    "fov_height": 480,
     "fov_deg_x": 4.0,
     "fov_deg_y": 3.0,
     "pan_min": None,
@@ -38,11 +38,11 @@ CAMERA_DEFAULTS: dict = {
     "tilt_max": None,
     "home_pan": None,
     "home_tilt": None,
-    "max_pan_speed_deg": 5.0,
-    "max_tilt_speed_deg": 5.0,
-    "max_slew_rate": 800.0,
+    "max_pan_speed_deg": 8.0,
+    "max_tilt_speed_deg": 8.0,
+    "max_slew_rate": 1280.0,
     "resolution": 0.1,
-    "latency_ms": 33,
+    "latency_ms": 12,
     "pixel_scale_mrad": 0.109,
     "scene_width": 5000,
     "scene_height": 5000,
@@ -52,13 +52,13 @@ CAMERA_DEFAULTS: dict = {
 DISPLAY_LIMITS: dict[str, tuple[int, int]] = {
     "viewport_width": (2000, MAX_RES),
     "viewport_height": (2000, MAX_RES),
-    "god_width": (5000, 5000),
-    "god_height": (5000, 5000),
+    "god_width": (2000, MAX_RES),
+    "god_height": (2000, MAX_RES),
 }
 
 DISPLAY_DEFAULTS: dict = {
     "viewport_width": 2000,
     "viewport_height": 2000,
-    "god_width": 5000,
-    "god_height": 5000,
+    "god_width": 2000,
+    "god_height": 2000,
 }

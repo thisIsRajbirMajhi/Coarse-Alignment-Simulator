@@ -75,19 +75,30 @@ class PIDController:
     def compute_correction(self, error_x: float, error_y: float, dt: float | None = None, camera_max_slew: float | None = None) -> tuple[float, float]:
         err_mag = math.hypot(float(error_x), float(error_y))
         if err_mag < float(self.config.dead_zone):
-            self._integral_x *= 0.9
-            self._integral_y *= 0.9
+            # inside dead zone: freeze/reset integral to avoid windup, clear derivative
+            self._integral_x *= 0.5  # faster decay than 0.9 to prevent slow drift
+            self._integral_y *= 0.5
+            if err_mag < float(self.config.dead_zone) * 0.5:
+                self._integral_x = 0.0
+                self._integral_y = 0.0
             self._prev_error_x = float(error_x)
             self._prev_error_y = float(error_y)
+            self._prev_deriv_x *= 0.7
+            self._prev_deriv_y *= 0.7
             self._last_output = (0.0, 0.0)
             return (0.0, 0.0)
-        now = time.time()
-        interval = self.config.update_interval()
-        if self._last_compute_time is not None:
-            elapsed = now - self._last_compute_time
-            if elapsed + 1e-6 < interval:
-                return self._last_output
-        self._last_compute_time = now
+        # Throttle only when dt not supplied (legacy wall-time mode); when dt supplied (main loop) always compute
+        if dt is None:
+            now = time.monotonic()
+            interval = self.config.update_interval()
+            if self._last_compute_time is not None:
+                elapsed = now - self._last_compute_time
+                if elapsed + 1e-6 < interval:
+                    return self._last_output
+            self._last_compute_time = now
+        else:
+            # dt-driven mode: update last time for diagnostics but don't throttle
+            self._last_compute_time = time.monotonic()
         if dt is None:
             dt = float(interval)
         dt = float(np.clip(dt, 1e-4, 0.2))
@@ -99,6 +110,12 @@ class PIDController:
             i_x += float(self.config.ki) * float(error_x) * float(dt)
             i_y += float(self.config.ki) * float(error_y) * float(dt)
             clamp = float(self.config.output_clamp)
+            # anti-windup: also respect camera slew if provided
+            if camera_max_slew is not None:
+                try:
+                    cam_clamp_i = float(camera_max_slew) * float(dt)
+                    clamp = min(clamp, cam_clamp_i)
+                except: pass
             i_x = float(np.clip(i_x, -clamp, clamp))
             i_y = float(np.clip(i_y, -clamp, clamp))
             self._integral_x = float(i_x)

@@ -188,7 +188,7 @@ class PTZCamera:
             self._apply_delta(d_pan, d_tilt, dt)
         else:
             due = self._time + latency_s
-            self._pending.append((due, float(d_pan), float(d_tilt)))
+            self._pending.append((due, float(d_pan), float(d_tilt), float(dt)))
 
     def update(self, dt: float) -> None:
         """
@@ -200,15 +200,24 @@ class PTZCamera:
         self._time += float(dt)
         # Execute all due moves in order (FIFO)
         while self._pending and self._pending[0][0] <= self._time:
-            _, d_pan, d_tilt = self._pending.popleft()
-            # Use current tick dt for slew (approx; pending dt not stored, use passed dt)
-            self._apply_delta(d_pan, d_tilt, dt)
+            item = self._pending.popleft()
+            if len(item) == 4:
+                _, d_pan, d_tilt, qdt = item
+                self._apply_delta(d_pan, d_tilt, float(qdt))
+            else:
+                _, d_pan, d_tilt = item  # back-compat
+                self._apply_delta(d_pan, d_tilt, dt)
 
     def flush_pending(self) -> None:
         """Immediately execute all queued moves (used on reset)."""
         while self._pending:
-            _, d_pan, d_tilt = self._pending.popleft()
-            self._apply_delta(d_pan, d_tilt, 0.033)
+            item = self._pending.popleft()
+            if len(item) == 4:
+                _, d_pan, d_tilt, qdt = item
+                self._apply_delta(d_pan, d_tilt, float(qdt))
+            else:
+                _, d_pan, d_tilt = item
+                self._apply_delta(d_pan, d_tilt, 0.033)
 
     def set_position(self, pan: float, tilt: float) -> None:
         """Set absolute pan/tilt, clamped to effective range (bypasses queue)."""
@@ -260,8 +269,8 @@ class PTZCamera:
 
     def get_fov_rect(self) -> tuple[int, int, int, int]:
         """Return (x0, y0, x1, y1) of current FOV window in scene coords."""
-        x0 = int(self.pan - self.fov_width / 2)
-        y0 = int(self.tilt - self.fov_height / 2)
+        x0 = int(round(self.pan - self.fov_width / 2))
+        y0 = int(round(self.tilt - self.fov_height / 2))
         return x0, y0, x0 + self.fov_width, y0 + self.fov_height
 
     def get_pan_range(self) -> tuple[float, float]:
@@ -342,6 +351,12 @@ class PTZCamera:
 
     def pixel_error_to_mrad(self, px_error: float) -> float:
         return pixel_to_mrad(px_error, self.config.pixel_scale_mrad)
+
+    def pixel_error_to_mrad_xy(self, px_x: float, px_y: float) -> tuple[float, float]:
+        from camera.optics import pixel_to_mrad_xy
+        sx = float(self.config.pixel_scale_mrad)
+        sy = float(getattr(self.config, "pixel_scale_mrad_y", sx))
+        return pixel_to_mrad_xy(px_x, px_y, sx, sy)
 
     def pixel_error_to_urad(self, px_error: float) -> float:
         return pixel_to_urad(px_error, self.config.pixel_scale_mrad)

@@ -48,9 +48,15 @@ class StationaryStrategy(MotionStrategy):
 
 class LinearStrategy(MotionStrategy):
     def step(self, target: "Target", ctx: MotionContext) -> None:
-        # Heading diffusion + leaky velocity — simplified extract from target/motion.py:382
+        # Heading diffusion + leaky velocity — uses BEACON_LIMITS for speed clamping
         target._heading += float(ctx.rng.normal(0, 0.35 * math.sqrt(ctx.dt)))
-        target.speed = float(np.clip(target.speed + float(ctx.rng.normal(0, 4 * math.sqrt(ctx.dt))), 0.7 * 60, 1.3 * 60))
+        try:
+            from target.constants import BEACON_LIMITS
+            lo, hi = BEACON_LIMITS.get("speed", (5, 300))
+        except Exception:
+            lo, hi = (5, 300)
+        # keep speed near current value with small noise, clamped to spec
+        target.speed = float(np.clip(target.speed + float(ctx.rng.normal(0, 4 * math.sqrt(ctx.dt))), lo, hi))
         # Use target's stored vx/vy if present, else derive
         vx = target.speed * math.cos(target._heading)
         vy = target.speed * math.sin(target._heading)
@@ -63,9 +69,12 @@ class LinearStrategy(MotionStrategy):
         vx = prev_vx + alpha * (vx - prev_vx)
         vy = prev_vy + alpha * (vy - prev_vy)
         target._vx, target._vy = vx, vy
+        # also sync public vx/vy for consistency (motion.py reads vx/vy)
+        target.vx, target.vy = vx, vy
         nx, ny = target.x + vx * ctx.dt, target.y + vy * ctx.dt
         nx, vx = self.bounce(nx, vx, 0, ctx.W, 0.88)
         ny, vy = self.bounce(ny, vy, 0, ctx.H, 0.88)
         target.x, target.y = nx, ny
         target._vx, target._vy = vx, vy
+        target.vx, target.vy = vx, vy
         target._heading = math.atan2(vy, vx)

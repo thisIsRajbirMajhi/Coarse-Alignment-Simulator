@@ -86,26 +86,28 @@ def _add_rain_streaks(frame: np.ndarray, intensity: float = 0.3) -> np.ndarray:
     n = int(180 * intensity * (w * h / (640 * 480)) ** 0.5)
     n = int(np.clip(n, 20, 1200))
     overlay = frame.astype(np.float32)
-    # streak color slightly brighter than background for rain specular
+    # single mask for all streaks (M2 fix: was per-streak alloc 200MB)
+    line_mask = np.zeros_like(frame, dtype=np.uint8)
+    # collect alphas per line for varied opacity — use uniform alpha for batch to avoid per-pixel vary
+    # draw all lines onto mask with white, then blend once with mean alpha 0.18
     for _ in range(n):
         x = int(np.random.randint(0, w))
         y = int(np.random.randint(0, h))
         length = int(np.random.randint(9, 22))
         thickness = int(np.random.choice([1, 1, 2]))
-        # diagonal 65-75 deg (rain fall)
         angle = math.radians(np.random.uniform(68, 76))
         x2 = int(x + length * math.cos(angle))
         y2 = int(y + length * math.sin(angle))
-        # brightness: 180-220
-        val = int(np.random.randint(175, 225))
-        color = (val, val, val) if frame.ndim == 3 else val  # BGR grey
-        alpha = float(np.random.uniform(0.12, 0.28))
-        # draw on temp and blend
-        line_mask = np.zeros_like(frame, dtype=np.float32)
-        cv2.line(line_mask, (x, y), (x2, y2), color if frame.ndim == 3 else (color,), thickness, cv2.LINE_AA)  # type: ignore
-        # Add with opacity where mask non-zero
-        nz = line_mask > 0
-        overlay[nz] = overlay[nz] * (1 - alpha) + line_mask[nz] * alpha
+        val = 200  # mid of 175-225
+        color = (val, val, val) if frame.ndim == 3 else val
+        cv2.line(line_mask, (x, y), (x2, y2), color, thickness, cv2.LINE_AA)  # type: ignore
+    # blend where mask >0 with fixed alpha 0.18 (was per-line 0.12-0.28)
+    alpha = 0.18
+    nz = line_mask > 0
+    # line_mask is uint8 0 or ~200, convert to float for blend
+    if np.any(nz):
+        # approximate blended color 200 with alpha
+        overlay[nz] = overlay[nz] * (1 - alpha) + line_mask[nz].astype(np.float32) * alpha
     overlay = np.clip(overlay, 0, 255).astype(np.uint8)
     return overlay
 

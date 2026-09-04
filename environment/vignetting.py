@@ -13,6 +13,32 @@ import math
 
 import numpy as np
 
+# Cache for vignetting masks — key: (h,w, quantized_strength)
+_VIG_CACHE: dict[tuple[int,int,int], np.ndarray] = {}
+_CACHE_MAX = 16
+
+def _get_vig_mask(h: int, w: int, strength: float) -> np.ndarray:
+    # Quantize strength to 1% to avoid cache explosion
+    q = int(round(float(strength) * 100))
+    key = (h, w, q)
+    if key in _VIG_CACHE:
+        return _VIG_CACHE[key]
+    ys, xs = np.ogrid[:h, :w]
+    cx, cy = w * 0.5, h * 0.5
+    r = np.sqrt((xs - cx) ** 2 + (ys - cy) ** 2)
+    max_r = math.sqrt(cx * cx + cy * cy)
+    vig = 1.0 - (q / 100.0) * (r / max_r) ** 1.8
+    vig = np.clip(vig, 0.35, 1.0).astype(np.float32)
+    # LRU eviction
+    if len(_VIG_CACHE) >= _CACHE_MAX:
+        oldest = next(iter(_VIG_CACHE))
+        del _VIG_CACHE[oldest]
+    _VIG_CACHE[key] = vig
+    return vig
+
+def clear_vignetting_cache() -> None:
+    _VIG_CACHE.clear()
+
 def apply_vignetting(base: np.ndarray, strength: float) -> np.ndarray:
     """
     Apply radial vignetting to an image buffer (camera image-space).
@@ -38,12 +64,7 @@ def apply_vignetting(base: np.ndarray, strength: float) -> np.ndarray:
     if strength <= 1e-3:
         return base
     h, w = base.shape[0], base.shape[1]
-    ys, xs = np.ogrid[:h, :w]
-    cx, cy = w * 0.5, h * 0.5
-    r = np.sqrt((xs - cx) ** 2 + (ys - cy) ** 2)
-    max_r = math.sqrt(cx * cx + cy * cy)
-    vig = 1.0 - float(strength) * (r / max_r) ** 1.8
-    vig = np.clip(vig, 0.35, 1.0).astype(np.float32)
+    vig = _get_vig_mask(h, w, float(strength))
     # Handle uint8 camera frames (640×640) correctly: promote to float, multiply, clip back.
     if base.dtype == np.uint8:
         base_f = base.astype(np.float32)

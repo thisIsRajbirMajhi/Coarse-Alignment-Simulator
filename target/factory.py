@@ -85,7 +85,11 @@ def create_beacons(
     rng = np.random.default_rng(seed)
     beacons: list[Target] = []
     w, h = bounds
-    n = int(np.clip(int(count), 1, 5))
+    n_raw = int(count)
+    n = int(np.clip(n_raw, 1, 5))
+    if n_raw != n:
+        import logging
+        logging.getLogger("target").warning(f"beacon_count {n_raw} clipped to {n} per MULTI_BEACON_LIMITS 1..5 (spec Sr.8)")
     # Derive radius from size for backward compat
     radius_from_size = int(max(size_w, size_h) / 2) if size_w and size_h else int(radius)
     radius_from_size = int(np.clip(radius_from_size, 1, 15))

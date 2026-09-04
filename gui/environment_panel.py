@@ -42,18 +42,40 @@ class EnvironmentPanel(BaseConfigPanel):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(10)
 
-        # World FIXED 5000×5000 — production world size explicitly fixed (God View).
-        # Generic Scene engine still supports 50..5000 for headless tests, but
-        # EnvironmentConfig LIMITS (5000,5000) locks production to 5000×5000.
-        # Spinners hidden per user request; world size not user-configurable.
+        # World configurable 2000..5000 per PDF Sr.1 — Screen Size (min.) 2000×2000, Optional User-defined.
+        # 5000×5000 = 25 MP (75 MB, heavy ~15 FPS), 2000×2000 = 4 MP (~6× faster, 30 Hz).
+        # Exposed to user for performance/quality trade-off; defaults to 2000 for best FPS.
+        world_box = QGroupBox("World — Size (PDF min 2000×2000, up to 5000×5000)")
+        world_grid = QGridLayout(world_box)
+        world_grid.setContentsMargins(12, 18, 12, 12)
+        world_grid.setHorizontalSpacing(8)
+        world_grid.setVerticalSpacing(8)
+        world_grid.setColumnStretch(1, 1)
+        world_grid.setColumnStretch(3, 1)
+        world_grid.addWidget(self._label("Width"), 0, 0)
         self.scene_w_spin = QSpinBox()
-        self.scene_w_spin.setRange(5000, 5000)
-        self.scene_w_spin.setValue(5000)
-        self.scene_w_spin.hide()
+        self.scene_w_spin.setRange(2000, 5000)
+        self.scene_w_spin.setSingleStep(500)
+        self.scene_w_spin.setSuffix(" px")
+        self.scene_w_spin.setValue(2000)
+        self.scene_w_spin.setToolTip("World width 2000..5000 per PDF. 2000 recommended for 30 FPS; 5000 heavy (~6× slower).")
+        self.scene_w_spin.setMinimumHeight(26)
+        world_grid.addWidget(self.scene_w_spin, 0, 1)
+        world_grid.addWidget(self._label("Height"), 0, 2)
         self.scene_h_spin = QSpinBox()
-        self.scene_h_spin.setRange(5000, 5000)
-        self.scene_h_spin.setValue(5000)
-        self.scene_h_spin.hide()
+        self.scene_h_spin.setRange(2000, 5000)
+        self.scene_h_spin.setSingleStep(500)
+        self.scene_h_spin.setSuffix(" px")
+        self.scene_h_spin.setValue(2000)
+        self.scene_h_spin.setToolTip("World height 2000..5000. Keep square for God View.")
+        self.scene_h_spin.setMinimumHeight(26)
+        world_grid.addWidget(self.scene_h_spin, 0, 3)
+        world_hint = QLabel("Default 2000×2000 (PDF min) for 30 FPS. Raise to 5000 for larger FOV range — FPS will drop (~6× pixels).")
+        world_hint.setWordWrap(True)
+        world_hint.setStyleSheet("color:#64748b; font-size:10px; font-style:italic;")
+        world_grid.addWidget(world_hint, 1, 0, 1, 4)
+        # Add to root before seed box
+        root.addWidget(world_box)
 
         # Section B: Seed — Reproducible generation
         # Seed drives np.random.default_rng(seed) for gradient/haze/stars.

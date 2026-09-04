@@ -13,12 +13,12 @@ CONTROL_LIMITS: dict[str, tuple[float, float]] = {
 
 CONTROL_DEFAULTS: dict = {
     "controller_type": "P",   # P | PI | PID
-    "kp": 0.15,               # matches old gain=0.15
+    "kp": 0.32,               # increased 0.15→0.32 to reduce lag for fast beacon (Sr.16)
     "ki": 0.02,
     "kd": 0.03,
-    "update_rate_hz": 30.0,   # matches TICK_MS 33 ms ≈ 30 Hz
-    "dead_zone": 2.0,         # 2 px — avoids micro-jitter when centered
-    "output_clamp": 80.0,     # px/tick — ~ slew 800 px/s * 0.1s, keeps within camera limit
+    "update_rate_hz": 60.0,   # 60Hz reduces throttle lag (interval 16ms) vs 30Hz
+    "dead_zone": 0.8,         # 2.0→0.8 reduces steady lag while still anti-jitter
+    "output_clamp": 120.0,    # 80→120 allows 40px/tick with 8°/s slew
 }
 
 CONTROLLER_TYPES: list[str] = ["P", "PI", "PID"]

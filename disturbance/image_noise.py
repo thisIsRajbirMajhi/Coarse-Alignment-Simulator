@@ -120,25 +120,19 @@ def apply_poisson_noise(
     # Use vectorized: Poisson where lam <= 200 and size small else Normal
     flat = f.reshape(-1)
     out_flat = np.empty_like(flat)
-    # Small lambda exact Poisson, large lambda Normal approx (faster + stable)
+    # Small lambda exact Poisson (float lam, no int truncation), large lambda Normal approx
     large = flat > 120
     if np.any(~large):
-        lam_s = flat[~large]
-        # clip to avoid overflow
-        lam_s = np.clip(lam_s, 0, 8000)
+        lam_s = np.clip(flat[~large].astype(np.float64), 0, 9000)
         if lam_s.size > 400_000:
             out_flat[~large] = np.random.normal(lam_s, np.sqrt(np.maximum(lam_s, 1.0)))
         else:
-            out_flat[~large] = np.random.poisson(np.clip(lam_s, 0, 9000).astype(int) if lam_s.max() < 9000 else lam_s).astype(float)  # type: ignore
-            # fallback for float lam: use poisson with float when numpy <2
-            # Actually np.random.poisson accepts float lam array
-            # Re-do correctly for float lam that was clipped
             try:
-                out_flat[~large] = np.random.poisson(np.clip(flat[~large], 0, 9000)).astype(float)
+                out_flat[~large] = np.random.poisson(lam_s).astype(float)
             except Exception:
                 out_flat[~large] = np.random.normal(lam_s, np.sqrt(np.maximum(lam_s, 1.0)))
     if np.any(large):
-        lam_l = flat[large]
+        lam_l = flat[large].astype(np.float64)
         out_flat[large] = np.random.normal(lam_l, np.sqrt(np.maximum(lam_l, 1.0)))
     out = (out_flat.reshape(f.shape) / float(eff_scale))
     out = np.clip(np.round(out), 0, 255).astype(np.uint8)

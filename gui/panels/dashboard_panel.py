@@ -29,11 +29,9 @@ def _color_for_rate(pct: float) -> str:
     return "#ef4444"
 
 def _color_for_error(err_px: float) -> str:
-    # Spec Sr.17 tracking error ≤10px: green ≤10 (pass), yellow ≤15, red >15
+    # Spec Sr.17 tracking error ≤10px strict: green ≤10 pass, red >10 fail (yellow removed for strict spec)
     if err_px <= 10:
         return "#22c55e"
-    if err_px <= 15:
-        return "#eab308"
     return "#ef4444"
 
 def _color_for_error_pct(pct: float) -> str:
@@ -45,11 +43,9 @@ def _color_for_error_pct(pct: float) -> str:
     return "#ef4444"
 
 def _color_for_fps(fps: float) -> str:
-    # Spec Sr.20 processing speed ≥20 FPS: green ≥20 (pass), yellow ≥15, red <15
+    # Spec Sr.20 processing speed ≥20 FPS strict: green ≥20 pass, red <20 fail
     if fps >= 20:
         return "#22c55e"
-    if fps >= 15:
-        return "#eab308"
     return "#ef4444"
 
 def _color_for_reacq(sec: float) -> str:
@@ -690,24 +686,8 @@ class DashboardPanel(QWidget):
         except Exception:
             pass
 
-        # Ensure every summary key has a hidden entry (dashboard-only, single source)
-        try:
-            for k, v in summary.items():
-                if k not in self.stat_labels:
-                    if isinstance(v, dict):
-                        for sk, sv in v.items():
-                            fk = f"{k}_{sk}"
-                            if fk not in self.stat_labels:
-                                lbl = QLabel(str(sv))
-                                lbl.hide()
-                                self.stat_labels[fk] = lbl
-                        lbl = QLabel(str(v))
-                        lbl.hide()
-                        self.stat_labels[k] = lbl
-                    else:
-                        lbl = QLabel(str(v if v is not None else "—"))
-                        lbl.hide()
-                        self.stat_labels[k] = lbl
-        except Exception:
-            pass
+        # No hidden-label leak: stat_labels only contains visible Section rows.
+        # Previously this loop created a new hidden QLabel per new summary key every 30 Hz tick
+        # → unbounded stat_labels growth. Removed for performance. Summary keys not in dashboard
+        # are accessible via perf.summary() / JSON log, not via hidden labels.
 

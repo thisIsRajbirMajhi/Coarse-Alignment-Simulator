@@ -34,7 +34,7 @@ def build_haze_field(
     ------------------------------------------------------------
     """
     if haze_strength <= 1e-6:
-        return np.zeros((height, width), dtype=np.float32)
+        return None  # no allocation for 0 haze (M4: was 100MB zeros for 5000×5000)
     small_h = max(1, height // 8)
     small_w = max(1, width // 8)
     noise_small = rng.normal(0, 1, (small_h, small_w)).astype(np.float32)

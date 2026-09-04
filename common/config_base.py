@@ -14,9 +14,23 @@ def clip_field(value: Any, lo: float, hi: float) -> Any:
     - Otherwise returns same type as value (float)
     """
     try:
+        if isinstance(value, bool):
+            return bool(np.clip(int(value), lo, hi))
+        if isinstance(value, (np.integer,)):
+            return int(np.clip(int(value), lo, hi))
+        if isinstance(value, (np.floating,)):
+            return float(np.clip(float(value), lo, hi))
         is_int = isinstance(value, int) and not isinstance(value, bool)
         clipped = np.clip(value, lo, hi)
-        return int(clipped) if is_int else float(clipped) if isinstance(value, float) else type(value)(clipped)  # type: ignore
+        if is_int:
+            return int(clipped)
+        if isinstance(value, float):
+            return float(clipped)
+        # fallback: try to preserve original type, but avoid bool truncation
+        try:
+            return type(value)(clipped)  # type: ignore
+        except Exception:
+            return int(clipped) if is_int else float(clipped)
     except Exception:
         return value
 

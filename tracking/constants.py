@@ -12,7 +12,7 @@ TRACKER_LIMITS: dict[str, tuple[float, float]] = {
 }
 
 TRACKER_DEFAULTS: dict = {
-    "smoothing": 0.5,
+    "smoothing": 0.25,
     "miss_limit": 5,
     "acquire_hits": 3,          # matches spec: 3 consecutive hits → LOCKED
     "lost_grace_mult": 2.0,     # LOST→SEARCHING after 2×miss_limit misses

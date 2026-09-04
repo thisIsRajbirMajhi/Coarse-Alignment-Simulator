@@ -63,7 +63,7 @@ class MainWindow(StateMixin, QMainWindow):
         self._center_radius = 2
         self._target_beacon_id = int(self.beacon_config.target_index)
         # Global tuning defaults — now fully configurable
-        self._tracker_smoothing = 0.4
+        self._tracker_smoothing = 0.25
         self._tracker_miss_limit = 5
         self._detector_min_area = 2
         self._sim_speed = 1.0
@@ -125,9 +125,9 @@ class MainWindow(StateMixin, QMainWindow):
         gain = getattr(self, "_ctrl_gain", 0.15)
         # Global tuning — use live widget values if available, else stored defaults
         try:
-            smoothing = float(self.tracker_smoothing_spin.value()) if hasattr(self, "tracker_smoothing_spin") else float(getattr(self, "_tracker_smoothing", 0.4))  # type: ignore
+            smoothing = float(self.tracker_smoothing_spin.value()) if hasattr(self, "tracker_smoothing_spin") else float(getattr(self, "_tracker_smoothing", 0.25))  # type: ignore
         except:
-            smoothing = float(getattr(self, "_tracker_smoothing", 0.4))
+            smoothing = float(getattr(self, "_tracker_smoothing", 0.25))
         try:
             miss_limit = int(self.tracker_miss_spin.value()) if hasattr(self, "tracker_miss_spin") else int(getattr(self, "_tracker_miss_limit", 5))  # type: ignore
         except:
@@ -196,8 +196,8 @@ class MainWindow(StateMixin, QMainWindow):
         self.scene = Scene(config=cfg)
         # Beacons — single panel, all beacons share same rules
         beacon_count = int(getattr(self, "_beacon_count", 1))
-        hb = 14
-        cr = 2
+        hb = int(np.clip(14, 3, 80))
+        cr = int(np.clip(2, 1, hb))
         tgt_id = int(getattr(self, "_target_beacon_id", 0))
         shape = "square"
         size_w = 10
@@ -292,6 +292,10 @@ class MainWindow(StateMixin, QMainWindow):
         if not hasattr(self, "perf"):
             self.perf = PerformanceLogger()
         self._camera_drift_state = {}
+        # Minimap cache — pre-resized thumb of static background (avoids 5000×5000 copy+resize each tick)
+        self._minimap_thumb: np.ndarray | None = None
+        self._minimap_thumb_size: tuple[int,int] | None = None
+        self._minimap_scene_id: int | None = None
 
     def _build_ui(self):
         central = QWidget()
@@ -368,7 +372,7 @@ class MainWindow(StateMixin, QMainWindow):
             ttl = QLabel(title_text)
             ttl.setObjectName("cameraTitle")
             title_col.addWidget(ttl)
-            sub = QLabel("Monochrome Focal Plane Array" if is_primary else "Fixed 5000 x 5000  •  Overview")
+            sub = QLabel("Monochrome Focal Plane Array" if is_primary else "Overview — World Size")
             sub.setStyleSheet("color:#6b7280; font-size:9px; background: transparent;")
             title_col.addWidget(sub)
             h.addLayout(title_col)
@@ -424,7 +428,7 @@ class MainWindow(StateMixin, QMainWindow):
 
         # Camera (monochrome) — 640x640 default, FOV 4x3 deg
         fov_card, self.viewport_label, self.fov_res_lbl, self._fov_live_badge, self._fov_footer_info, self._fov_footer = _make_camera_card("Camera", f"{self._fov_size[0]}x{self._fov_size[1]}", True)
-        # God View fixed 5000x5000
+        # God View — size = World (2000..5000 configurable per PDF)
         god_card, self.minimap_label, self.god_res_lbl, self._god_live_badge, self._god_footer_info, self._god_footer = _make_camera_card("God View", "5000x5000", False)
 
         # Ensure res badges keep expected objectName for external styling
@@ -1095,7 +1099,7 @@ class MainWindow(StateMixin, QMainWindow):
                 pass
             if hasattr(self, "beacons") and 0 <= idx < len(self.beacons):
                 self.target = self.beacons[idx]
-                try: self.tracker = Tracker(smoothing=0.4, miss_limit=5)
+                try: self.tracker = Tracker(smoothing=0.25, miss_limit=5)
                 except: pass
                 self.statusBar().showMessage(f"Target -> Beacon #{idx}", 2500)
                 try:
@@ -1172,7 +1176,7 @@ class MainWindow(StateMixin, QMainWindow):
                 self._target_beacon_id = tid; self._beacon_count = int(multi_cfg.beacon_count)
                 self.target = self.beacons[tid] if self.beacons else self.beacons[0]
                 self.statusBar().showMessage(f"Beacons: {self._beacon_count} Target #{tid} {shape} {size_w}x{size_h}", 3000)
-                try: self.tracker = Tracker(smoothing=0.4, miss_limit=5)
+                try: self.tracker = Tracker(smoothing=0.25, miss_limit=5)
                 except: pass
                 self._rebuild_per_beacon_panels()
                 try: self._on_target_beacon_change(tid)
@@ -1202,7 +1206,7 @@ class MainWindow(StateMixin, QMainWindow):
         self._target_beacon_id = tid
         self.target = self.beacons[tid] if self.beacons else self.beacons[0]
         self.statusBar().showMessage(f"Beacons: {self._beacon_count}  Target #{tid}  hitbox {self._hitbox_radius}px  center {self._center_radius}px", 3000)
-        try: self.tracker = Tracker(smoothing=0.4, miss_limit=5)
+        try: self.tracker = Tracker(smoothing=0.25, miss_limit=5)
         except: pass
         self._rebuild_per_beacon_panels()
         # highlight target
@@ -1233,7 +1237,7 @@ class MainWindow(StateMixin, QMainWindow):
                 tid = int(np.clip(int(tid), 0, max(0, len(self.beacons)-1)))
                 self._target_beacon_id = tid
                 self.target = self.beacons[tid] if self.beacons else self.beacons[0]
-                try: self.tracker = Tracker(smoothing=0.4, miss_limit=5)
+                try: self.tracker = Tracker(smoothing=0.25, miss_limit=5)
                 except: pass
                 self._rebuild_per_beacon_panels()
                 try: self._on_target_beacon_change(tid)
@@ -1259,7 +1263,7 @@ class MainWindow(StateMixin, QMainWindow):
         tid = int(np.clip(tid, 0, max(0, len(self.beacons)-1)))
         self._target_beacon_id = tid
         self.target = self.beacons[tid] if self.beacons else self.beacons[0]
-        try: self.tracker = Tracker(smoothing=0.4, miss_limit=5)
+        try: self.tracker = Tracker(smoothing=0.25, miss_limit=5)
         except: pass
         self._rebuild_per_beacon_panels()
         try: self._on_target_beacon_change(tid)
@@ -1361,7 +1365,7 @@ class MainWindow(StateMixin, QMainWindow):
     # ── Per-section Apply / Discard + Master ──
     # NOTE: State handling (dirty//snaps) delegated to gui.mixins.state_mixin.StateMixin
     # Methods inherited: _mark_dirty, _clear_dirty, _apply_section, _discard_section,
-    # _master_apply_all, _master_discard_all, _snaps_section, _schedule_auto
+    # _master_apply_all, _master_discard_all, _snapshot_section, _schedule_auto
 
     def _apply_scene_settings_hot(self):
         """ — applies Environment from EnvironmentPanel + EnvironmentConfig (modular, no pause)."""
@@ -1383,8 +1387,7 @@ class MainWindow(StateMixin, QMainWindow):
         if fw<20: fw=20
         if fh<20: fh=20
         if sw*sh > 16_000_000:
-            if QMessageBox.warning(self, "Large world", f"World {sw}×{sh} = {sw*sh/1e6:.1f} MP heavy — FPS will drop. Continue?", QMessageBox.Yes|QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
-                return
+            self.statusBar().showMessage(f"Large world {sw}×{sh} = {sw*sh/1e6:.1f} MP — cached thumb active", 3000)
         self._scene_size = (sw, sh); self._fov_size = (fw, fh)
         self._viewport_display_size = (vw, vh); self._god_display_size = (gw, gh)
         self.fov_res_lbl.setText(f"{fw}×{fh}"); self.god_res_lbl.setText(f"{sw}×{sh}")
@@ -1410,6 +1413,9 @@ class MainWindow(StateMixin, QMainWindow):
             except Exception:
                 self._build_simulation()
                 self.scene.regenerate_from_config(cfg)
+        try:
+            self._invalidate_minimap_cache()
+        except: pass
         # Camera — update scene bounds and re-validate ranges/home against new world (modular)
         # Sync vignetting (camera image-space) from env config to camera
         try:
@@ -1443,8 +1449,15 @@ class MainWindow(StateMixin, QMainWindow):
             except:
                 self.camera.set_position(sw/2, sh/2)
         for b in getattr(self, "beacons", [self.target]):
-            b.bounds = (sw, sh)
-            b.x = float(np.clip(b.x, 0, sw)); b.y = float(np.clip(b.y, 0, sh))
+            try:
+                if hasattr(b, "set_bounds"):
+                    b.set_bounds((sw, sh))
+                else:
+                    b.bounds = (sw, sh)
+                    b.x = float(np.clip(b.x, 0, sw)); b.y = float(np.clip(b.y, 0, sh))
+            except Exception:
+                b.bounds = (sw, sh)
+                b.x = float(np.clip(b.x, 0, sw)); b.y = float(np.clip(b.y, 0, sh))
         self._camera_drift_state = {}
         try:
             self._sync_per_beacon_xy_ranges()
@@ -1459,7 +1472,7 @@ class MainWindow(StateMixin, QMainWindow):
                     panel.spin_x.blockSignals(True); panel.spin_x.setValue(int(b.x)); panel.spin_x.blockSignals(False)
                     panel.spin_y.blockSignals(True); panel.spin_y.setValue(int(b.y)); panel.spin_y.blockSignals(False)
         except: pass
-        self._snapshot_section("environment"); self._snaps_section("camera")
+        self._snapshot_section("environment"); self._snapshot_section("camera")
         try:
             cam_scale = float(self.camera_config.pixel_scale_mrad)
             self.statusBar().showMessage(f"Environment/Camera — world {sw}x{sh} FOV {self.camera_config.fov_width}x{self.camera_config.fov_height} pan {self.camera_config.pan_min}:{self.camera_config.pan_max} scale {cam_scale:.3f}mrad/px", 3000)
@@ -1478,9 +1491,12 @@ class MainWindow(StateMixin, QMainWindow):
                 cam_cfg = self.camera_config.validate((sw, sh))
             # Clamp FOV to scene (handles FOV > scene case)
             fw, fh = int(cam_cfg.fov_width), int(cam_cfg.fov_height)
+            fw_raw, fh_raw = fw, fh
             fw = min(fw, sw-10); fh = min(fh, sh-10)
             if fw<20: fw=20
             if fh<20: fh=20
+            if fw != fw_raw or fh != fh_raw:
+                self.statusBar().showMessage(f"FOV {fw_raw}x{fh_raw} clipped to {fw}x{fh} to fit world {sw}x{sh}", 3000)
             cam_cfg.fov_width = int(fw); cam_cfg.fov_height = int(fh)
             self.camera_config = cam_cfg
             # Legacy mirrors for renderer
@@ -1535,8 +1551,7 @@ class MainWindow(StateMixin, QMainWindow):
         if fh<20: fh=20
         total_px = sw*sh
         if total_px > 16_000_000:
-            if QMessageBox.warning(self, "Large world", f"World {sw}×{sh} = {total_px/1e6:.1f} MP heavy — FPS will drop. Continue?", QMessageBox.Yes|QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
-                return
+            self.statusBar().showMessage(f"Large world {sw}×{sh} = {total_px/1e6:.1f} MP — cached thumb active", 3000)
         self._scene_size = (sw, sh)
         self._fov_size = (fw, fh)
         self._viewport_display_size = (vw, vh)
@@ -1565,6 +1580,9 @@ class MainWindow(StateMixin, QMainWindow):
             except:
                 self._build_simulation()
                 self.scene.regenerate(width=sw, height=sh, seed=seed, dynamic=dynamic, haze_strength=haze)
+        try:
+            self._invalidate_minimap_cache()
+        except: pass
         # Camera — apply full config (FOV, mechanics, display, units) with new scene bounds
         try:
             if hasattr(self, "camera_panel"):
@@ -1592,8 +1610,15 @@ class MainWindow(StateMixin, QMainWindow):
             except:
                 self.camera.set_position(sw/2, sh/2)
         for b in getattr(self, "beacons", [self.target]):
-            b.bounds = (sw, sh)
-            b.x = float(np.clip(b.x, 0, sw)); b.y = float(np.clip(b.y, 0, sh))
+            try:
+                if hasattr(b, "set_bounds"):
+                    b.set_bounds((sw, sh))
+                else:
+                    b.bounds = (sw, sh)
+                    b.x = float(np.clip(b.x, 0, sw)); b.y = float(np.clip(b.y, 0, sh))
+            except Exception:
+                b.bounds = (sw, sh)
+                b.x = float(np.clip(b.x, 0, sw)); b.y = float(np.clip(b.y, 0, sh))
         self._camera_drift_state = {}
         try:
             self._sync_per_beacon_xy_ranges()
@@ -1619,7 +1644,24 @@ class MainWindow(StateMixin, QMainWindow):
         if not self._running:
             # FIX: use monotonic pause offset via logger.adjust_for_pause; start fresh if never started
             if self.perf.start_time is None and getattr(self.perf, "_start_mono", None) is None:
-                self.perf.start()
+                # capture config snapshot for reproducibility
+                try:
+                    cfg_snap = {}
+                    if hasattr(self, "env_config"):
+                        cfg_snap.update({f"env_{k}": v for k, v in self.env_config.to_dict().items()})
+                    if hasattr(self, "camera_config"):
+                        cfg_snap.update({f"cam_{k}": v for k, v in self.camera_config.to_dict().items()})
+                    if hasattr(self, "controller_config"):
+                        cfg_snap.update({f"ctrl_{k}": v for k, v in self.controller_config.to_dict().items()})
+                    if hasattr(self, "disturbance_config"):
+                        try:
+                            cfg_snap.update({f"dist_{k}": v for k, v in self.disturbance_config.to_dict().items()})
+                        except: pass
+                    cfg_snap["world_size"] = getattr(self, "_scene_size", None)
+                    cfg_snap["fov_size"] = getattr(self, "_fov_size", None)
+                    self.perf.start(prefix="simulation", config=cfg_snap)
+                except Exception:
+                    self.perf.start()
             self._last_tick_time = time.time()
             if getattr(self, "_pause_time", None) is not None:
                 # adjust logger elapsed to exclude paused wall time (monotonic)
@@ -1660,15 +1702,15 @@ class MainWindow(StateMixin, QMainWindow):
             from camera.config import CameraConfig as _CC
             from target.config import MultiBeaconConfig as _MBC
             from control.config import ControllerConfig as _CtrlC
-            # Environment to defaults (world fixed 5000)
+            # Environment to defaults (world 2000 per PDF min, configurable 2000..5000)
             if hasattr(self, "env_panel"):
                 self.env_panel.set_config(_EC().validate(), emit=False)
                 self.env_config = _EC().validate()
-                self._scene_size = (5000, 5000)
-            # Camera to defaults (640x640, 4x3 deg, viewport 2000, god 5000, centre locked, 30Hz)
+                self._scene_size = (int(self.env_config.world_width), int(self.env_config.world_height))
+            # Camera to defaults (640x640, 4x3 deg, viewport 2000, god = world size, centre locked, 30Hz)
             if hasattr(self, "camera_panel"):
-                self.camera_panel.set_config(_CC().validate((5000, 5000)), emit=False)
-                self.camera_config = _CC().validate((5000, 5000))
+                self.camera_panel.set_config(_CC().validate(self._scene_size), emit=False)
+                self.camera_config = _CC().validate(self._scene_size)
             # Beacons to defaults (1, square 10x10, Circular, 60, threshold 200, no blink, no random, centre 2500)
             if hasattr(self, "beacon_manager"):
                 self.beacon_manager.set_config(_MBC(beacon_count=1, target_index=0, shape="square", size_w=10, size_h=10, x=2500, y=2500, profile="curved", speed=60, blinking=False, speed_random=False).validate(), emit=False)
@@ -1720,7 +1762,7 @@ class MainWindow(StateMixin, QMainWindow):
                 try: self.thresh_slider._value_label.setText("200")
                 except: pass
             self._target_speed = 60; self._det_thresh = 200; self._ctrl_gain = 0.15
-            self._tracker_smoothing = 0.4; self._tracker_miss_limit = 5; self._detector_min_area = 2; self._sim_speed = 1.0; self._global_brightness = 255; self._global_radius = 5
+            self._tracker_smoothing = 0.25; self._tracker_miss_limit = 5; self._detector_min_area = 2; self._sim_speed = 1.0; self._global_brightness = 255; self._global_radius = 5
             self._hitbox_radius = 14; self._center_radius = 2
             # Clear dirty
             try:
@@ -1729,6 +1771,9 @@ class MainWindow(StateMixin, QMainWindow):
         except Exception as e:
             print(f"Reset defaults error: {e}")
         self._build_simulation()
+        try:
+            self._invalidate_minimap_cache()
+        except: pass
         try:
             self._rebuild_per_beacon_panels()
             self._sync_per_beacon_xy_ranges()
@@ -1802,7 +1847,7 @@ class MainWindow(StateMixin, QMainWindow):
         except:
             sim_speed = float(getattr(self, "_sim_speed", 1.0))
         self._sim_speed = float(sim_speed)
-        dt_eff = dt * sim_speed
+        dt_eff = float(np.clip(dt * sim_speed, 1e-4, 0.1))
         # Update all enabled beacons (single update, dt_eff scaled by sim_speed)
         for b in getattr(self, "beacons", [self.target]):
             if getattr(b, "enabled", True):
@@ -1901,16 +1946,10 @@ class MainWindow(StateMixin, QMainWindow):
                 full = self.scene.get_frame()
                 return full, None
 
-        # For god-view minimap, build lightweight static base (avoid dynamic full rebuild)
-        try:
-            if hasattr(self.scene, '_static_background') and self.scene._static_background is not None:
-                scene_frame = self.scene._static_background.copy()
-            else:
-                scene_frame = self.scene.get_frame()
-        except:
-            scene_frame = self.scene.get_frame()
-        # Draw beacon photometry onto god-view world buffer (for minimap overview)
-        self._draw_targets(scene_frame)
+        # For god-view minimap — use cached low-res thumb (no 5000×5000 copy).
+        # Legacy full-copy path kept as fallback but not used in optimized render.
+        scene_frame = None  # No longer needed; _render_minimap() uses cached thumb internally.
+        # _draw_targets on full world skipped — minimap draws hitboxes via renderer on thumb.
 
         # Now handle disturbances + FOV capture
         if dc is not None:
@@ -2086,10 +2125,10 @@ class MainWindow(StateMixin, QMainWindow):
                 # Back-compat fallback (PTZCamera without dt)
                 self.camera.move(d_pan, d_tilt)
         is_locked=self.tracker.status==LockStatus.TRACKING
-        # Real-time accurate: detected = primary hitbox hit (not any distractor)
+        # Real-time accurate: detected = primary hitbox hit (not any distractor) + dt for time accounting
         self.perf.log_frame(is_locked, tracking_error_px, time.time()-frame_start,
                             detected=hitbox_hit, hitbox_hit=hitbox_hit, center_hit=center_hit,
-                            lock_state=self.tracker.status.value)
+                            lock_state=self.tracker.status.value, dt=dt)
         # Rendering must not block dashboard — ensure _update_stats always runs
         try:
             self._render_viewport(fov_frame, estimate, all_dets)
@@ -2189,9 +2228,50 @@ class MainWindow(StateMixin, QMainWindow):
         self._last_viewport_frame = display
         self._set_pixmap(self.viewport_label, display)
 
-    def _render_minimap(self, scene_frame: np.ndarray):
+    def _get_minimap_thumb(self, lw: int, lh: int) -> np.ndarray:
+        """Return cached low-res thumb of static background (rebuild only on size/scene change).
+        Saves 11 ms copy + 3 ms resize of 5000×5000 each tick → 0.2 ms copy of 0.16 MP thumb."""
+        lw = max(50, int(lw)); lh = max(50, int(lh))
+        scene_id = id(getattr(self.scene, '_static_background', None))
+        if (self._minimap_thumb is not None and self._minimap_thumb_size == (lw, lh)
+                and self._minimap_scene_id == scene_id):
+            return self._minimap_thumb
+        try:
+            base = getattr(self.scene, '_static_background', None)
+            if base is None:
+                base = self.scene.get_frame()
+            # For 5000×5000 → 400×300, INTER_AREA is sharper and faster than LINEAR for downscale
+            self._minimap_thumb = cv2.resize(base, (lw, lh), interpolation=cv2.INTER_AREA)
+        except Exception:
+            self._minimap_thumb = np.zeros((lh, lw, 3), dtype=np.uint8)
+        self._minimap_thumb_size = (lw, lh)
+        self._minimap_scene_id = scene_id
+        return self._minimap_thumb
+
+    def _invalidate_minimap_cache(self):
+        self._minimap_thumb = None
+        self._minimap_thumb_size = None
+        self._minimap_scene_id = None
+
+    def _render_minimap(self, scene_frame: np.ndarray | None = None):
         lw = self.minimap_label.width() if self.minimap_label.width()>10 else self._god_display_size[0]
         lh = self.minimap_label.height() if self.minimap_label.height()>10 else self._god_display_size[1]
+        # Optimized path: use cached thumb (no 5000×5000 copy/resize). Fallback to legacy if needed.
+        if hasattr(self, '_get_minimap_thumb'):
+            try:
+                thumb = self._get_minimap_thumb(lw, lh)
+                display = Renderer.render_minimap_cached(thumb, self.camera, getattr(self, "beacons", [self.target]), self.target, self.tracker, (lw, lh), self._scene_size)
+                self._last_god_frame = display
+                self._set_pixmap(self.minimap_label, display)
+                return
+            except Exception:
+                pass
+        # Legacy fallback (heavy)
+        if scene_frame is None:
+            try:
+                scene_frame = self.scene._static_background.copy() if hasattr(self.scene, '_static_background') and self.scene._static_background is not None else self.scene.get_frame()
+            except:
+                scene_frame = self.scene.get_frame()
         display = Renderer.render_minimap(scene_frame, self.camera, getattr(self, "beacons", [self.target]), self.target, self.tracker, (lw, lh), self._scene_size)
         self._last_god_frame = display
         self._set_pixmap(self.minimap_label, display)
@@ -2212,6 +2292,14 @@ class MainWindow(StateMixin, QMainWindow):
         try:
             if hasattr(self, "timer"):
                 self.timer.stop()
+        except Exception:
+            pass
+        try:
+            for t in getattr(self, "_auto_timers", {}).values():
+                try:
+                    t.stop()
+                except Exception:
+                    pass
         except Exception:
             pass
         super().closeEvent(event)

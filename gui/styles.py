@@ -1,8 +1,8 @@
 # gui/styles.py - Centralized styling — simple light theme, no gradients, no vibe colors
 # Video feeds are pitch black; everything else is light/neutral.
 
-SCENE_SIZE: tuple[int, int] = (5000, 5000)
-FOV_SIZE: tuple[int, int] = (640, 640)
+SCENE_SIZE: tuple[int, int] = (2000, 2000)
+FOV_SIZE: tuple[int, int] = (640, 480)
 TICK_MS: int = 33
 
 APP_STYLE: str = """

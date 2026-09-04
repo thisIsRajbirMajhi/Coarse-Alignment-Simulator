@@ -201,6 +201,81 @@ class Renderer:
         return display
 
     @staticmethod
+    def render_minimap_cached(minimap_thumb: np.ndarray, camera, beacons, target, tracker, label_size: tuple[int, int], scene_size: tuple[int,int]) -> np.ndarray:
+        """Fast path — minimap_thumb already resized to label_size (cached, ~0.16M px).
+        No 5000×5000 resize or copy. Just overlay FOV/beacons."""
+        lw, lh = label_size; sw, sh = scene_size
+        display = minimap_thumb.copy()
+        # Ensure size matches label (thumb may be slightly off due to aspect)
+        th, tw = display.shape[:2]
+        if tw != max(50, lw) or th != max(50, lh):
+            display = cv2.resize(display, (max(50, lw), max(50, lh)), interpolation=cv2.INTER_LINEAR)
+        # scale computed from display->world
+        scale_x, scale_y = display.shape[1] / sw, display.shape[0] / sh
+
+        x0, y0, x1, y1 = camera.get_fov_rect()
+        x0s, y0s, x1s, y1s = int(x0*scale_x), int(y0*scale_y), int(x1*scale_x), int(y1*scale_y)
+        cv2.rectangle(display, (x0s, y0s), (x1s, y1s), (70, 170, 255), 1, cv2.LINE_AA)
+        fcx, fcy = (x0s+x1s)//2, (y0s+y1s)//2
+        cv2.line(display, (fcx-5, fcy), (fcx+5, fcy), (70, 170, 255), 1, cv2.LINE_AA)
+        cv2.line(display, (fcx, fcy-5), (fcx, fcy+5), (70, 170, 255), 1, cv2.LINE_AA)
+        cv2.circle(display, (fcx, fcy), 1, (70, 170, 255), -1, cv2.LINE_AA)
+        try:
+            hx, hy = camera.get_home()
+            hxs, hys = int(hx*scale_x), int(hy*scale_y)
+            pts = np.array([[hxs, hys-4],[hxs+4, hys],[hxs, hys+4],[hxs-4, hys]], np.int32)
+            cv2.polylines(display, [pts], True, (255, 200, 50), 1, cv2.LINE_AA)
+            cv2.putText(display, "H", (hxs+5, hys+2), cv2.FONT_HERSHEY_SIMPLEX, 0.28, (255, 200, 50), 1, cv2.LINE_AA)
+        except: pass
+        try:
+            pan_lo, pan_hi = camera.get_pan_range()
+            tilt_lo, tilt_hi = camera.get_tilt_range()
+            rx0 = int((pan_lo - camera.fov_width/2)*scale_x); ry0 = int((tilt_lo - camera.fov_height/2)*scale_y)
+            rx1 = int((pan_hi + camera.fov_width/2)*scale_x); ry1 = int((tilt_hi + camera.fov_height/2)*scale_y)
+            rx0 = max(0, min(rx0, display.shape[1]-1)); rx1 = max(0, min(rx1, display.shape[1]-1))
+            ry0 = max(0, min(ry0, display.shape[0]-1)); ry1 = max(0, min(ry1, display.shape[0]-1))
+            cv2.rectangle(display, (rx0, ry0), (rx1, ry1), (90, 90, 90), 1, cv2.LINE_AA)
+        except: pass
+        cv2.putText(display, f"{sw}x{sh}", (4, 10), cv2.FONT_HERSHEY_SIMPLEX, 0.28, (180, 180, 180), 1, cv2.LINE_AA)
+        for beacon in beacons:
+            if not getattr(beacon, "enabled", True):
+                continue
+            if getattr(beacon, "blinking", False) and not getattr(beacon, "_blink_visible", True):
+                continue
+            bx, by = beacon.x, beacon.y
+            mx, my = int(bx * scale_x), int(by * scale_y)
+            hr_s = max(2, int(beacon.hitbox_radius * min(scale_x, scale_y)))
+            cr_s = max(1, int(beacon.center_radius * min(scale_x, scale_y)))
+            if hr_s < 3: hr_s = 3
+            is_primary = (beacon is target)
+            col_hit = (0, 220, 255) if is_primary else (165, 175, 120)
+            col_center = (255, 255, 255) if is_primary else (200, 200, 170)
+            shape = getattr(beacon, "shape", "square")
+            size_w = int(getattr(beacon, "size_w", 10))
+            size_h = int(getattr(beacon, "size_h", 10))
+            if shape == "square":
+                hw = max(1, int(size_w * scale_x / 2))
+                hh = max(1, int(size_h * scale_y / 2))
+                col = (0, 220, 255) if is_primary else (200, 200, 200)
+                cv2.rectangle(display, (mx - hw, my - hh), (mx + hw, my + hh), col, 1, cv2.LINE_AA)
+            else:
+                r = max(1, int(max(size_w, size_h) * min(scale_x, scale_y) / 2))
+                col = (0, 220, 255) if is_primary else (200, 200, 200)
+                cv2.circle(display, (mx, my), r, col, 1, cv2.LINE_AA)
+            cv2.circle(display, (mx, my), hr_s, col_hit, 1, cv2.LINE_AA)
+            cv2.circle(display, (mx, my), cr_s, col_center, -1, cv2.LINE_AA)
+            if len(beacons) > 1:
+                cv2.putText(display, f"#{beacon.beacon_id}", (mx+hr_s+2, my-2),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.28, col_hit, 1, cv2.LINE_AA)
+        if tracker.estimated_position is not None:
+            ex, ey = tracker.estimated_position
+            fx0, fy0, _, _ = camera.get_fov_rect()
+            mx, my = int((fx0+ex)*scale_x), int((fy0+ey)*scale_y)
+            cv2.drawMarker(display, (mx, my), (0, 255, 255), cv2.MARKER_CROSS, 7, 1, cv2.LINE_AA)
+            cv2.circle(display, (mx, my), 1, (0, 255, 255), -1, cv2.LINE_AA)
+        return display
+
+    @staticmethod
     def render_minimap(scene_frame: np.ndarray, camera, beacons, target, tracker, label_size: tuple[int, int], scene_size: tuple[int,int]) -> np.ndarray:
         lw, lh = label_size; sw, sh = scene_size
         display = cv2.resize(scene_frame, (max(50, lw), max(50, lh)), interpolation=cv2.INTER_LINEAR)

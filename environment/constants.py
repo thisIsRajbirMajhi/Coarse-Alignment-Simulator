@@ -1,16 +1,16 @@
 MAX_RES: int = 5000
 MIN_RES: int = 50  # generic Scene engine limit for headless tests (50..5000)
 
-# WORLD-SIZE POLICY: EXPLICITLY FIXED 5000×5000 (God View) for production.
-#   - LIMITS["world_width/height"] = (5000,5000) locks EnvironmentConfig to fixed.
-#   - Scene(...) generic engine still supports 50..5000 for tests, but production
-#     path via EnvironmentConfig.validate() is fixed 5000×5000. This resolves the
-#     world-size configuration inconsistency (fixed in production, generic for tests).
-#   - DEFAULTS world_width/height = 5000 matches fixed policy.
+# WORLD-SIZE POLICY: Per PDF Sr.1 — Screen Size (min.) 2000×2000, Optional User-defined.
+#   Production now supports 2000..5000 (configurable) to allow performance trade-off:
+#   5000×5000 = 25 MP (75 MB copy, heavy), 2000×2000 = 4 MP (~6× cheaper, meets 30 Hz).
+#   - LIMITS["world_width/height"] = (2000,5000) per spec (min 2000).
+#   - DEFAULTS = 2000×2000 for best FPS out-of-box; user can raise to 5000.
+#   - Scene(...) generic engine still supports 50..5000 for headless tests (MIN_RES..MAX_RES).
 
 DEFAULTS: dict = {
-    "world_width": 5000,          # px, FIXED 5000 God View (LIMITS 5000,5000)
-    "world_height": 5000,         # px, FIXED 5000 God View
+    "world_width": 2000,          # px, default 2000 per PDF min (user can raise to 5000)
+    "world_height": 2000,         # px, default 2000 per PDF min
     "seed": 42,                   # int 0..999999, None means random
     "bg_top": 12,                 # int 0..60  — zenith (top) gradient color
     "bg_bottom": 22,              # int 0..80  — horizon (bottom) gradient color
@@ -23,11 +23,11 @@ DEFAULTS: dict = {
     "dynamic_speed": 1.0,         # float 0.1..5.0 — animation time multiplier
 }
 
-# God View FIXED 5000×5000, Camera Screen Size 2000-5000 configurable
-# World size FIXED (5000,5000) in production; generic Scene allows 50..5000 for tests.
+# World configurable 2000..5000 per PDF (min 2000), God View shows full world at chosen size.
+# Generic Scene engine allows 50..5000 for headless tests.
 LIMITS: dict[str, tuple[float, float]] = {
-    "world_width": (5000, 5000),
-    "world_height": (5000, 5000),
+    "world_width": (2000, 5000),
+    "world_height": (2000, 5000),
     "seed": (0, 999999),
     "bg_top": (0, 60),
     "bg_bottom": (0, 80),

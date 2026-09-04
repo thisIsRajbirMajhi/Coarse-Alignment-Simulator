@@ -24,7 +24,7 @@ class KalmanFilter:
 
     def __init__(
         self,
-        process_var: float = 40.0,
+        process_var: float = 12.0,
         meas_var: float = 4.0,
         initial_state: np.ndarray | None = None,
         initial_cov_scale: float = 500.0,
@@ -51,9 +51,9 @@ class KalmanFilter:
         vx, vy = (0.0, 0.0) if vel is None else (float(vel[0]), float(vel[1]))
         self.x = np.array([float(z[0]), float(z[1]), vx, vy], dtype=float)
         self.P = np.eye(4) * self._init_cov_scale
-        # Large initial velocity uncertainty so second measurement quickly corrects velocity
-        self.P[2, 2] = 2000.0
-        self.P[3, 3] = 2000.0
+        # Moderate initial velocity uncertainty (reduced from 2000) to avoid outlier latch
+        self.P[2, 2] = 500.0
+        self.P[3, 3] = 500.0
         self._prev_z = (float(z[0]), float(z[1]))
         return self.get_pos()  # type: ignore
 
@@ -99,8 +99,8 @@ class KalmanFilter:
             dt = float(self._last_dt) if self._last_dt > 1e-6 else 0.033
             vx_est = (float(z[0]) - float(self._prev_z[0])) / dt
             vy_est = (float(z[1]) - float(self._prev_z[1])) / dt
-            # Only seed if reasonable (|v| < 2000 px/s to reject outliers)
-            if abs(vx_est) < 2000 and abs(vy_est) < 2000 and (abs(vx_est) > 1 or abs(vy_est) > 1):
+            # Only seed if reasonable (tightened to 800 px/s to reject outliers, was 2000)
+            if abs(vx_est) < 800 and abs(vy_est) < 800 and (abs(vx_est) > 1 or abs(vy_est) > 1):
                 self.x[2] = float(vx_est) * 0.8 + float(self.x[2]) * 0.2
                 self.x[3] = float(vy_est) * 0.8 + float(self.x[3]) * 0.2
         H = np.array([[1, 0, 0, 0], [0, 1, 0, 0]], dtype=float)

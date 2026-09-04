@@ -79,6 +79,19 @@ class BeaconDetector:
         Returns list[dict] sorted descending by confidence, capped to max_beacons.
         Each dict: {x,y, area, peak, confidence, bbox}
         """
+        # Input validation (H3)
+        if frame is None or not isinstance(frame, np.ndarray) or frame.size == 0:
+            return []
+        if frame.ndim not in (2, 3):
+            return []
+        if frame.ndim == 3 and frame.shape[2] == 1:
+            # (h,w,1) -> 2D grayscale squeeze
+            frame = frame.squeeze(axis=2)
+        elif frame.ndim == 3 and frame.shape[2] not in (3, 4):
+            try:
+                frame = frame.reshape(frame.shape[0], frame.shape[1], -1)[:, :, :3]
+            except Exception:
+                return []
         gray = to_grayscale(frame)
         mask = threshold_frame(gray, self.brightness_threshold)
         mask = close_gaps(mask)
@@ -96,11 +109,34 @@ class BeaconDetector:
             cx = float(M["m10"] / M["m00"])
             cy = float(M["m01"] / M["m00"])
             x, y, w, h = cv2.boundingRect(cnt)
-            roi = gray[y:y+h, x:x+w]
+            # clip ROI to gray bounds (safety for edge contours)
+            x2 = min(x + w, gray.shape[1])
+            y2 = min(y + h, gray.shape[0])
+            x = max(0, x); y = max(0, y)
+            roi = gray[y:y2, x:x2]
             peak = int(roi.max()) if roi.size else 0
             conf = float(area * (float(peak) / 255.0))
             dets.append({"x": cx, "y": cy, "area": area, "peak": peak, "confidence": conf, "bbox": (x, y, w, h)})
         dets.sort(key=lambda d: d["confidence"], reverse=True)
+        # NMS: suppress overlapping detections IoU >0.5 (keep higher confidence)
+        filtered: list[dict] = []
+        for d in dets:
+            keep = True
+            bx, by, bw, bh = d["bbox"]
+            for f in filtered:
+                fx, fy, fw, fh = f["bbox"]
+                # intersection
+                ix0, iy0 = max(bx, fx), max(by, fy)
+                ix1, iy1 = min(bx + bw, fx + fw), min(by + bh, fy + fh)
+                if ix1 > ix0 and iy1 > iy0:
+                    inter = (ix1 - ix0) * (iy1 - iy0)
+                    union = bw * bh + fw * fh - inter
+                    if union > 0 and inter / union > 0.5:
+                        keep = False
+                        break
+            if keep:
+                filtered.append(d)
+        dets = filtered
         cap = int(self.config.max_beacons) if hasattr(self, "config") else int(max_beacons)
         # Respect caller cap but also config max
         cap = min(int(cap), int(max_beacons))

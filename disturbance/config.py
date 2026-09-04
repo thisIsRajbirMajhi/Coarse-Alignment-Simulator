@@ -193,9 +193,15 @@ class DisturbanceConfig(BaseValidatedConfig):
             try:
                 from disturbance.constants import ATMOSPHERIC_PRESET_MAP as _AMap2
                 mp = _AMap2.get(self.atmospheric_preset, {})
-                self.atmospheric_contrast = float(mp.get("contrast", 0.0))
-                self.atmospheric_brightness = float(mp.get("brightness", 0.0))
-            except:
+                preset_c = float(mp.get("contrast", 0.0))
+                preset_b = float(mp.get("brightness", 0.0))
+                # warn if user values will be overwritten (H7)
+                if abs(self.atmospheric_contrast - preset_c) > 1e-6 or abs(self.atmospheric_brightness - preset_b) > 1e-6:
+                    import logging
+                    logging.getLogger("disturbance").debug(f"Preset {self.atmospheric_preset} overwrites contrast {self.atmospheric_contrast}->{preset_c} brightness {self.atmospheric_brightness}->{preset_b}")
+                self.atmospheric_contrast = float(preset_c)
+                self.atmospheric_brightness = float(preset_b)
+            except Exception:
                 self.atmospheric_contrast = float(clip_field(self.atmospheric_contrast, *ATMOSPHERIC_CONTRAST_LIMITS))
                 self.atmospheric_brightness = float(clip_field(self.atmospheric_brightness, *ATMOSPHERIC_BRIGHTNESS_LIMITS))
         else:
@@ -237,7 +243,12 @@ class DisturbanceConfig(BaseValidatedConfig):
 
     @classmethod
     def from_dict(cls, data: dict) -> "DisturbanceConfig":
-        known = {k: v for k, v in data.items() if k in DISTURBANCE_DEFAULTS or k in DISTURBANCE_LIMITS or k in ("atmospheric_preset", "platform_profile", "enable_salt_pepper", "enable_gaussian", "enable_poisson")}
+        allowed = set(DISTURBANCE_DEFAULTS.keys()) | set(DISTURBANCE_LIMITS.keys()) | {"atmospheric_preset", "platform_profile", "enable_salt_pepper", "enable_gaussian", "enable_poisson"}
+        unknown = [k for k in data.keys() if k not in allowed]
+        if unknown:
+            import logging
+            logging.getLogger("disturbance").warning(f"Ignoring unknown disturbance keys: {unknown}")
+        known = {k: v for k, v in data.items() if k in allowed}
         merged = {**DISTURBANCE_DEFAULTS, **known}
         # ensure all dataclass fields covered
         allowed = set(cls.__dataclass_fields__.keys())

@@ -7,13 +7,18 @@ from detection.constants import MORPH_KERNEL
 
 def to_grayscale(frame: np.ndarray) -> np.ndarray:
     """
-    Convert BGR or already-gray frame to single-channel grayscale.
+    Convert BGR/BGRA or already-gray frame to single-channel grayscale.
 
     Physics: For BGR, OpenCV uses Y = 0.114·B + 0.587·G + 0.299·R.
     Beacon is white (255,255,255) → Y≈255, background ~12 → Y≈12, so threshold separates well.
     """
     if frame.ndim == 3:
-        return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        if frame.shape[2] == 4:
+            return cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
+        elif frame.shape[2] == 3:
+            return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        elif frame.shape[2] == 1:
+            return frame.squeeze(axis=2)
     return frame
 
 def threshold_frame(gray: np.ndarray, brightness_threshold: int) -> np.ndarray:
