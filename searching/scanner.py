@@ -110,6 +110,8 @@ class Scanner:
         self._rng = np.random.default_rng(int(seed))
         self._last_step_time: float = 0.0
         self._waypoint: tuple[float, float] | None = None
+        self._search_center: tuple[float, float] | None = None
+        self._search_radius_expand: float = 0.0
 
     def reset(self) -> None:
         """Reset scan on entering SEARCHING (clears dwell/offset)."""
@@ -117,6 +119,21 @@ class Scanner:
         self._dwell_counter = 0
         self._cached_offset = None
         self._waypoint: tuple[float, float] | None = None
+        # keep _search_center for reacquisition bias (do not clear here)
+        self._search_radius_expand = 0.0
+
+    def set_search_center(self, wx: float, wy: float) -> None:
+        """Set center for expanding search (e.g., last predicted world pos)."""
+        try:
+            self._search_center = (float(wx), float(wy))
+            self._search_radius_expand = 0.0
+            self._waypoint = None
+        except Exception:
+            pass
+
+    def clear_search_center(self) -> None:
+        self._search_center = None
+        self._search_radius_expand = 0.0
 
     def next(
         self,
@@ -190,12 +207,30 @@ class Scanner:
                         import numpy as np
 
                         fx, fy = float(fov_w), float(fov_h)
-                        lo_x, hi_x = fx / 2 + 20, sw - fx / 2 - 20
-                        lo_y, hi_y = fy / 2 + 20, sh - fy / 2 - 20
-                        lo_x, hi_x = max(0, lo_x), max(lo_x + 1, hi_x)
-                        lo_y, hi_y = max(0, lo_y), max(lo_y + 1, hi_y)
-                        wx = float(self._rng.uniform(lo_x, hi_x))
-                        wy = float(self._rng.uniform(lo_y, hi_y))
+                        # If we have a search center (last predicted), expand around it (P2 reacquisition)
+                        if self._search_center is not None:
+                            cx, cy = self._search_center
+                            # expanding spiral radius 60,120,180...
+                            self._search_radius_expand += 18.0
+                            # cap to scene size
+                            max_r = min(sw, sh) * 0.45
+                            r = min(self._search_radius_expand, max_r)
+                            # random angle for coverage
+                            ang = float(self._rng.uniform(0, 2 * math.pi))
+                            # jitter radius 0.5r..r
+                            rr = r * float(self._rng.uniform(0.5, 1.0))
+                            wx = float(np.clip(cx + rr * math.cos(ang), fx / 2 + 20, sw - fx / 2 - 20))
+                            wy = float(np.clip(cy + rr * math.sin(ang), fy / 2 + 20, sh - fy / 2 - 20))
+                            # after 8 waypoints around center, clear to go uniform
+                            if self._search_radius_expand > max_r * 0.9:
+                                self._search_center = None
+                        else:
+                            lo_x, hi_x = fx / 2 + 20, sw - fx / 2 - 20
+                            lo_y, hi_y = fy / 2 + 20, sh - fy / 2 - 20
+                            lo_x, hi_x = max(0, lo_x), max(lo_x + 1, hi_x)
+                            lo_y, hi_y = max(0, lo_y), max(lo_y + 1, hi_y)
+                            wx = float(self._rng.uniform(lo_x, hi_x))
+                            wy = float(self._rng.uniform(lo_y, hi_y))
                         self._waypoint = (wx, wy)
                     wx, wy = self._waypoint  # type: ignore
                     dx = float(wx) - float(current_pan)

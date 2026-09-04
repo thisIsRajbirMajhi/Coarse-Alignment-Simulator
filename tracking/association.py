@@ -161,5 +161,41 @@ def associate_detections(
         except Exception:
             return None
 
-    # No gated hit -> no association (do not fallback to truth)
+    # No gated hit -> try circular fallback within fallback_radius (handles camera-motion shift
+    # during ACQUIRED/search without jumping to distant distractor)
+    try:
+        r = float(fallback_radius_px)
+        r2 = r * r
+        best = None
+        best_dist2 = float("inf")
+        best_conf = -1.0
+        for d in detections:
+            try:
+                xy = (float(d["x"]), float(d["y"]))
+            except Exception:
+                continue
+            dx = xy[0] - float(pred_xy[0])
+            dy = xy[1] - float(pred_xy[1])
+            d2 = dx * dx + dy * dy
+            if d2 <= r2:
+                if d2 < best_dist2:
+                    best_dist2 = d2
+                    best = d
+                    try:
+                        best_conf = float(d.get("confidence", 0.0))
+                    except Exception:
+                        best_conf = 0.0
+                elif abs(d2 - best_dist2) < 1e-9:
+                    try:
+                        conf = float(d.get("confidence", 0.0))
+                    except Exception:
+                        conf = 0.0
+                    if conf > best_conf:
+                        best = d
+                        best_conf = conf
+        if best is not None:
+            return (float(best["x"]), float(best["y"]))
+    except Exception:
+        pass
+    # No hit within gate or fallback -> no association (do not pick distant distractor)
     return None

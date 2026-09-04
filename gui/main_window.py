@@ -309,9 +309,11 @@ class MainWindow(StateMixin, QMainWindow):
                 pat = "random"
             self.scanner = Scanner(pattern=pat, scan_radius=90.0, dwell_frames=int(getattr(s_cfg, "scan_dwell_frames", 2)), seed=int(getattr(self.env_config, "seed", 42) or 42) + 7919)
             self._last_search_status = None
+            self._last_est_world = None
         except Exception:
             self.scanner = None
             self._last_search_status = None
+            self._last_est_world = None
 
     def _build_ui(self):
         central = QWidget()
@@ -2084,19 +2086,9 @@ class MainWindow(StateMixin, QMainWindow):
             else:  # searching / acquired
                 _chi2, _fb = 25.0, 80.0
             detection = associate_detections(all_dets, pred_xy, cov, chi2_threshold=_chi2, fallback_radius_px=_fb)
-            # P1 fallback: when not yet locked, camera motion shifts beacon in FOV beyond tight gate.
-            # If gated association missed but a blob exists, pick brightest to keep acquisition alive
-            # (TRACKING keeps strict gate to reject distractors; SEARCH/ACQUIRED/LOST are permissive)
-            if detection is None and _st_val != "tracking" and all_dets:
-                try:
-                    # brightest already sorted, but ensure confidence max
-                    best = max(all_dets, key=lambda d: float(d.get("confidence", 0)))
-                    detection = (float(best["x"]), float(best["y"]))
-                except Exception:
-                    try:
-                        detection = (float(all_dets[0]["x"]), float(all_dets[0]["y"]))
-                    except Exception:
-                        detection = None
+            # Note: associate already does circular fallback (fallback_radius) for
+            # SEARCH/ACQUIRED/LOST so camera-motion shift (~30px) is tolerated
+            # without jumping to distant distractor (>80px). No extra brightest fallback.
         except Exception:
             # Fallback: brightest blob (detector already sorted by confidence)
             try:
@@ -2149,39 +2141,77 @@ class MainWindow(StateMixin, QMainWindow):
             except TypeError:
                 # Back-compat fallback (PTZCamera without dt)
                 self.camera.move(d_pan, d_tilt)
-        # ── P1 Autonomous search: move camera randomly when SEARCHING/LOST until target found ──
-        # When not TRACKING/ACQUIRED, Kalman has no reliable estimate -> PID above not executed.
-        # Instead drive scanner so FOV wanders randomly (respecting slew via camera.move dt path).
-        # Tracker prediction continues to coast in LOST for reacquisition, but search still helps.
+        # ── P1/P2 Autonomous search + LOST prediction chase ──
+        # SEARCHING: no estimate -> random waypoint search (blind, covers world)
+        # LOST: has coasting estimate (Kalman predicts) -> chase prediction via PID above,
+        #       plus tiny expanding spiral if coast drifts (not random uniform)
+        # ACQUIRED/TRACKING: PID only (probation/locked)
         try:
             status = self.tracker.status
             is_searching = (status == LockStatus.SEARCHING)
             is_lost = (status == LockStatus.LOST)
-            # ACQUIRED still uses PID (probation), but if estimate is None we also nudge search
-            should_search = is_searching or is_lost or (estimate is None and status != LockStatus.TRACKING)
+            # Only SEARCHING (or no estimate at all) gets random scanner drive.
+            # LOST with coasting estimate is handled by PID chase above, not random.
+            should_search = is_searching or (estimate is None and status != LockStatus.TRACKING and status != LockStatus.LOST)
+            # Special: if LOST but estimate is None (grace expired -> SEARCHING soon) treat as SEARCHING
+            if is_lost and estimate is None:
+                should_search = True
+                is_searching = True
+            # Keep last estimate world for reacquisition bias (P2)
+            try:
+                if estimate is not None:
+                    # estimate is FOV coords, convert to world via current fov origin
+                    _est_wx = float(fov_x0) + float(estimate[0])
+                    _est_wy = float(fov_y0) + float(estimate[1])
+                    self._last_est_world = (_est_wx, _est_wy)
+                elif not hasattr(self, "_last_est_world"):
+                    self._last_est_world = None
+            except Exception:
+                pass
             if should_search and hasattr(self, "scanner") and self.scanner is not None:
-                # reset scanner on transition into SEARCHING
                 if getattr(self, "_last_search_status", None) != status:
-                    if status == LockStatus.SEARCHING:
+                    if status == LockStatus.SEARCHING or (is_lost and estimate is None):
                         try:
                             self.scanner.reset()
                         except Exception:
                             pass
-                # LOST: also coast prediction via tracker.peek_predict already, but add small search bias
-                # to expand coverage (P drifts, search adds random walk)
+                        # P2: bias search around last predicted world (if we have it) for reacquisition
+                        try:
+                            if getattr(self, "_last_est_world", None) is not None and status == LockStatus.SEARCHING:
+                                # only bias if we recently lost (not cold start)
+                                prev = getattr(self, "_last_search_status", None)
+                                if prev == LockStatus.LOST or prev == LockStatus.ACQUIRED:
+                                    wx, wy = self._last_est_world  # type: ignore
+                                    self.scanner.set_search_center(float(wx), float(wy))
+                        except Exception:
+                            pass
                 try:
                     dx, dy = self.scanner.next(dt=float(dt), fov_w=float(self.camera.fov_width), fov_h=float(self.camera.fov_height), current_pan=float(self.camera.pan), current_tilt=float(self.camera.tilt), scene_bounds=self._scene_size)
                 except TypeError:
                     dx, dy = self.scanner.next(dt=float(dt), fov_w=float(self.camera.fov_width), fov_h=float(self.camera.fov_height))
-                # In LOST, halve search amplitude since Kalman coast still gives direction
-                if is_lost:
-                    dx *= 0.5
-                    dy *= 0.5
-                # camera.move respects slew+quantize+latency+clamp; dt ensures slew limit in px/s
                 try:
                     self.camera.move(float(dx), float(dy), float(dt))
                 except TypeError:
                     self.camera.move(float(dx), float(dy))
+            elif is_lost and estimate is not None:
+                # LOST with coast: PID above already chased predicted position.
+                # Add tiny expanding search bias only if coast is stale (misses >5)
+                # so FOV spirals around predicted point to reacquire after occlusion.
+                try:
+                    misses = int(getattr(self.tracker._state, "misses", 0) or getattr(self.tracker, "_consecutive_misses", 0))
+                except Exception:
+                    misses = 6
+                if misses > 7:
+                    # small spiral around predicted point (expanding)
+                    import math
+                    r = 12.0 * math.sqrt(max(0, misses - 7))
+                    theta = misses * 1.2
+                    sx = r * math.cos(theta)
+                    sy = r * math.sin(theta)
+                    try:
+                        self.camera.move(float(sx) * 0.15, float(sy) * 0.15, float(dt))
+                    except Exception:
+                        pass
             self._last_search_status = status
         except Exception:
             pass
