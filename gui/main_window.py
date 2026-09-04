@@ -2066,6 +2066,9 @@ class MainWindow(StateMixin, QMainWindow):
         # ── P0 Blind PAT: no truth oracle for association ──
         # Association uses only detector output + Kalman prediction, no target.x/y.
         # Truth is used only post-hoc for scoring (hitbox_hit/center_hit), not gating.
+        _det_dict = None
+        _det_area = None
+        _det_peak = None
         try:
             from tracking.association import associate_detections
             pred_xy = self.tracker.peek_predict(float(dt_eff)) if hasattr(self.tracker, "peek_predict") else getattr(self.tracker, "estimated_position", None)
@@ -2083,7 +2086,38 @@ class MainWindow(StateMixin, QMainWindow):
                 _chi2, _fb = 16.0, 60.0
             else:  # searching / acquired
                 _chi2, _fb = 25.0, 80.0
-            detection = associate_detections(all_dets, pred_xy, cov, chi2_threshold=_chi2, fallback_radius_px=_fb)
+            # Phase 3: signature pre-filter when locked (rejects distractors with very different area/peak)
+            _filtered_dets = all_dets
+            try:
+                if _st_val == "tracking" and hasattr(self.tracker, "is_signature_locked") and self.tracker.is_signature_locked():
+                    tmp = []
+                    for d in all_dets:
+                        try:
+                            s = float(self.tracker.get_signature_score(float(d.get("area", 0)), float(d.get("peak", 0))))
+                        except Exception:
+                            s = 1.0
+                        if s > 0.30:
+                            tmp.append(d)
+                    if tmp:
+                        _filtered_dets = tmp
+            except Exception:
+                _filtered_dets = all_dets
+            detection = associate_detections(_filtered_dets, pred_xy, cov, chi2_threshold=_chi2, fallback_radius_px=_fb)
+            # keep detection dict for signature area/peak
+            if detection is not None:
+                for d in _filtered_dets:
+                    try:
+                        if abs(float(d["x"]) - float(detection[0])) < 1e-6 and abs(float(d["y"]) - float(detection[1])) < 1e-6:
+                            _det_dict = d
+                            break
+                    except Exception:
+                        continue
+                if _det_dict is not None:
+                    try:
+                        _det_area = float(_det_dict.get("area", 0))
+                        _det_peak = float(_det_dict.get("peak", 0))
+                    except Exception:
+                        _det_area = _det_peak = None
             # Note: associate already does circular fallback (fallback_radius) for
             # SEARCH/ACQUIRED/LOST so camera-motion shift (~30px) is tolerated
             # without jumping to distant distractor (>80px). No extra brightest fallback.
@@ -2091,8 +2125,16 @@ class MainWindow(StateMixin, QMainWindow):
             # Fallback: brightest blob (detector already sorted by confidence)
             try:
                 detection = (float(all_dets[0]["x"]), float(all_dets[0]["y"])) if all_dets else None
+                if detection is not None and all_dets:
+                    try:
+                        _det_dict = all_dets[0]
+                        _det_area = float(_det_dict.get("area", 0))
+                        _det_peak = float(_det_dict.get("peak", 0))
+                    except Exception:
+                        _det_area = _det_peak = None
             except Exception:
                 detection = None
+                _det_area = _det_peak = None
         # Truth-based scoring for metrics only (does not influence detection)
         try:
             primary = self.target
@@ -2115,9 +2157,13 @@ class MainWindow(StateMixin, QMainWindow):
             center_hit = False
         # Kalman-aware update: pass dt_eff so filter can coast through dropout/occlusion
         try:
-            estimate = self.tracker.update(detection, dt=float(dt_eff))
+            # Phase 3: pass area/peak for signature learning
+            estimate = self.tracker.update(detection, dt=float(dt_eff), area=_det_area, peak=_det_peak)
         except TypeError:
-            estimate = self.tracker.update(detection)
+            try:
+                estimate = self.tracker.update(detection, dt=float(dt_eff))
+            except TypeError:
+                estimate = self.tracker.update(detection)
         tracking_error_px=None
         # Error to perfect center (not hitbox edge) for precision metrics
         if estimate is not None:

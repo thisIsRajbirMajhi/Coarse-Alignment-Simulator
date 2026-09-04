@@ -9,6 +9,7 @@ from tracking.constants import TRACKER_DEFAULTS
 from tracking.filter import ExponentialFilter
 from tracking.imm import IMMFilter
 from tracking.kalman import KalmanFilter
+from tracking.signature import BeaconSignature
 from tracking.state import LockStatus, LockStateMachine
 
 # Re-export LockStatus for backward compat `from tracking.tracker import LockStatus`
@@ -63,10 +64,14 @@ class Tracker:
         self._kalman = KalmanFilter(process_var=12.0, meas_var=4.0)
         # Phase 2: IMM with 3 models (still/CV/maneuver) — used when dt provided, more robust to curved/spiral
         self._imm = IMMFilter(qs=(2.0, 12.0, 38.0), meas_var=4.0)
+        # Phase 3: photometric signature for ID confirmation (rejects distractors after lock)
+        self._signature = BeaconSignature(window=5)
 
         # Mirror for backward compat (tests read _consecutive_hits etc.)
         self._consecutive_hits: int = 0
         self._consecutive_misses: int = 0
+        self._last_detection_area: float | None = None
+        self._last_detection_peak: float | None = None
 
     # Config bridge — -apply without rebuild
 
@@ -103,19 +108,20 @@ class Tracker:
 
     # Update — per-frame detection (or None) → estimate + status
 
-    def update(self, detection: tuple[float, float] | None, dt: float | None = None) -> tuple[float, float] | None:
+    def update(self, detection: tuple[float, float] | None, dt: float | None = None, area: float | None = None, peak: float | None = None) -> tuple[float, float] | None:
         """
         Feed this frame's detection (or None) — returns current best estimate.
 
         Modes:
           - dt is None (legacy, tests): exponential smoothing y=α·y_prev+(1-α)·x, holds on miss.
-          - dt is float (robust): Kalman constant-velocity predict(dt)+update(z).
-            On miss, Kalman coasts with velocity → handles occlusion/dropout.
-            On hit, Kalman corrects and provides velocity for next coast.
+          - dt is float (robust): IMM/Kalman predict(dt)+update(z).
+            On miss, coasts with velocity → handles occlusion/dropout.
+            On hit, corrects and provides velocity for next coast.
+        Signature: area/peak are recorded for ID confirmation (Phase 3).
 
         Steps (dt path):
-          1) Kalman predict(dt) if already initialized
-          2) If hit: Kalman update(z); else: keep predicted state
+          1) Predict(dt) if already initialized
+          2) If hit: update(z); else: keep predicted state
           3) State machine + lifecycle same as legacy
         Returns estimate for controller/GUI (None when SEARCHING).
         """
@@ -133,6 +139,17 @@ class Tracker:
                 detection = None
         else:
             has_det = False
+        # Phase 3: store last detection meta for signature
+        if has_det:
+            try:
+                self._last_detection_area = float(area) if area is not None else None
+                self._last_detection_peak = float(peak) if peak is not None else None
+            except Exception:
+                self._last_detection_area = None
+                self._last_detection_peak = None
+        else:
+            self._last_detection_area = None
+            self._last_detection_peak = None
 
         # Filter path selection
         if dt is not None and dt > 1e-9:
@@ -199,6 +216,12 @@ class Tracker:
         # State machine — updates status and decides if estimate should be cleared
         new_status = self._state.update(bool(has_det))
         self.status = new_status
+        # Phase 3: signature update (learns after ACQUIRED, scores in TRACKING)
+        try:
+            if hasattr(self, "_signature"):
+                self._signature.update(self._last_detection_area, self._last_detection_peak, bool(has_det))
+        except Exception:
+            pass
 
         # Sync mirror counters for backward compat
         self._consecutive_hits = int(self._state.hits)
@@ -213,6 +236,10 @@ class Tracker:
                 self._imm.reset()
             except Exception:
                 pass
+            try:
+                self._signature.reset()
+            except Exception:
+                pass
             self._state.should_clear_estimate = False
 
         # Keep filters in sync when estimate is cleared externally
@@ -222,6 +249,10 @@ class Tracker:
                 self._kalman.reset()
                 try:
                     self._imm.reset()
+                except Exception:
+                    pass
+                try:
+                    self._signature.reset()
                 except Exception:
                     pass
 
@@ -296,6 +327,23 @@ class Tracker:
         except Exception:
             pass
         return None
+
+    def get_signature_score(self, area: float, peak: float) -> float:
+        """Score detection area/peak vs learned signature (1=match, <0.5=distractor)."""
+        try:
+            if hasattr(self, "_signature"):
+                return float(self._signature.score(float(area), float(peak)))
+        except Exception:
+            pass
+        return 1.0
+
+    def is_signature_locked(self) -> bool:
+        try:
+            if hasattr(self, "_signature"):
+                return bool(self._signature.is_locked())
+        except Exception:
+            pass
+        return False
 
     def get_state_vector(self) -> np.ndarray | None:
         """Return IMM/Kalman state [x,y,vx,vy] or None — mirrors Target.get_state_vector()."""
