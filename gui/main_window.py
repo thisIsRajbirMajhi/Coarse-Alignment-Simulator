@@ -2212,16 +2212,40 @@ class MainWindow(StateMixin, QMainWindow):
             cx, cy = self.camera.fov_width/2, self.camera.fov_height/2
             err_x, err_y = estimate[0]-cx, estimate[1]-cy
             tracking_error_px=float(np.hypot(err_x, err_y))
-            # Control — PID with dead zone, output clamp respecting camera slew, update rate (robust)
-            # Pass dt and camera max slew for clamp → controller respects actuator limits, no double-define
+            # Phase 5: auto-tune Kp based on tracking error (keep <5px)
+            try:
+                if self.tracker.status.value == "tracking" and tracking_error_px is not None:
+                    err = float(tracking_error_px)
+                    kp = float(self.controller.config.kp)
+                    if err > 12 and kp < 0.45:
+                        self.controller.config.kp = float(min(0.50, kp * 1.008))
+                    elif err < 4 and kp > 0.18:
+                        self.controller.config.kp = float(max(0.15, kp * 0.998))
+                    # also nudge dead_zone if error noisy
+            except Exception:
+                pass
+            # Control — PID + velocity feedforward (Phase 5) with dead zone, output clamp respecting camera slew
             try:
                 cam_slew = float(self.camera_config.max_slew_rate) if hasattr(self, "camera_config") else None
             except: cam_slew = None
+            # Phase 5: get velocity from IMM for feedforward (px/s in FOV)
+            _vel_x = _vel_y = None
             try:
-                d_pan,d_tilt=self.controller.compute_correction(err_x, err_y, dt=dt, camera_max_slew=cam_slew)
+                vel = self.tracker.get_velocity()
+                if vel is not None:
+                    _vel_x, _vel_y = float(vel[0]), float(vel[1])
+                    # clamp insane velocity (outlier rejection was 800)
+                    if abs(_vel_x) > 800 or abs(_vel_y) > 800:
+                        _vel_x = _vel_y = None
+            except Exception:
+                _vel_x = _vel_y = None
+            try:
+                d_pan,d_tilt=self.controller.compute_correction(err_x, err_y, dt=dt, camera_max_slew=cam_slew, vel_x=_vel_x, vel_y=_vel_y)
             except TypeError:
-                # Back-compat fallback (old Proportional without dt/camera)
-                d_pan,d_tilt=self.controller.compute_correction(err_x, err_y)
+                try:
+                    d_pan,d_tilt=self.controller.compute_correction(err_x, err_y, dt=dt, camera_max_slew=cam_slew)
+                except TypeError:
+                    d_pan,d_tilt=self.controller.compute_correction(err_x, err_y)
             try:
                 self.camera.move(d_pan, d_tilt, dt)
             except TypeError:

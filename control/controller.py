@@ -72,7 +72,11 @@ class PIDController:
         self.config.kp = float(value)
         self.config.validate()
 
-    def compute_correction(self, error_x: float, error_y: float, dt: float | None = None, camera_max_slew: float | None = None) -> tuple[float, float]:
+    def compute_correction(self, error_x: float, error_y: float, dt: float | None = None, camera_max_slew: float | None = None, vel_x: float | None = None, vel_y: float | None = None) -> tuple[float, float]:
+        """
+        PID + optional velocity feedforward (Phase 5).
+        vel_x/y in px/s from tracker (FOV coords) → ff = ff_gain * vel * dt anticipates motion.
+        """
         err_mag = math.hypot(float(error_x), float(error_y))
         if err_mag < float(self.config.dead_zone):
             # inside dead zone: freeze/reset integral to avoid windup, clear derivative
@@ -142,8 +146,30 @@ class PIDController:
             self._prev_error_y = float(error_y)
             if self.config.controller_type != "PID":
                 self._prev_deriv_x = 0.0; self._prev_deriv_y = 0.0
-        u_x = float(p_x + i_x + d_x)
-        u_y = float(p_y + i_y + d_y)
+        # Phase 5: velocity feedforward (anticipates target motion, cuts lag on 120px/s)
+        ff_x = 0.0; ff_y = 0.0
+        if vel_x is not None and vel_y is not None and dt is not None:
+            try:
+                # ff_gain 0.35 is conservative (35% of velocity), clamped by slew later
+                ff_gain = 0.35
+                # allow config override if present
+                try:
+                    ff_gain = float(getattr(self.config, "ff_gain", 0.35))
+                except Exception:
+                    ff_gain = 0.35
+                ff_x = float(ff_gain * float(vel_x) * float(dt))
+                ff_y = float(ff_gain * float(vel_y) * float(dt))
+                # limit ff to 40% of clamp to avoid overshoot on noisy velocity
+                try:
+                    lim = float(self.config.output_clamp) * 0.4
+                    ff_x = float(np.clip(ff_x, -lim, lim))
+                    ff_y = float(np.clip(ff_y, -lim, lim))
+                except Exception:
+                    pass
+            except Exception:
+                ff_x = ff_y = 0.0
+        u_x = float(p_x + i_x + d_x + ff_x)
+        u_y = float(p_y + i_y + d_y + ff_y)
         clamp = float(self.config.output_clamp)
         if camera_max_slew is not None:
             try:
