@@ -296,6 +296,22 @@ class MainWindow(StateMixin, QMainWindow):
         self._minimap_thumb: np.ndarray | None = None
         self._minimap_thumb_size: tuple[int,int] | None = None
         self._minimap_scene_id: int | None = None
+        # P1 Autonomous search scanner — moves camera randomly when SEARCHING/LOST until target found
+        # Uses SearchingStrategy random pattern, respects camera slew via camera.move(d_pan,d_tilt,dt)
+        try:
+            from searching.scanner import Scanner, ScanPattern
+            from searching.config import SearchingConfig
+            # derive pattern/dwell from config (defaults to random/spiral)
+            s_cfg = SearchingConfig().validate()
+            # prefer random per spec, but allow config override
+            pat = getattr(s_cfg, "scan_pattern", "random")
+            if str(pat).lower() not in ("random", "spiral", "raster"):
+                pat = "random"
+            self.scanner = Scanner(pattern=pat, scan_radius=90.0, dwell_frames=int(getattr(s_cfg, "scan_dwell_frames", 2)), seed=int(getattr(self.env_config, "seed", 42) or 42) + 7919)
+            self._last_search_status = None
+        except Exception:
+            self.scanner = None
+            self._last_search_status = None
 
     def _build_ui(self):
         central = QWidget()
@@ -2054,7 +2070,33 @@ class MainWindow(StateMixin, QMainWindow):
             from tracking.association import associate_detections
             pred_xy = self.tracker.peek_predict(float(dt_eff)) if hasattr(self.tracker, "peek_predict") else getattr(self.tracker, "estimated_position", None)
             cov = self.tracker.get_innovation_cov() if hasattr(self.tracker, "get_innovation_cov") else None
-            detection = associate_detections(all_dets, pred_xy, cov, chi2_threshold=9.21, fallback_radius_px=35.0)
+            # P1: adaptive gate — tight when TRACKING, loose during SEARCH/ACQUIRED/LOST
+            # so camera motion during search/acquisition does not reject true beacon
+            _st = getattr(self.tracker, "status", None)
+            try:
+                _st_val = _st.value if hasattr(_st, "value") else str(_st)
+            except Exception:
+                _st_val = "searching"
+            if _st_val == "tracking":
+                _chi2, _fb = 9.21, 35.0
+            elif _st_val == "lost":
+                _chi2, _fb = 16.0, 60.0
+            else:  # searching / acquired
+                _chi2, _fb = 25.0, 80.0
+            detection = associate_detections(all_dets, pred_xy, cov, chi2_threshold=_chi2, fallback_radius_px=_fb)
+            # P1 fallback: when not yet locked, camera motion shifts beacon in FOV beyond tight gate.
+            # If gated association missed but a blob exists, pick brightest to keep acquisition alive
+            # (TRACKING keeps strict gate to reject distractors; SEARCH/ACQUIRED/LOST are permissive)
+            if detection is None and _st_val != "tracking" and all_dets:
+                try:
+                    # brightest already sorted, but ensure confidence max
+                    best = max(all_dets, key=lambda d: float(d.get("confidence", 0)))
+                    detection = (float(best["x"]), float(best["y"]))
+                except Exception:
+                    try:
+                        detection = (float(all_dets[0]["x"]), float(all_dets[0]["y"]))
+                    except Exception:
+                        detection = None
         except Exception:
             # Fallback: brightest blob (detector already sorted by confidence)
             try:
@@ -2107,8 +2149,44 @@ class MainWindow(StateMixin, QMainWindow):
             except TypeError:
                 # Back-compat fallback (PTZCamera without dt)
                 self.camera.move(d_pan, d_tilt)
+        # ── P1 Autonomous search: move camera randomly when SEARCHING/LOST until target found ──
+        # When not TRACKING/ACQUIRED, Kalman has no reliable estimate -> PID above not executed.
+        # Instead drive scanner so FOV wanders randomly (respecting slew via camera.move dt path).
+        # Tracker prediction continues to coast in LOST for reacquisition, but search still helps.
+        try:
+            status = self.tracker.status
+            is_searching = (status == LockStatus.SEARCHING)
+            is_lost = (status == LockStatus.LOST)
+            # ACQUIRED still uses PID (probation), but if estimate is None we also nudge search
+            should_search = is_searching or is_lost or (estimate is None and status != LockStatus.TRACKING)
+            if should_search and hasattr(self, "scanner") and self.scanner is not None:
+                # reset scanner on transition into SEARCHING
+                if getattr(self, "_last_search_status", None) != status:
+                    if status == LockStatus.SEARCHING:
+                        try:
+                            self.scanner.reset()
+                        except Exception:
+                            pass
+                # LOST: also coast prediction via tracker.peek_predict already, but add small search bias
+                # to expand coverage (P drifts, search adds random walk)
+                try:
+                    dx, dy = self.scanner.next(dt=float(dt), fov_w=float(self.camera.fov_width), fov_h=float(self.camera.fov_height), current_pan=float(self.camera.pan), current_tilt=float(self.camera.tilt), scene_bounds=self._scene_size)
+                except TypeError:
+                    dx, dy = self.scanner.next(dt=float(dt), fov_w=float(self.camera.fov_width), fov_h=float(self.camera.fov_height))
+                # In LOST, halve search amplitude since Kalman coast still gives direction
+                if is_lost:
+                    dx *= 0.5
+                    dy *= 0.5
+                # camera.move respects slew+quantize+latency+clamp; dt ensures slew limit in px/s
+                try:
+                    self.camera.move(float(dx), float(dy), float(dt))
+                except TypeError:
+                    self.camera.move(float(dx), float(dy))
+            self._last_search_status = status
+        except Exception:
+            pass
         is_locked=self.tracker.status==LockStatus.TRACKING
-        # Real-time accurate: detected = primary hitbox hit (not any distractor) + dt for time accounting
+        # Real-time accurate: detected = blind association hit (penalizes distractor latch) + dt for time accounting
         self.perf.log_frame(is_locked, tracking_error_px, time.time()-frame_start,
                             detected=hitbox_hit, hitbox_hit=hitbox_hit, center_hit=center_hit,
                             lock_state=self.tracker.status.value, dt=dt)
