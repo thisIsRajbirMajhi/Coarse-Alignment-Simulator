@@ -2155,6 +2155,48 @@ class MainWindow(StateMixin, QMainWindow):
         except Exception:
             hitbox_hit = False
             center_hit = False
+        # Phase 4: coarse-to-fine FOV — coarse 640 for search, fine 320 for lock
+        try:
+            _cur_fov = int(getattr(self.camera, "fov_width", 640))
+            _desired_fov = 320 if getattr(self.tracker, "status", None) and self.tracker.status.value == "tracking" else 640
+            # only adjust when status stable for 3 frames to avoid flicker
+            if not hasattr(self, "_fov_stable_count"):
+                self._fov_stable_count = 0
+                self._last_fov_status = None
+            _st_val2 = getattr(self.tracker, "status", None).value if hasattr(getattr(self.tracker, "status", None), "value") else "searching"
+            if _st_val2 != getattr(self, "_last_fov_status", None):
+                self._fov_stable_count = 0
+                self._last_fov_status = _st_val2
+            else:
+                self._fov_stable_count += 1
+            if _cur_fov != _desired_fov and self._fov_stable_count >= 3:
+                # apply coarse-to-fine: update camera FOV, keep center
+                try:
+                    self.camera.fov_width = int(_desired_fov)
+                    self.camera.fov_height = int(_desired_fov * 480 / 640)  # keep aspect 4:3 -> 320x240 or 640x480
+                    self.camera._sync_fov_from_config() if hasattr(self.camera, "_sync_fov_from_config") else None
+                    # keep config in sync
+                    try:
+                        self.camera.config.fov_width = int(self.camera.fov_width)
+                        self.camera.config.fov_height = int(self.camera.fov_height)
+                    except Exception:
+                        pass
+                    self._fov_size = (int(self.camera.fov_width), int(self.camera.fov_height))
+                    # re-clamp pan/tilt
+                    try:
+                        self.camera._clamp_to_range()
+                    except Exception:
+                        pass
+                    # reset scanner visited when FOV changes (coverage changes)
+                    try:
+                        if hasattr(self, "scanner") and self.scanner is not None:
+                            self.scanner._visited = np.zeros((self.scanner._grid_n, self.scanner._grid_n), dtype=int)
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
         # Kalman-aware update: pass dt_eff so filter can coast through dropout/occlusion
         try:
             # Phase 3: pass area/peak for signature learning

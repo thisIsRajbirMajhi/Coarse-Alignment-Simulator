@@ -112,6 +112,9 @@ class Scanner:
         self._waypoint: tuple[float, float] | None = None
         self._search_center: tuple[float, float] | None = None
         self._search_radius_expand: float = 0.0
+        # Phase 4: visited grid 8x8 for information-driven search (least-visited cell)
+        self._grid_n = 8
+        self._visited = np.zeros((self._grid_n, self._grid_n), dtype=int)
 
     def reset(self) -> None:
         """Reset scan on entering SEARCHING (clears dwell/offset)."""
@@ -194,6 +197,15 @@ class Scanner:
             if current_pan is not None and current_tilt is not None and scene_bounds is not None:
                 try:
                     # generate new waypoint if needed or reached
+                    # Phase 4: mark current pan as visited
+                    try:
+                        fx, fy = float(fov_w), float(fov_h)
+                        sw2, sh2 = scene_bounds
+                        gx = int(np.clip((float(current_pan) - fx/2) / max(1, (sw2 - fx)) * self._grid_n, 0, self._grid_n-1))
+                        gy = int(np.clip((float(current_tilt) - fy/2) / max(1, (sh2 - fy)) * self._grid_n, 0, self._grid_n-1))
+                        self._visited[gy, gx] = int(self._visited[gy, gx] + 0.2) + 1  # light increment for current pos
+                    except Exception:
+                        pass
                     need_new = False
                     if not hasattr(self, "_waypoint") or self._waypoint is None:
                         need_new = True
@@ -225,12 +237,34 @@ class Scanner:
                             if self._search_radius_expand > max_r * 0.9:
                                 self._search_center = None
                         else:
-                            lo_x, hi_x = fx / 2 + 20, sw - fx / 2 - 20
-                            lo_y, hi_y = fy / 2 + 20, sh - fy / 2 - 20
-                            lo_x, hi_x = max(0, lo_x), max(lo_x + 1, hi_x)
-                            lo_y, hi_y = max(0, lo_y), max(lo_y + 1, hi_y)
-                            wx = float(self._rng.uniform(lo_x, hi_x))
-                            wy = float(self._rng.uniform(lo_y, hi_y))
+                            # Phase 4: information-driven — pick least-visited cell
+                            try:
+                                # find least-visited cell(s)
+                                min_v = int(np.min(self._visited))
+                                candidates = np.argwhere(self._visited == min_v)
+                                # pick random among least-visited
+                                sel = int(self._rng.integers(0, len(candidates)))
+                                gy, gx = int(candidates[sel][0]), int(candidates[sel][1])
+                                # cell bounds
+                                cell_w = (sw - fx) / self._grid_n
+                                cell_h = (sh - fy) / self._grid_n
+                                lo_x = fx/2 + gx * cell_w + 20
+                                hi_x = fx/2 + (gx+1) * cell_w - 20
+                                lo_y = fy/2 + gy * cell_h + 20
+                                hi_y = fy/2 + (gy+1) * cell_h - 20
+                                lo_x, hi_x = max(fx/2+5, lo_x), max(lo_x+5, hi_x)
+                                lo_y, hi_y = max(fy/2+5, lo_y), max(lo_y+5, hi_y)
+                                wx = float(self._rng.uniform(lo_x, hi_x))
+                                wy = float(self._rng.uniform(lo_y, hi_y))
+                                # mark visited (increment)
+                                self._visited[gy, gx] += 1
+                            except Exception:
+                                lo_x, hi_x = fx / 2 + 20, sw - fx / 2 - 20
+                                lo_y, hi_y = fy / 2 + 20, sh - fy / 2 - 20
+                                lo_x, hi_x = max(0, lo_x), max(lo_x + 1, hi_x)
+                                lo_y, hi_y = max(0, lo_y), max(lo_y + 1, hi_y)
+                                wx = float(self._rng.uniform(lo_x, hi_x))
+                                wy = float(self._rng.uniform(lo_y, hi_y))
                         self._waypoint = (wx, wy)
                     wx, wy = self._waypoint  # type: ignore
                     dx = float(wx) - float(current_pan)
