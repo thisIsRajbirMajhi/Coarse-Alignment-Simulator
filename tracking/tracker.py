@@ -7,6 +7,7 @@ import numpy as np
 from tracking.config import TrackerConfig
 from tracking.constants import TRACKER_DEFAULTS
 from tracking.filter import ExponentialFilter
+from tracking.imm import IMMFilter
 from tracking.kalman import KalmanFilter
 from tracking.state import LockStatus, LockStateMachine
 
@@ -60,6 +61,8 @@ class Tracker:
         self.status = self._state.status
         # Kalman predictor for occlusion handling — seeded on first hit, coasts on miss (H4 fixed 40→12)
         self._kalman = KalmanFilter(process_var=12.0, meas_var=4.0)
+        # Phase 2: IMM with 3 models (still/CV/maneuver) — used when dt provided, more robust to curved/spiral
+        self._imm = IMMFilter(qs=(2.0, 12.0, 38.0), meas_var=4.0)
 
         # Mirror for backward compat (tests read _consecutive_hits etc.)
         self._consecutive_hits: int = 0
@@ -74,15 +77,24 @@ class Tracker:
         self.miss_limit = int(cfg.miss_limit)
         self._filter.set_smoothing(float(cfg.smoothing))
         self._state.set_thresholds(miss_limit=int(cfg.miss_limit), acquire_hits=int(cfg.acquire_hits), grace_mult=float(cfg.lost_grace_mult))
-        # Kalman tuning could be exposed via config in future; keep defaults for now
+        # Kalman/IMM tuning could be exposed via config in future; keep defaults for now
         if hasattr(cfg, "kalman_process_var"):
             try:
                 self._kalman.process_var = float(cfg.kalman_process_var)  # type: ignore
+                # keep IMM CV model in sync
+                if hasattr(self, "_imm"):
+                    self._imm.qs = (self._imm.qs[0], float(cfg.kalman_process_var), self._imm.qs[2])  # type: ignore
+                    for i, q in enumerate(self._imm.qs):
+                        self._imm.filters[i].process_var = float(q)  # type: ignore
             except:
                 pass
         if hasattr(cfg, "kalman_meas_var"):
             try:
                 self._kalman.meas_var = float(cfg.kalman_meas_var)  # type: ignore
+                if hasattr(self, "_imm"):
+                    self._imm.meas_var = float(cfg.kalman_meas_var)  # type: ignore
+                    for f in self._imm.filters:
+                        f.meas_var = float(cfg.kalman_meas_var)  # type: ignore
             except:
                 pass
 
@@ -124,32 +136,59 @@ class Tracker:
 
         # Filter path selection
         if dt is not None and dt > 1e-9:
-            # Kalman path — predicts through dropout
-            # Seed Kalman on first hit if not yet initialized
-            if has_det and not self._kalman.is_initialized():
-                # Seed with detection, zero velocity initially
-                self._kalman.init_from_measurement(detection)  # type: ignore
-                self.estimated_position = self._kalman.get_pos()
-                # Also seed exponential filter for consistency
-                self._filter.estimate = detection  # type: ignore
-            elif self._kalman.is_initialized():
-                # Predict forward
-                self._kalman.predict(float(dt))
-                if has_det:
-                    self._kalman.update(detection)  # type: ignore
-                    self._filter.update(detection)
+            # IMM path — predicts through dropout, handles curved/maneuver better than single CV
+            # Use IMM if available, fallback to single Kalman if IMM not initialized
+            imm = getattr(self, "_imm", None)
+            use_imm = imm is not None
+            if use_imm:
+                if has_det and not imm.is_initialized():
+                    imm.init_from_measurement(detection)  # type: ignore
+                    # keep Kalman in sync for legacy peek
+                    try:
+                        self._kalman.init_from_measurement(detection)  # type: ignore
+                    except Exception:
+                        pass
+                    self.estimated_position = imm.get_pos()
+                    self._filter.estimate = detection  # type: ignore
+                elif imm.is_initialized():
+                    imm.predict(float(dt))
+                    # keep Kalman in sync for get_innovation_cov fallback
+                    try:
+                        self._kalman.predict(float(dt))
+                    except Exception:
+                        pass
+                    if has_det:
+                        imm.update(detection)  # type: ignore
+                        try:
+                            self._kalman.update(detection)  # type: ignore
+                        except Exception:
+                            pass
+                        self._filter.update(detection)
+                    else:
+                        self._filter.update(None)
+                    kal_pos = imm.get_pos()
+                    if kal_pos is not None:
+                        self.estimated_position = kal_pos
                 else:
                     self._filter.update(None)
-                # Kalman position is the estimate (coasted or corrected)
-                kal_pos = self._kalman.get_pos()
-                if kal_pos is not None:
-                    self.estimated_position = kal_pos
-                # If kalman not yet initialized and no hit, hold previous estimate
-                # (estimated_position stays as last)
             else:
-                # No kalman yet and no hit — no estimate
-                self._filter.update(None)
-                # estimated_position stays None or last
+                # Fallback single Kalman (legacy)
+                if has_det and not self._kalman.is_initialized():
+                    self._kalman.init_from_measurement(detection)  # type: ignore
+                    self.estimated_position = self._kalman.get_pos()
+                    self._filter.estimate = detection  # type: ignore
+                elif self._kalman.is_initialized():
+                    self._kalman.predict(float(dt))
+                    if has_det:
+                        self._kalman.update(detection)  # type: ignore
+                        self._filter.update(detection)
+                    else:
+                        self._filter.update(None)
+                    kal_pos = self._kalman.get_pos()
+                    if kal_pos is not None:
+                        self.estimated_position = kal_pos
+                else:
+                    self._filter.update(None)
         else:
             # Legacy exponential path (tests, no dt)
             if has_det:
@@ -170,26 +209,44 @@ class Tracker:
             self.estimated_position = None
             self._filter.reset()
             self._kalman.reset()
+            try:
+                self._imm.reset()
+            except Exception:
+                pass
             self._state.should_clear_estimate = False
 
         # Keep filters in sync when estimate is cleared externally
         if self.estimated_position is None:
             self._filter.reset()
-            # Do not reset Kalman here if we are in SEARCHING but expect reacquisition?
-            # Keep Kalman reset only on clear; otherwise hold for prediction
             if self.status == LockStatus.SEARCHING:
                 self._kalman.reset()
+                try:
+                    self._imm.reset()
+                except Exception:
+                    pass
 
         return self.estimated_position
 
     def predict(self, dt: float) -> tuple[float, float] | None:
-        """Predict next position via Kalman (coast) without measurement — for gating."""
+        """Predict next position via IMM/Kalman (coast) without measurement — for gating."""
+        try:
+            if hasattr(self, "_imm") and self._imm.is_initialized():
+                return self._imm.predict(float(dt))
+        except Exception:
+            pass
         if self._kalman.is_initialized():
             return self._kalman.predict(float(dt))
         return self.estimated_position
 
     def get_innovation_cov(self) -> np.ndarray | None:
         """Return 2x2 innovation covariance S for blind gating, or None."""
+        try:
+            if hasattr(self, "_imm") and self._imm.is_initialized():
+                cov = self._imm.get_innovation_cov()
+                if cov is not None:
+                    return cov
+        except Exception:
+            pass
         try:
             if hasattr(self._kalman, "get_innovation_cov"):
                 return self._kalman.get_innovation_cov()
@@ -200,12 +257,24 @@ class Tracker:
     def peek_predict(self, dt: float) -> tuple[float, float] | None:
         """
         Non-mutating prediction for gating: returns predicted position without
-        advancing Kalman state. Used for association gate before update().
+        advancing state. Used for association gate before update().
+        Prefers IMM combined prediction.
         """
+        try:
+            if hasattr(self, "_imm") and self._imm.is_initialized():
+                # IMM peek: combine filtered states without mixing (approx)
+                s = self._imm.get_state()
+                if s is not None:
+                    dt = float(dt)
+                    if dt < 1e-6:
+                        return (float(s[0]), float(s[1]))
+                    # predict combined state
+                    return (float(s[0] + s[2] * dt), float(s[1] + s[3] * dt))
+        except Exception:
+            pass
         try:
             if not self._kalman.is_initialized():
                 return self.estimated_position
-            # copy state, predict on copy
             x = self._kalman.x.copy() if self._kalman.x is not None else None
             P = self._kalman.P.copy() if self._kalman.P is not None else None
             if x is None or P is None:
@@ -219,18 +288,40 @@ class Tracker:
         except Exception:
             return self.estimated_position
 
+    def get_mode_probs(self) -> np.ndarray | None:
+        """Return IMM mode probabilities [still, CV, maneuver] or None."""
+        try:
+            if hasattr(self, "_imm"):
+                return self._imm.get_mode_probs()
+        except Exception:
+            pass
+        return None
+
     def get_state_vector(self) -> np.ndarray | None:
-        """Return Kalman state [x,y,vx,vy] or None — mirrors Target.get_state_vector()."""
+        """Return IMM/Kalman state [x,y,vx,vy] or None — mirrors Target.get_state_vector()."""
+        try:
+            if hasattr(self, "_imm") and self._imm.is_initialized():
+                sv = self._imm.get_state()
+                if sv is not None:
+                    return np.array(sv, dtype=np.float64)
+        except Exception:
+            pass
         if self._kalman.is_initialized():
             sv = self._kalman.get_state_vector()
             if sv is not None:
                 return sv
-        # Fallback: derive from exponential estimate (vel 0)
         if self.estimated_position is not None:
             return np.array([self.estimated_position[0], self.estimated_position[1], 0.0, 0.0], dtype=np.float64)
         return None
 
     def get_velocity(self) -> tuple[float, float] | None:
+        try:
+            if hasattr(self, "_imm") and self._imm.is_initialized():
+                v = self._imm.get_vel()
+                if v is not None:
+                    return v
+        except Exception:
+            pass
         if self._kalman.is_initialized():
             return self._kalman.get_vel()
         return None
@@ -242,6 +333,10 @@ class Tracker:
         self._filter.reset()
         try:
             self._kalman.reset()
+        except:
+            pass
+        try:
+            self._imm.reset()
         except:
             pass
         self._state.reset()
