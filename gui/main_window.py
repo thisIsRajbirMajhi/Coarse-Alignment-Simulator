@@ -2047,57 +2047,40 @@ class MainWindow(StateMixin, QMainWindow):
             fov_x0, fov_y0 = int(fov_capture_x0), int(fov_capture_y0)
         else:
             fov_x0, fov_y0, _, _ = self.camera.get_fov_rect()
-        primary = self.target
-        # If target beacon itself is disabled, treat as not in viewport — ignore distractors
-        if not getattr(primary, "enabled", True):
-            detection = None
-            proj_x = proj_y = float("nan")
-            target_in_fov = False
-        else:
-            proj_x = primary.x - fov_x0
-            proj_y = primary.y - fov_y0
-            # Realtime hitbox-aware FOV test (large hitbox, not single pixel; dynamic per beacon)
-            target_in_fov = (
-                -primary.hitbox_radius <= proj_x <= self.camera.fov_width + primary.hitbox_radius and
-                -primary.hitbox_radius <= proj_y <= self.camera.fov_height + primary.hitbox_radius
-            )
+        # ── P0 Blind PAT: no truth oracle for association ──
+        # Association uses only detector output + Kalman prediction, no target.x/y.
+        # Truth is used only post-hoc for scoring (hitbox_hit/center_hit), not gating.
+        try:
+            from tracking.association import associate_detections
+            pred_xy = self.tracker.peek_predict(float(dt_eff)) if hasattr(self.tracker, "peek_predict") else getattr(self.tracker, "estimated_position", None)
+            cov = self.tracker.get_innovation_cov() if hasattr(self.tracker, "get_innovation_cov") else None
+            detection = associate_detections(all_dets, pred_xy, cov, chi2_threshold=9.21, fallback_radius_px=35.0)
+        except Exception:
+            # Fallback: brightest blob (detector already sorted by confidence)
+            try:
+                detection = (float(all_dets[0]["x"]), float(all_dets[0]["y"])) if all_dets else None
+            except Exception:
+                detection = None
+        # Truth-based scoring for metrics only (does not influence detection)
+        try:
+            primary = self.target
+            proj_x = float(primary.x) - float(fov_x0)
+            proj_y = float(primary.y) - float(fov_y0)
+            if detection is not None:
+                dist_to_truth = math.hypot(float(detection[0]) - proj_x, float(detection[1]) - proj_y)
+                hitbox_hit = dist_to_truth <= float(getattr(primary, "hitbox_radius", 14))
+                center_hit = dist_to_truth <= float(getattr(primary, "center_radius", 2))
+            else:
+                hitbox_hit = False
+                center_hit = False
+            # If target beacon disabled, it is truly not beaconing: score as miss
+            # (blind association may still latch onto distractor — scored as miss correctly)
+            if not getattr(primary, "enabled", True):
+                hitbox_hit = False
+                center_hit = False
+        except Exception:
             hitbox_hit = False
             center_hit = False
-            if not target_in_fov:
-                # Target leaves viewport — do NOT bother with distractors, report miss
-                detection = None
-            else:
-                # Multi-beacon robust gating: nearest-neighbor against last known target position
-                # rather than blind brightest. Prevents latching onto brighter non-target distractor.
-                # Gate center prefers tracker estimate (Kalman-predicted last position) over ground-truth
-                # cheat, fallback to ground truth when no estimate (SEARCHING).
-                gate_x, gate_y = proj_x, proj_y
-                gate_radius = primary.hitbox_radius
-                if self.tracker.estimated_position is not None and self.tracker.status != LockStatus.SEARCHING:
-                    try:
-                        # Use last filtered/Kalman estimate as gate (continuity)
-                        gate_x, gate_y = float(self.tracker.estimated_position[0]), float(self.tracker.estimated_position[1])
-                    except:
-                        gate_x, gate_y = proj_x, proj_y
-                detection = None
-                min_dist = float("inf")
-                # First try gate around last estimate (or ground truth if no estimate)
-                for d in all_dets:
-                    dist_c = math.hypot(d["x"] - gate_x, d["y"] - gate_y)
-                    if dist_c <= gate_radius and dist_c < min_dist:
-                        min_dist = dist_c
-                        detection = (d["x"], d["y"])
-                # Fallback: if gate missed (e.g., fast maneuver) try ground-truth projection
-                if detection is None and (gate_x != proj_x or gate_y != proj_y):
-                    min_dist = float("inf")
-                    for d in all_dets:
-                        dist_c = math.hypot(d["x"] - proj_x, d["y"] - proj_y)
-                        if dist_c <= primary.hitbox_radius and dist_c < min_dist:
-                            min_dist = dist_c
-                            detection = (d["x"], d["y"])
-                if detection is not None:
-                    hitbox_hit = True
-                    center_hit = min_dist <= primary.center_radius
         # Kalman-aware update: pass dt_eff so filter can coast through dropout/occlusion
         try:
             estimate = self.tracker.update(detection, dt=float(dt_eff))

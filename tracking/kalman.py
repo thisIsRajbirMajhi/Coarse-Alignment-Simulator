@@ -139,6 +139,22 @@ class KalmanFilter:
             return None
         return (float(self.x[2]), float(self.x[3]))
 
+    def get_innovation_cov(self) -> np.ndarray | None:
+        """Return 2x2 innovation covariance S = H P H^T + R, or None if not initialized."""
+        if not self.is_initialized():
+            return None
+        try:
+            # H = [[1,0,0,0],[0,1,0,0]] -> top-left 2x2 of P
+            S = np.array([[float(self.P[0, 0]), float(self.P[0, 1])],  # type: ignore
+                          [float(self.P[1, 0]), float(self.P[1, 1])]], dtype=float)  # type: ignore
+            S = S + np.eye(2, dtype=float) * float(self.meas_var)
+            S = (S + S.T) * 0.5
+            S[0, 0] = max(float(S[0, 0]), 1e-3)
+            S[1, 1] = max(float(S[1, 1]), 1e-3)
+            return S
+        except Exception:
+            return None
+
     def reset(self) -> None:
         self.x = None
         self.P = None
