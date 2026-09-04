@@ -93,8 +93,24 @@ class BeaconDetector:
             except Exception:
                 return []
         gray = to_grayscale(frame)
-        mask = threshold_frame(gray, self.brightness_threshold)
+        # Phase 1: adaptive threshold — raise when haze/noise lifts background
+        # mean+4σ keeps false positives low under haze, but never below config threshold
+        try:
+            # estimate background from gray (fast, downsample 4x)
+            small = gray[::4, ::4]
+            mean = float(np.mean(small))
+            std = float(np.std(small))
+            adapt = int(np.clip(mean + 4.0 * std, 110, 255))
+            # config threshold is floor (ensures beacon 200 still above stars 130)
+            thr = int(max(int(self.brightness_threshold), adapt)) if std > 12 else int(self.brightness_threshold)
+            # cap so very bright haze doesn't blind
+            thr = int(np.clip(thr, 0, 245))
+        except Exception:
+            thr = int(self.brightness_threshold)
+        mask = threshold_frame(gray, thr)
         mask = close_gaps(mask)
+        # keep thr for confidence scaling and debug
+        _used_thr = int(thr)
 
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         dets: list[dict] = []
@@ -105,9 +121,9 @@ class BeaconDetector:
             M = cv2.moments(cnt)
             if M["m00"] == 0:
                 continue
-            # Centroid via image moments — sub-pixel accuracy from contour
-            cx = float(M["m10"] / M["m00"])
-            cy = float(M["m01"] / M["m00"])
+            # Centroid via image moments — base
+            cx_m = float(M["m10"] / M["m00"])
+            cy_m = float(M["m01"] / M["m00"])
             x, y, w, h = cv2.boundingRect(cnt)
             # clip ROI to gray bounds (safety for edge contours)
             x2 = min(x + w, gray.shape[1])
@@ -115,6 +131,28 @@ class BeaconDetector:
             x = max(0, x); y = max(0, y)
             roi = gray[y:y2, x:x2]
             peak = int(roi.max()) if roi.size else 0
+            # Phase 1: intensity-weighted sub-pixel refinement (0.2px)
+            # Use ROI weighted centroid when ROI has enough signal (peak > thr)
+            try:
+                if roi.size > 4 and peak > _used_thr - 10:
+                    # weighted centroid in ROI coords
+                    ys, xs = np.mgrid[0: roi.shape[0], 0: roi.shape[1]]
+                    # subtract background (thr) to enhance peak
+                    wgt = np.clip(roi.astype(float) - float(_used_thr) + 30, 0, 255)
+                    s = float(np.sum(wgt))
+                    if s > 1e-6:
+                        cx_w = float(np.sum(xs * wgt) / s)
+                        cy_w = float(np.sum(ys * wgt) / s)
+                        # blend moment + weighted (weighted more when high SNR)
+                        alpha = float(np.clip((peak - _used_thr) / 40.0, 0.3, 0.7))
+                        cx = float((1 - alpha) * cx_m + alpha * (x + cx_w))
+                        cy = float((1 - alpha) * cy_m + alpha * (y + cy_w))
+                    else:
+                        cx, cy = cx_m, cy_m
+                else:
+                    cx, cy = cx_m, cy_m
+            except Exception:
+                cx, cy = cx_m, cy_m
             conf = float(area * (float(peak) / 255.0))
             dets.append({"x": cx, "y": cy, "area": area, "peak": peak, "confidence": conf, "bbox": (x, y, w, h)})
         dets.sort(key=lambda d: d["confidence"], reverse=True)
