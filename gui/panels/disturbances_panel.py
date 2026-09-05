@@ -202,8 +202,8 @@ class DisturbancesPanel(BaseConfigPanel):
         jitter_grid.addWidget(self.label_jitter_val, 0, 2)
         layout.addWidget(jitter_box)
 
-        # ── D — Atmospheric ──
-        atmo_box = QGroupBox("Atmospheric — Clear / Haze / Fog / User Defined")
+        # ── D — Atmospheric — per PDF Sr21.4 Clear/Haze/Fog/Rain/Low light/User Defined
+        atmo_box = QGroupBox("Atmospheric — Clear / Haze / Fog / Rain / Low light / User Defined")
         atmo_grid = QGridLayout(atmo_box)
         atmo_grid.setContentsMargins(12, 18, 12, 12)
         atmo_grid.setHorizontalSpacing(8)
@@ -235,7 +235,7 @@ class DisturbancesPanel(BaseConfigPanel):
         self.label_atmo_brightness_val.setStyleSheet("color:#374151; font-size:11px;")
         atmo_grid.addWidget(self.slider_atmo_brightness, 1, 1)
         atmo_grid.addWidget(self.label_atmo_brightness_val, 1, 2)
-        self.label_atmo_hint = QLabel("Clear 0/0 · Haze 15/10 · Fog 38/22")
+        self.label_atmo_hint = QLabel("Clear 0/0 · Haze 15/10 · Fog 38/22 · Rain 22/14 · Low light 28/38")
         self.label_atmo_hint.setStyleSheet("color:#64748b; font-size:10px; font-style:italic;")
         self.label_atmo_hint.setWordWrap(True)
         atmo_grid.addWidget(self.label_atmo_hint, 2, 0, 1, 4)

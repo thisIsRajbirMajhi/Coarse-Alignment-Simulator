@@ -162,7 +162,7 @@ class CameraPanel(BaseConfigPanel):
 
         # Update rate 20-120
         lo, hi = CAMERA_LIMITS["update_rate_hz"]
-        self.update_rate_slider, self.update_rate_label = self._make_int_slider(int(lo), int(hi), 30, tooltip="Camera update rate Hz")
+        self.update_rate_slider, self.update_rate_label = self._make_int_slider(int(lo), int(hi), 30, tooltip="Camera update rate 30-120 Hz per PDF Sr5 (min 30 Hz)")
         self.update_rate_spin = self.update_rate_slider
         mech_grid.addWidget(self._label("Update Rate"), 5, 0)
         mech_grid.addWidget(self.update_rate_slider, 5, 1)

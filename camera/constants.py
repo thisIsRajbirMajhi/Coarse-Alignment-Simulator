@@ -29,7 +29,7 @@ CAMERA_LIMITS: dict[str, tuple[float, float]] = {
     "encoder_sigma_px": (0.0, 0.5),
     "latency_jitter_ms": (0.0, 5.0),
     "pixel_scale_mrad": (0.001, 2.0),
-    "update_rate_hz": (20, 120),
+    "update_rate_hz": (30, 120),
 }
 
 CAMERA_DEFAULTS: dict = {

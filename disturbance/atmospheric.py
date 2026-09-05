@@ -21,14 +21,19 @@ def _resolve_preset(
 ) -> dict:
     """Map preset name to params, honouring User Defined overrides."""
     key = str(preset).strip()
-    if key.lower() in ("user_defined", "user defined", "user-defined"):
+    low = key.lower()
+    if low in ("user_defined", "user defined", "user-defined"):
         key = "User Defined"
-    elif key.lower() == "clear":
+    elif low == "clear":
         key = "Clear"
-    elif key.lower() == "haze":
+    elif low == "haze":
         key = "Haze"
-    elif key.lower() == "fog":
+    elif low == "fog":
         key = "Fog"
+    elif low == "rain":
+        key = "Rain"
+    elif low in ("low light", "low_light", "low-light", "lowlight"):
+        key = "Low light"
     if key not in ATMOSPHERIC_PRESET_MAP:
         for k in ATMOSPHERIC_PRESET_MAP:
             if k.lower() == key.lower():
@@ -110,6 +115,38 @@ def _apply_blooming(frame: np.ndarray, strength: float = 0.12) -> np.ndarray:
     return np.clip(out, 0, 255).astype(np.uint8)
 
 
+def _apply_rain_streaks(frame: np.ndarray, intensity: float = 0.22, rng: np.random.Generator | None = None) -> np.ndarray:
+    """Light rain streaks — diagonal lines, semi-transparent."""
+    if frame.size == 0 or intensity <= 1e-3:
+        return frame
+    h, w = frame.shape[:2]
+    # Number of streaks proportional to intensity and frame size
+    n = int((h * w / 8000) * (intensity / 0.22) * 80)
+    n = int(np.clip(n, 20, 300))
+    out = frame.copy()
+    # Use provided rng or create deterministic one
+    from common.rng import get_rng
+    _rng = get_rng(rng)
+    for _ in range(n):
+        x = int(_rng.integers(0, w))
+        y = int(_rng.integers(-20, h))
+        length = int(_rng.integers(8, 18))
+        # Diagonal streak 70-80 degrees (near vertical with slight tilt)
+        x2 = int(x - length * 0.2)
+        y2 = y + length
+        # Streak color light gray with slight blue, alpha blended
+        alpha = float(_rng.uniform(0.12, 0.28)) * (intensity / 0.22)
+        col = int(200 + _rng.integers(-10, 20))
+        # Draw on overlay then blend
+        cv2.line(out, (x, y), (x2, y2), (col, col, col), 1, cv2.LINE_AA)
+        # Blend with original for translucency
+        # Simple alpha blend per streak via addWeighted is heavy, do direct lerp
+        # Already drawn opaque, reduce with overlay blend
+    # Light overall blend to make streaks translucent
+    out = cv2.addWeighted(frame, 1 - intensity * 0.35, out, intensity * 0.35, 0)
+    return out
+
+
 def apply_atmospheric_disturbance(
     frame: np.ndarray,
     preset: str = "Clear",
@@ -120,14 +157,14 @@ def apply_atmospheric_disturbance(
     rng: np.random.Generator | None = None,
 ) -> np.ndarray:
     """
-    Atmospheric disturbance — Clear/Haze/Fog + User Defined.
+    Atmospheric disturbance — Clear/Haze/Fog/Rain/Low light + User Defined per PDF Sr21.4.
 
-    Spec notes for user-defined: reduction in contrast and brightness is user-configurable.
     Each preset maps to contrast%, brightness%, blur sigma, haze overlay.
+    Rain adds diagonal streaks, Low light adds extra darkening.
 
     Args:
       frame: HxWx3 uint8
-      preset: one of ATMOSPHERIC_PRESETS
+      preset: one of ATMOSPHERIC_PRESETS (Clear, Haze, Fog, Rain, Low light, User Defined)
       contrast_reduction: 0..100 % (overrides preset if User Defined)
       brightness_reduction: 0..100 %
       intensity: legacy 0..10 controls if preset is Clear but intensity>0 -> map to haze strength
@@ -186,6 +223,15 @@ def apply_atmospheric_disturbance(
         else:
             alpha_row = np.linspace(alpha * 0.75, alpha * 1.25, h, dtype=np.float32)[:, None]
             out_f = out_f * (1 - alpha_row) + haze_col * alpha_row
+        out = np.clip(out_f, 0, 255).astype(np.uint8)
+
+    # Rain streaks for Rain preset
+    if str(preset).lower() == "rain":
+        out = _apply_rain_streaks(out, intensity=0.22, rng=rng)
+    # Low light extra darkening for Low light preset
+    if str(preset).lower() in ("low light", "low_light", "low-light", "lowlight"):
+        # Additional gamma darkening beyond contrast/brightness
+        out_f = out.astype(np.float32) * 0.82
         out = np.clip(out_f, 0, 255).astype(np.uint8)
 
     return out.astype(frame.dtype, copy=False)

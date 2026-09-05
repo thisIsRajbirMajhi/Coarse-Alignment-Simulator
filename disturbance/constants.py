@@ -70,17 +70,19 @@ CAMERA_JITTER_LIMITS: tuple[float, float] = (0.0, 20.0)
 CAMERA_JITTER_DEFAULT: float = 0.0
 CAMERA_JITTER_MAX: float = 20.0
 
-# ── Atmospheric Disturbance — Clear/Haze/Fog + User ───────
-ATMOSPHERIC_PRESETS: tuple[str, ...] = ("Clear", "Haze", "Fog", "User Defined")
+# ── Atmospheric Disturbance — Clear/Haze/Fog/Rain/Low light + User per PDF Sr21.4 ───────
+ATMOSPHERIC_PRESETS: tuple[str, ...] = ("Clear", "Haze", "Fog", "Rain", "Low light", "User Defined")
 ATMOSPHERIC_DEFAULT_PRESET: str = "Clear"
 # Contrast/brightness reduction 0..100 % (maps to 0..1 fraction)
 ATMOSPHERIC_CONTRAST_LIMITS: tuple[float, float] = (0.0, 100.0)
 ATMOSPHERIC_BRIGHTNESS_LIMITS: tuple[float, float] = (0.0, 100.0)
-# Preset → (contrast %, brightness %, blur sigma, extra flag)
+# Preset → (contrast %, brightness %, blur sigma, extra flag) per PDF Sr21.4 user-defined reduction
 ATMOSPHERIC_PRESET_MAP: dict[str, dict] = {
     "Clear":      {"contrast": 0,  "brightness": 0,  "blur": 0.0, "haze": 0.0},
     "Haze":       {"contrast": 15, "brightness": 10, "blur": 0.6, "haze": 0.18},
     "Fog":        {"contrast": 38, "brightness": 22, "blur": 1.4, "haze": 0.42},
+    "Rain":       {"contrast": 22, "brightness": 14, "blur": 0.9, "haze": 0.22},
+    "Low light":  {"contrast": 28, "brightness": 38, "blur": 0.3, "haze": 0.08},
     "User Defined": {"contrast": 0, "brightness": 0, "blur": 0.0, "haze": 0.0},
 }
 

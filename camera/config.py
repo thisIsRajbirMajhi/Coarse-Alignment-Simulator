@@ -94,8 +94,8 @@ class CameraConfig(BaseValidatedConfig):
         if "latency_jitter_ms" in CAMERA_LIMITS:
             self.latency_jitter_ms = float(clip_field(float(getattr(self, "latency_jitter_ms", 1.2)), *CAMERA_LIMITS["latency_jitter_ms"]))
         self.update_rate_hz = int(clip_field(self.update_rate_hz, *CAMERA_LIMITS["update_rate_hz"]))
-        if self.update_rate_hz < 20:
-            self.update_rate_hz = 20
+        if self.update_rate_hz < 30:
+            self.update_rate_hz = 30
         # Derived pixel scale from FOV deg / resolution (mrad per px) — single source, then max_slew_rate derived
         try:
             deg_to_mrad = 17.453292519943295
