@@ -1,0 +1,45 @@
+{
+  "split": "val",
+  "fov": "640x480",
+  "difficulty": "mixed",
+  "seed": 123,
+  "requested": 20,
+  "start_idx": 0,
+  "generated": 20,
+  "total_existing": 20,
+  "labeled": 20,
+  "background": 0,
+  "retries": 0,
+  "errors": 0,
+  "elapsed_sec": 8.9,
+  "per_img_ms": 443.8,
+  "counts_by_difficulty": {
+    "medium": 7,
+    "easy": 8,
+    "hard": 5
+  },
+  "shapes": {
+    "random": 5,
+    "circle": 9,
+    "square": 6
+  },
+  "motions": {
+    "sinusoidal": 4,
+    "random": 2,
+    "zigzag": 3,
+    "linear": 2,
+    "curved": 7,
+    "spiral": 1,
+    "figure_eight": 1
+  },
+  "presets": {
+    "Haze": 10,
+    "Clear": 5,
+    "Fog": 5
+  },
+  "beacon_counts": {
+    "3": 10,
+    "2": 4,
+    "1": 6
+  }
+}

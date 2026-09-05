@@ -23,10 +23,19 @@ Thumbs.db
 dist/
 *.spec
 
-# Generated data (no longer logged)
+# Generated data (no longer logged) — keep dataset.yaml but ignore large binaries
 *.csv
 *.json
 !requirements.json
+!dataset/dataset.yaml
+!dataset/README.md
+!dataset/stats_*.json
+dataset/images/
+dataset/labels/
+runs/
+*.onnx
+*.pt
+*.pth
 
 # IDE
 .vscode/
