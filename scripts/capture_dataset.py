@@ -150,7 +150,11 @@ def generate_dataset(
     seed: int = 42,
 ):
     if difficulties is None:
-        difficulties = ["easy", "medium", "hard"]
+        # For small test sets (<=20) use easy/Clear so beacons are clearly visible as bright spots
+        if split == "test" and num_images <= 20:
+            difficulties = ["easy"]
+        else:
+            difficulties = ["easy", "medium", "hard"]
 
     out_root = Path(output)
     # For single split mode (testing 10), just output to that split
