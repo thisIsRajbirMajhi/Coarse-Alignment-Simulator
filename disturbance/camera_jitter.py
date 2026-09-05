@@ -9,6 +9,8 @@ import time
 
 import numpy as np
 
+from common.rng import get_rng
+
 from disturbance.constants import CAMERA_JITTER_LIMITS
 from disturbance.dt_provider import DtProvider
 
@@ -33,6 +35,7 @@ def apply_camera_jitter(
     *,
     jitter_px: float | None = None,
     dt: float | None = None,
+    rng: np.random.Generator | None = None,
 ) -> tuple[float, float]:
     """
     Apply per-frame camera jitter — OU-filtered Gaussian (correlated shake).
@@ -54,15 +57,16 @@ def apply_camera_jitter(
         return pan, tilt
     if dt is None:
         # White Gaussian fallback — isotropic, sigma = amp/2.8
+        _rng = get_rng(rng)
         sigma = float(amp) / 2.8
-        jx = float(np.random.normal(0, sigma))
-        jy = float(np.random.normal(0, sigma))
+        jx = float(_rng.normal(0, sigma))
+        jy = float(_rng.normal(0, sigma))
         # Clip to ±amp to respect spec
         jx = float(np.clip(jx, -amp, amp))
         jy = float(np.clip(jy, -amp, amp))
         return pan + jx, tilt + jy
     # OU-filtered path — needs state; delegate to stateful version with temp state
-    return apply_camera_jitter_with_state(pan, tilt, float(amp), state=None, dt=dt)
+    return apply_camera_jitter_with_state(pan, tilt, float(amp), state=None, dt=dt, rng=rng)
 
 
 def apply_camera_jitter_with_state(
@@ -71,6 +75,7 @@ def apply_camera_jitter_with_state(
     jitter_px: float,
     state: dict | None = None,
     dt: float | None = None,
+    rng: np.random.Generator | None = None,
 ) -> tuple[float, float]:
     """
     Stateful OU jitter — correlated shake with dt-aware tau.
@@ -88,15 +93,16 @@ def apply_camera_jitter_with_state(
     tau = 0.028  # 28 ms — high frequency but correlated
     alpha = math.exp(-float(dt_eff) / tau)
     # OU step: x = alpha*x_prev + sigma*sqrt(1-alpha^2)*N(0,1)
+    _rng = get_rng(rng)
     scale = sigma * math.sqrt(max(0.0, 1 - alpha * alpha))
     prev_jx = float(state.get("jx", 0.0))
     prev_jy = float(state.get("jy", 0.0))
-    jx = prev_jx * alpha + float(np.random.normal(0, 1)) * scale
-    jy = prev_jy * alpha + float(np.random.normal(0, 1)) * scale
+    jx = prev_jx * alpha + float(_rng.normal(0, 1)) * scale
+    jy = prev_jy * alpha + float(_rng.normal(0, 1)) * scale
     # Occasional impulse for mount knock (2% chance, 1.8x amp) — challenging for AI
-    if np.random.random() < 0.02:
-        jx += float(np.random.normal(0, sigma * 0.55))
-        jy += float(np.random.normal(0, sigma * 0.55))
+    if _rng.random() < 0.02:
+        jx += float(_rng.normal(0, sigma * 0.55))
+        jy += float(_rng.normal(0, sigma * 0.55))
     jx = float(np.clip(jx, -amp, amp))
     jy = float(np.clip(jy, -amp, amp))
     state["jx"], state["jy"] = jx, jy

@@ -5,6 +5,8 @@ import math
 import cv2
 import numpy as np
 
+from common.rng import get_rng
+
 from disturbance.constants import INNER_SCALE, OUTER_SCALE, RYTOV_CAP, TILT_TAU, WAVELENGTH
 from disturbance.dt_provider import DtProvider
 from disturbance.helpers import r0_from_intensity, rytov_variance
@@ -18,6 +20,7 @@ def _kolmogorov_displacement(
     wavelength: float = WAVELENGTH,
     outer_scale: float = OUTER_SCALE,
     inner_scale: float = INNER_SCALE,
+    rng: np.random.Generator | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Generate displacement fields dx,dy [pixels] from Kolmogorov PSD.
@@ -37,9 +40,10 @@ def _kolmogorov_displacement(
     phil = 0.023 * (float(r0) ** (-5.0/3.0)) * (kappa_phys**2 + k0**2) ** (-11.0/6.0) * np.exp(-(kappa_phys * float(inner_scale))**2)
     phil_d = phil * (kappa_phys**2) * (float(wavelength) * 0.9) ** 2 * 1e6
     phil_d = np.clip(phil_d, 0, 1e4)
+    _rng = get_rng(rng)
     amp = np.sqrt(phil_d)
-    rnd_x = np.random.normal(0, 1, (h, w)) + 1j * np.random.normal(0, 1, (h, w))
-    rnd_y = np.random.normal(0, 1, (h, w)) + 1j * np.random.normal(0, 1, (h, w))
+    rnd_x = _rng.normal(0, 1, (h, w)) + 1j * _rng.normal(0, 1, (h, w))
+    rnd_y = _rng.normal(0, 1, (h, w)) + 1j * _rng.normal(0, 1, (h, w))
     dx = np.fft.ifft2(rnd_x * amp).real
     dy = np.fft.ifft2(rnd_y * amp).real
     target_rms = 0.32 * (float(intensity) ** 0.85) + 0.08 * float(intensity)
@@ -57,6 +61,7 @@ def apply_turbulence(
     intensity: float,
     wavelength: float = WAVELENGTH,
     dt: float | None = None,
+    rng: np.random.Generator | None = None,
 ) -> np.ndarray:
     """
     Kolmogorov + Rytov turbulence — now dt-aware.
@@ -97,13 +102,14 @@ def apply_turbulence(
     # 2) Warp field
     prev_dx = _turb_state.get("dx")
     prev_dy = _turb_state.get("dy")
+    _rng = get_rng(rng)
     if h * w > 250_000:
         h2, w2 = max(32, h // 2), max(32, w // 2)
-        dx_s, dy_s = _kolmogorov_displacement(h2, w2, r0, float(intensity), float(wavelength))
+        dx_s, dy_s = _kolmogorov_displacement(h2, w2, r0, float(intensity), float(wavelength), rng=_rng)
         dx_new = cv2.resize(dx_s, (w, h), interpolation=cv2.INTER_CUBIC) * 1.9
         dy_new = cv2.resize(dy_s, (w, h), interpolation=cv2.INTER_CUBIC) * 1.9
     else:
-        dx_new, dy_new = _kolmogorov_displacement(h, w, r0, float(intensity), float(wavelength))
+        dx_new, dy_new = _kolmogorov_displacement(h, w, r0, float(intensity), float(wavelength), rng=_rng)
 
     tau_tilt = TILT_TAU
     alpha = float(math.exp(-float(dt) / float(tau_tilt)))
@@ -127,7 +133,7 @@ def apply_turbulence(
     if sigma_chi > 0.04:
         small_h = max(1, h // 4)
         small_w = max(1, w // 4)
-        chi_small = np.random.normal(-sigma_chi**2, sigma_chi, (small_h, small_w)).astype(np.float32)
+        chi_small = _rng.normal(-sigma_chi**2, sigma_chi, (small_h, small_w)).astype(np.float32)
         chi = cv2.resize(chi_small, (w, h), interpolation=cv2.INTER_CUBIC)
         chi = cv2.GaussianBlur(chi, (0, 0), sigmaX=2.2, sigmaY=2.2)
         gain = np.exp(chi)
@@ -136,7 +142,7 @@ def apply_turbulence(
             gain = gain[:, :, None]
         scint = np.clip(warped.astype(np.float32) * gain, 0, 255).astype(np.uint8)
     else:
-        chi0 = float(np.random.normal(-sigma_chi**2, sigma_chi)) if sigma_chi > 0 else 0.0
+        chi0 = float(_rng.normal(-sigma_chi**2, sigma_chi)) if sigma_chi > 0 else 0.0
         gain0 = float(np.clip(math.exp(chi0), 0.75, 1.35))
         scint = np.clip(warped.astype(np.float32) * gain0, 0, 255).astype(np.uint8)
 

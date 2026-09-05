@@ -9,6 +9,8 @@ import math
 import cv2
 import numpy as np
 
+from common.rng import get_rng
+
 from disturbance.constants import ATMOSPHERIC_PRESET_MAP, ATMOSPHERIC_PRESETS
 
 # Depth weighting for fog/haze — bottom (horizon) 1.6x denser than top (zenith)
@@ -101,7 +103,7 @@ def _apply_contrast_brightness(frame: np.ndarray, contrast_pct: float, brightnes
     return np.clip(f, 0, 255).astype(np.uint8)
 
 
-def _add_rain_streaks(frame: np.ndarray, intensity: float = 0.3, motion_blur: float = 0.0) -> np.ndarray:
+def _add_rain_streaks(frame: np.ndarray, intensity: float = 0.3, motion_blur: float = 0.0, rng: np.random.Generator | None = None) -> np.ndarray:
     """
     Physically-blurred rain streaks with wind angle variance + occlusion.
 
@@ -111,6 +113,7 @@ def _add_rain_streaks(frame: np.ndarray, intensity: float = 0.3, motion_blur: fl
     """
     if frame.size == 0 or intensity <= 0:
         return frame
+    _rng = get_rng(rng)
     h, w = frame.shape[:2]
     n = int(160 * intensity * (w * h / (640 * 480)) ** 0.5)
     # Rain density scales non-linearly: light drizzle vs downpour
@@ -118,22 +121,22 @@ def _add_rain_streaks(frame: np.ndarray, intensity: float = 0.3, motion_blur: fl
     line_mask = np.zeros_like(frame, dtype=np.uint8)
     blur_extra = int(np.clip(motion_blur, 0, 12))
     for _ in range(n):
-        x = int(np.random.randint(-10, w + 10))
-        y = int(np.random.randint(-20, h + 20))
+        x = int(_rng.integers(-10, w + 10))
+        y = int(_rng.integers(-20, h + 20))
         # Length varies with intensity: drizzle 7-14, heavy 14-28 + motion blur
         if intensity < 0.35:
-            length = int(np.random.randint(7, 15)) + blur_extra
+            length = int(_rng.integers(7, 15)) + blur_extra
         else:
-            length = int(np.random.randint(13, 27)) + blur_extra
-        thickness = 1 if np.random.random() < 0.78 else 2
+            length = int(_rng.integers(13, 27)) + blur_extra
+        thickness = 1 if _rng.random() < 0.78 else 2
         # Wind shear: 68-76 deg baseline + ±6 deg gust
-        base_angle = np.random.uniform(68, 76)
-        gust = np.random.normal(0, 2.2)
+        base_angle = _rng.uniform(68, 76)
+        gust = _rng.normal(0, 2.2)
         angle = math.radians(np.clip(base_angle + gust, 58, 82))
         x2 = int(x + length * math.cos(angle))
         y2 = int(y + length * math.sin(angle))
         # Streak brightness 175-225, slightly desaturated with fog
-        val = int(np.clip(np.random.normal(202, 12), 172, 230))
+        val = int(np.clip(_rng.normal(202, 12), 172, 230))
         color = (val, val, val) if frame.ndim == 3 else val
         cv2.line(line_mask, (x, y), (x2, y2), color, thickness, cv2.LINE_AA)  # type: ignore
     # Occlusion dimming: where multiple streaks overlap looks brighter — use 0.16-0.22 alpha
@@ -149,7 +152,7 @@ def _add_rain_streaks(frame: np.ndarray, intensity: float = 0.3, motion_blur: fl
         overlay = np.clip(overlay, 0, 255)
         # Micro-occlusion: 2% of streaks create a bright highlight that can hide beacon
         # (adds challenge for AI — beacon behind streak dims 12%)
-        highlight_mask = (line_mask > 90) & (np.random.random(frame.shape[:2]) < 0.02) if frame.ndim == 2 else (line_mask[:, :, 0] > 90) & (np.random.random(frame.shape[:2]) < 0.02)
+        highlight_mask = (line_mask > 90) & (_rng.random(frame.shape[:2]) < 0.02) if frame.ndim == 2 else (line_mask[:, :, 0] > 90) & (_rng.random(frame.shape[:2]) < 0.02)
         if np.any(highlight_mask):
             overlay[highlight_mask] = np.clip(overlay[highlight_mask] * 0.88, 0, 255)
     return overlay.astype(np.uint8)
@@ -178,6 +181,7 @@ def apply_atmospheric_disturbance(
     brightness_reduction: float | None = None,
     *,
     intensity: float | None = None,
+    rng: np.random.Generator | None = None,
 ) -> np.ndarray:
     """
     Atmospheric disturbance — Clear/Haze/Fog/Rain/Low Light + User Defined.
@@ -250,10 +254,11 @@ def apply_atmospheric_disturbance(
 
     # Rain streaks — physics rain with motion blur
     if str(preset).lower() == "rain" or preset == "Rain":
+        _rng = get_rng(rng)
         rain_intensity = 0.22 + float(params.get("haze", 0.12)) * 0.6 + contrast / 400.0
         rain_intensity = float(np.clip(rain_intensity, 0.18, 0.62))
         # Motion blur from platform would be passed via blur param in future; approx 0 here
-        out = _add_rain_streaks(out, intensity=rain_intensity, motion_blur=blur_sigma * 1.2)
+        out = _add_rain_streaks(out, intensity=rain_intensity, motion_blur=blur_sigma * 1.2, rng=_rng)
 
     # Low Light — desaturate + add slight bloom for beacon halo challenge
     if str(preset).lower() in ("low light", "low_light"):

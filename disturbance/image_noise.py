@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from common.rng import get_rng
+
 from disturbance.constants import (
     GAUSSIAN_SIGMA_LIMITS,
     GAUSSIAN_SIGMA_MAX_USER,
@@ -22,17 +24,18 @@ def clear_hot_pixel_cache() -> None:
     _HOT_PIXEL_CACHE.clear()
 
 
-def _get_persistent_hot_pixels(h: int, w: int, density: float, salt_vs_pepper: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _get_persistent_hot_pixels(h: int, w: int, density: float, salt_vs_pepper: float, rng: np.random.Generator | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Get or create persistent hot pixel map for given frame size."""
+    _rng = get_rng(rng)
     key = (h, w)
     if key not in _HOT_PIXEL_CACHE:
         # Use 0.8 * density as persistent pool (slightly fewer than transient total)
         persist_density = float(density) * _HOT_PIXEL_PERSISTENT_RATIO * 0.5
         n = int(h * w * persist_density)
         n = int(np.clip(n, 4, 800))
-        ys = np.random.randint(0, h, size=n)
-        xs = np.random.randint(0, w, size=n)
-        is_salt = np.random.random(n) < float(salt_vs_pepper)
+        ys = _rng.integers(0, h, size=n)
+        xs = _rng.integers(0, w, size=n)
+        is_salt = _rng.random(n) < float(salt_vs_pepper)
         _HOT_PIXEL_CACHE[key] = (ys, xs, is_salt)
     return _HOT_PIXEL_CACHE[key]
 
@@ -47,6 +50,7 @@ def apply_salt_pepper(
     *,
     salt_vs_pepper: float = 0.5,
     persistent: bool | None = None,
+    rng: np.random.Generator | None = None,
 ) -> np.ndarray:
     """
     Salt & Pepper — fixed hot pixels + transient speckles.
@@ -65,6 +69,7 @@ def apply_salt_pepper(
     """
     if frame.size == 0 or density <= 1e-9:
         return frame
+    _rng = get_rng(rng)
     density = float(np.clip(density, 0.0, 0.20))
     out = frame.copy()
     h, w = frame.shape[:2]
@@ -83,12 +88,12 @@ def apply_salt_pepper(
     # Persistent hot pixels — same positions for this (h,w)
     if persist_dens > 1e-9:
         # Scale persistent cache to requested density: subsample cache
-        cache_ys, cache_xs, cache_is_salt = _get_persistent_hot_pixels(h, w, density, float(salt_vs_pepper))
+        cache_ys, cache_xs, cache_is_salt = _get_persistent_hot_pixels(h, w, density, float(salt_vs_pepper), rng=_rng)
         # Adjust count to persist_dens
         want = int(h * w * float(persist_dens))
         if want > 0:
             # Subsample cache deterministically per call: random choice without replacement
-            idx = np.random.choice(len(cache_ys), size=min(want, len(cache_ys)), replace=False) if len(cache_ys) > 0 else np.array([], dtype=int)
+            idx = _rng.choice(len(cache_ys), size=min(want, len(cache_ys)), replace=False) if len(cache_ys) > 0 else np.array([], dtype=int)
             py = cache_ys[idx][~cache_is_salt[idx]] if len(idx) > 0 else np.array([], dtype=int)
             px = cache_xs[idx][~cache_is_salt[idx]] if len(idx) > 0 else np.array([], dtype=int)
             sy = cache_ys[idx][cache_is_salt[idx]] if len(idx) > 0 else np.array([], dtype=int)
@@ -106,8 +111,8 @@ def apply_salt_pepper(
         # If want > cache size, fill remainder with transient-like
         if want > len(cache_ys):
             extra = want - len(cache_ys)
-            ys2 = np.random.randint(0, h, size=extra)
-            xs2 = np.random.randint(0, w, size=extra)
+            ys2 = _rng.integers(0, h, size=extra)
+            xs2 = _rng.integers(0, w, size=extra)
             salt_n2 = int(extra * float(salt_vs_pepper))
             if extra - salt_n2 > 0:
                 if out.ndim == 3:
@@ -124,8 +129,8 @@ def apply_salt_pepper(
     if transient_dens > 1e-9:
         total = int(h * w * float(transient_dens))
         if total > 0:
-            ys = np.random.randint(0, h, size=total)
-            xs = np.random.randint(0, w, size=total)
+            ys = _rng.integers(0, h, size=total)
+            xs = _rng.integers(0, w, size=total)
             salt_n = int(total * float(salt_vs_pepper))
             if total - salt_n > 0:
                 if out.ndim == 3:
@@ -145,6 +150,7 @@ def apply_gaussian_noise(
     sigma: float = 8.0,
     *,
     max_sigma: float = 20.0,
+    rng: np.random.Generator | None = None,
 ) -> np.ndarray:
     """
     Additive Gaussian — N(0, sigma^2) per pixel/channel, clipped.
@@ -159,11 +165,12 @@ def apply_gaussian_noise(
     """
     if frame.size == 0 or sigma <= 1e-9:
         return frame
+    _rng = get_rng(rng)
     cap = float(np.clip(max_sigma, 0.0, GAUSSIAN_SIGMA_MAX_USER))
     sigma = float(np.clip(sigma, 0.0, cap))
     if sigma <= 1e-9:
         return frame
-    noise = np.random.normal(0.0, sigma, frame.shape).astype(np.float32)
+    noise = _rng.normal(0.0, sigma, frame.shape).astype(np.float32)
     out = frame.astype(np.float32) + noise
     out = np.clip(np.round(out), 0, 255).astype(np.uint8)
     # Preserve dtype
@@ -175,6 +182,7 @@ def apply_poisson_noise(
     scale: float = 1.0,
     *,
     peak: float = 100.0,
+    rng: np.random.Generator | None = None,
 ) -> np.ndarray:
     """
     Poisson shot noise — Poisson(frame * scale * (peak/100))/scale approx, with Normal fallback for large rates.
@@ -187,6 +195,7 @@ def apply_poisson_noise(
     """
     if frame.size == 0 or scale <= 1e-9:
         return frame
+    _rng = get_rng(rng)
     # Normalise to float; Poisson expects lambda = pixel value * scale * (peak/100)
     # DN 0..255 -> lambda 0..255*scale*(peak/100)
     peak = float(np.clip(peak, 30.0, 255.0))
@@ -201,15 +210,15 @@ def apply_poisson_noise(
     if np.any(~large):
         lam_s = np.clip(flat[~large].astype(np.float64), 0, 9000)
         if lam_s.size > 400_000:
-            out_flat[~large] = np.random.normal(lam_s, np.sqrt(np.maximum(lam_s, 1.0)))
+            out_flat[~large] = _rng.normal(lam_s, np.sqrt(np.maximum(lam_s, 1.0)))
         else:
             try:
-                out_flat[~large] = np.random.poisson(lam_s).astype(float)
+                out_flat[~large] = _rng.poisson(lam_s).astype(float)
             except Exception:
-                out_flat[~large] = np.random.normal(lam_s, np.sqrt(np.maximum(lam_s, 1.0)))
+                out_flat[~large] = _rng.normal(lam_s, np.sqrt(np.maximum(lam_s, 1.0)))
     if np.any(large):
         lam_l = flat[large].astype(np.float64)
-        out_flat[large] = np.random.normal(lam_l, np.sqrt(np.maximum(lam_l, 1.0)))
+        out_flat[large] = _rng.normal(lam_l, np.sqrt(np.maximum(lam_l, 1.0)))
     out = (out_flat.reshape(f.shape) / float(eff_scale))
     out = np.clip(np.round(out), 0, 255).astype(np.uint8)
     # reshape to frame shape (handles 3ch via flat reshape already correct if 3D, need original shape)
@@ -231,6 +240,7 @@ def apply_image_noise(
     poisson_peak: float = 100.0,
     # Backward-compat intensity-based shortcut (0..10 controls overall mix)
     intensity: float | None = None,
+    rng: np.random.Generator | None = None,
 ) -> np.ndarray:
     """
     Unified image noise — physical order: Poisson (shot) -> Gaussian (read) -> S&P (defects).
@@ -276,11 +286,12 @@ def apply_image_noise(
         salt_pepper_density = float(np.clip(iv * 0.01, 0, 0.20))
 
     out = frame
+    _rng = get_rng(rng)
     # Physical order: Poisson (shot, light-dependent) -> Gaussian (read, independent) -> S&P (defects)
     if enable_poisson:
-        out = apply_poisson_noise(out, scale=float(poisson_scale), peak=float(poisson_peak))
+        out = apply_poisson_noise(out, scale=float(poisson_scale), peak=float(poisson_peak), rng=_rng)
     if enable_gaussian:
-        out = apply_gaussian_noise(out, sigma=float(gaussian_sigma), max_sigma=float(gaussian_sigma_max))
+        out = apply_gaussian_noise(out, sigma=float(gaussian_sigma), max_sigma=float(gaussian_sigma_max), rng=_rng)
     if enable_salt_pepper:
-        out = apply_salt_pepper(out, density=float(salt_pepper_density), salt_vs_pepper=float(salt_pepper_ratio))
+        out = apply_salt_pepper(out, density=float(salt_pepper_density), salt_vs_pepper=float(salt_pepper_ratio), rng=_rng)
     return out

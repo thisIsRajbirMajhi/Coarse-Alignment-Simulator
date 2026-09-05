@@ -8,6 +8,8 @@ import time
 
 import numpy as np
 
+from common.rng import get_rng
+
 from camera.config import CameraConfig
 from camera.optics import pixel_to_mrad, pixel_to_urad
 
@@ -40,6 +42,7 @@ class PTZCamera:
         scene_bounds: tuple[int, int] = (1000, 1000),
         config: CameraConfig | None = None,
         vignetting: float = 0.0,
+        rng: np.random.Generator | None = None,
     ):
         # If config supplied, it drives construction (validated against scene)
         if config is not None:
@@ -82,6 +85,9 @@ class PTZCamera:
             except:
                 _vign = 0.0
         self.vignetting: float = float(np.clip(_vign, 0.0, 0.92))
+
+        # RNG for encoder/latency jitter (deterministic when seeded)
+        self._rng: np.random.Generator = get_rng(rng)
 
         # Internal time for latency queue (seconds)
         self._time: float = 0.0
@@ -241,15 +247,15 @@ class PTZCamera:
         self.pan += float(d_pan)
         self.tilt += float(d_tilt)
         self._clamp_to_range()
-        # Encoder noise — small readout error (does not affect true pan/tilt much, but adds measurement jitter)
+        # Encoder noise — small readout error (deterministic via self._rng)
         try:
             sigma_enc = float(getattr(self.config, "encoder_sigma_px", 0.04))
             if sigma_enc > 1e-9 and (abs(d_pan) > 1e-6 or abs(d_tilt) > 1e-6):
                 # Only when moving, add tiny measurement noise to pan/tilt reading (not command)
                 # Store true pan but report noisy via property? Keep simple: add to pan/tilt with small sigma
                 # To keep deterministic for tests with sigma 0.04, use truncated Gaussian ±3σ
-                npx = float(np.clip(np.random.normal(0, sigma_enc), -sigma_enc*3, sigma_enc*3))
-                npy = float(np.clip(np.random.normal(0, sigma_enc), -sigma_enc*3, sigma_enc*3))
+                npx = float(np.clip(self._rng.normal(0, sigma_enc), -sigma_enc*3, sigma_enc*3))
+                npy = float(np.clip(self._rng.normal(0, sigma_enc), -sigma_enc*3, sigma_enc*3))
                 # Apply as measurement bias, not cumulative drift — add then clamp
                 # We model as small random walk bias 0.3×sigma
                 self.pan += npx * 0.3
@@ -278,11 +284,11 @@ class PTZCamera:
             self._clamp_to_range()
             return
         latency_s = float(self.config.latency_ms) / 1000.0
-        # Latency jitter: N(0, jitter_ms) clipped ±3σ, per-command
+        # Latency jitter: N(0, jitter_ms) clipped ±3σ, per-command (deterministic via self._rng)
         try:
             jit_ms = float(getattr(self.config, "latency_jitter_ms", 1.2))
             if jit_ms > 1e-9 and latency_s > 1e-6:
-                j = float(np.clip(np.random.normal(0, jit_ms), -jit_ms*2.5, jit_ms*2.5)) / 1000.0
+                j = float(np.clip(self._rng.normal(0, jit_ms), -jit_ms*2.5, jit_ms*2.5)) / 1000.0
                 latency_s = max(0.0, latency_s + j)
         except Exception:
             pass

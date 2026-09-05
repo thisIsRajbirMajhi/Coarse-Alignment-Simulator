@@ -130,13 +130,14 @@ class TickMixin:
         scene_frame = None  # No longer needed; _render_minimap() uses cached thumb internally.
         # _draw_targets on full world skipped — minimap draws hitboxes via renderer on thumb.
 
-        # Now handle disturbances + FOV capture
+        # Now handle disturbances + FOV capture — deterministic via self.rng (seeded from env_config.seed)
+        _rng = getattr(self, "rng", None)
         if dc is not None:
             if not hasattr(self, "_platform_motion_state") or self._platform_motion_state is None:
                 self._platform_motion_state = {}
             if not hasattr(self, "_camera_drift_state") or self._camera_drift_state is None:
                 self._camera_drift_state = {}
-            pan_a, tilt_a = dist.apply_platform_vibration(self.camera.pan, self.camera.tilt, int(getattr(dc, "vibration", 0)), dt=dt_eff)
+            pan_a, tilt_a = dist.apply_platform_vibration(self.camera.pan, self.camera.tilt, int(getattr(dc, "vibration", 0)), dt=dt_eff, rng=_rng)
             if float(getattr(dc, "platform_speed", 0.0)) > 1e-9:
                 pan_b, tilt_b = dist.apply_platform_motion(
                     pan_a, tilt_a,
@@ -145,15 +146,16 @@ class TickMixin:
                     dt=dt_eff,
                     state=self._platform_motion_state,
                     bounds=self._scene_size,
+                    rng=_rng,
                 )
             else:
                 pan_b, tilt_b = pan_a, tilt_a
             if float(getattr(dc, "camera_jitter", 0.0)) > 1e-9:
-                pan_c, tilt_c = dist.apply_camera_jitter(pan_b, tilt_b, jitter_px=float(getattr(dc, "camera_jitter")))
+                pan_c, tilt_c = dist.apply_camera_jitter(pan_b, tilt_b, jitter_px=float(getattr(dc, "camera_jitter")), rng=_rng)
             else:
                 pan_c, tilt_c = pan_b, tilt_b
             pan_dist, tilt_dist = dist.apply_camera_motion_with_state(
-                pan_c, tilt_c, int(getattr(dc, "camera_motion", 0)), self._camera_drift_state, dt=dt_eff
+                pan_c, tilt_c, int(getattr(dc, "camera_motion", 0)), self._camera_drift_state, dt=dt_eff, rng=_rng
             )
             # Optimized FOV base fetch
             if use_optimized:
@@ -174,17 +176,17 @@ class TickMixin:
                 self.camera.pan, self.camera.tilt = rp, rt
                 # vignetting already applied via camera.capture if set
                 fov_capture_x0, fov_capture_y0 = None, None
-            # Image disturbances after vignetting
-            fov_frame = dist.apply_turbulence(fov_frame, int(getattr(dc, "turbulence", 0)), dt=dt_eff)
+            # Image disturbances after vignetting — deterministic via _rng
+            fov_frame = dist.apply_turbulence(fov_frame, int(getattr(dc, "turbulence", 0)), dt=dt_eff, rng=_rng)
             preset = str(getattr(dc, "atmospheric_preset", "Clear"))
             contrast = float(getattr(dc, "atmospheric_contrast", 0.0))
             brightness = float(getattr(dc, "atmospheric_brightness", 0.0))
             if preset != "Clear" or contrast > 1e-9 or brightness > 1e-9:
                 fov_frame = dist.apply_atmospheric_disturbance(
-                    fov_frame, preset=preset, contrast_reduction=contrast, brightness_reduction=brightness
+                    fov_frame, preset=preset, contrast_reduction=contrast, brightness_reduction=brightness, rng=_rng
                 )
             if int(getattr(dc, "noise", 0)) > 0:
-                fov_frame = dist.apply_sensor_noise(fov_frame, int(getattr(dc, "noise")))
+                fov_frame = dist.apply_sensor_noise(fov_frame, int(getattr(dc, "noise")), rng=_rng)
             if bool(getattr(dc, "enable_salt_pepper", False) or getattr(dc, "enable_gaussian", False) or getattr(dc, "enable_poisson", False)):
                 fov_frame = dist.apply_image_noise(
                     fov_frame,
@@ -197,11 +199,12 @@ class TickMixin:
                     gaussian_sigma_max=float(getattr(dc, "gaussian_sigma_max", 20.0)),
                     poisson_scale=float(getattr(dc, "poisson_scale", 1.0)),
                     poisson_peak=float(getattr(dc, "poisson_peak", 100.0)),
+                    rng=_rng,
                 )
         else:
-            # Legacy fallback (no config)
-            pan_vib, tilt_vib = dist.apply_platform_vibration(self.camera.pan, self.camera.tilt, self.sliders["Vibration"].value(), dt=dt_eff)
-            pan_dist, tilt_dist = dist.apply_camera_motion_with_state(pan_vib, tilt_vib, self.sliders["Camera Motion"].value(), self._camera_drift_state, dt=dt_eff)
+            # Legacy fallback (no config) — still deterministic via _rng
+            pan_vib, tilt_vib = dist.apply_platform_vibration(self.camera.pan, self.camera.tilt, self.sliders["Vibration"].value(), dt=dt_eff, rng=_rng)
+            pan_dist, tilt_dist = dist.apply_camera_motion_with_state(pan_vib, tilt_vib, self.sliders["Camera Motion"].value(), self._camera_drift_state, dt=dt_eff, rng=_rng)
             if use_optimized:
                 fov_frame, fov_origin = _get_fov_base(pan_dist, tilt_dist)
                 fov_x0, fov_y0 = int(fov_origin[0]), int(fov_origin[1])
@@ -216,8 +219,8 @@ class TickMixin:
                 fov_frame = self.camera.capture(scene_frame)
                 self.camera.pan, self.camera.tilt = rp, rt
                 fov_capture_x0, fov_capture_y0 = None, None
-            fov_frame = dist.apply_turbulence(fov_frame, self.sliders["Turbulence"].value(), dt=dt_eff)
-            fov_frame = dist.apply_sensor_noise(fov_frame, self.sliders["Noise"].value())
+            fov_frame = dist.apply_turbulence(fov_frame, self.sliders["Turbulence"].value(), dt=dt_eff, rng=_rng)
+            fov_frame = dist.apply_sensor_noise(fov_frame, self.sliders["Noise"].value(), rng=_rng)
         # ── Target-only realtime check (not hardcoded, hitbox-gated) ──
         all_dets = self.detector.detect_all(fov_frame)
         self._last_all_detections = all_dets
@@ -294,16 +297,31 @@ class TickMixin:
                 cam_slew = float(self.camera_config.max_slew_rate) if hasattr(self, "camera_config") else None
             except: cam_slew = None
             # Target velocity for feedforward/Smith (px/s)
+            # AI-ready: default uses tracker-estimated velocity (non-cheating); set use_privileged_velocity=True to use GT (legacy cheat)
+            use_priv = bool(getattr(getattr(self, "controller_config", None), "use_privileged_velocity", False))
             vel = None
-            try:
-                if hasattr(self, "target") and hasattr(self.target, "get_velocity"):
-                    vel = self.target.get_velocity()
-                elif hasattr(self.tracker, "kalman") and hasattr(self.tracker.kalman, "state"):
-                    # fallback to Kalman estimate
-                    st = getattr(self.tracker.kalman, "state", None)
-                    if st is not None and len(st) >= 4:
-                        vel = (float(st[2]), float(st[3]))
-            except: vel = None
+            if not use_priv:
+                # Try tracker first (non-privileged)
+                try:
+                    if hasattr(self.tracker, "get_velocity"):
+                        vel = self.tracker.get_velocity()
+                    # Fallback to Kalman state if get_velocity returns None/zero
+                    if vel is None:
+                        if hasattr(self.tracker, "kalman") and hasattr(self.tracker.kalman, "state"):
+                            st = getattr(self.tracker.kalman, "state", None)
+                            if st is not None and len(st) >= 4:
+                                vel = (float(st[2]), float(st[3]))
+                except: vel = None
+                # If tracker has no velocity (e.g., SEARCHING), keep None (no feedforward) — do not fall back to GT
+            else:
+                try:
+                    if hasattr(self, "target") and hasattr(self.target, "get_velocity"):
+                        vel = self.target.get_velocity()
+                    elif hasattr(self.tracker, "kalman") and hasattr(self.tracker.kalman, "state"):
+                        st = getattr(self.tracker.kalman, "state", None)
+                        if st is not None and len(st) >= 4:
+                            vel = (float(st[2]), float(st[3]))
+                except: vel = None
             try:
                 d_pan,d_tilt=self.controller.compute_correction(err_x, err_y, dt=dt, camera_max_slew=cam_slew, target_velocity=vel)
             except TypeError:

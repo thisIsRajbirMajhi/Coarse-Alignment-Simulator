@@ -24,6 +24,8 @@ class ControllerConfig(BaseValidatedConfig):
     22) derivative_filter — 0..0.99 (alpha for d filter)
     23) setpoint_weight — 0..1 reduces P kick on acquisition
     24) smith_latency_ms — 0..50 Smith predictor for known camera latency
+    25) use_privileged_velocity — bool, if True uses ground-truth target velocity for feedforward (cheating, legacy);
+    26)                               if False (default, AI-ready) uses tracker-estimated velocity (non-cheating, realistic)
     """
 
     LIMITS = CONTROL_LIMITS
@@ -41,6 +43,7 @@ class ControllerConfig(BaseValidatedConfig):
     derivative_filter: float = CONTROL_DEFAULTS["derivative_filter"]
     setpoint_weight: float = CONTROL_DEFAULTS["setpoint_weight"]
     smith_latency_ms: float = CONTROL_DEFAULTS["smith_latency_ms"]
+    use_privileged_velocity: bool = CONTROL_DEFAULTS.get("use_privileged_velocity", False)
 
     def validate(self) -> "ControllerConfig":
         if self.controller_type not in CONTROLLER_TYPES:
@@ -56,6 +59,8 @@ class ControllerConfig(BaseValidatedConfig):
         self.derivative_filter = float(clip_field(float(getattr(self, "derivative_filter", 0.80)), *self.LIMITS["derivative_filter"]))
         self.setpoint_weight = float(clip_field(float(getattr(self, "setpoint_weight", 1.0)), *self.LIMITS["setpoint_weight"]))
         self.smith_latency_ms = float(clip_field(float(getattr(self, "smith_latency_ms", 0.0)), *self.LIMITS["smith_latency_ms"]))
+        # AI readiness: privileged velocity flag (bool, not clipped)
+        self.use_privileged_velocity = bool(getattr(self, "use_privileged_velocity", False))
         # Enforce type → zero irrelevant gains for cleaner behavior
         if self.controller_type == "P":
             self.ki = 0.0; self.kd = 0.0

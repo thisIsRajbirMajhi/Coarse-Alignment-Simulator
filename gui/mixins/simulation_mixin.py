@@ -10,6 +10,8 @@ import time
 import numpy as np
 from PyQt5.QtCore import QTimer  # noqa: F401 (used by MainWindow, keep import for compat)
 
+from common.rng import get_rng, seed_global
+
 
 class SimulationMixin:
     """Mixin: simulation factory. Expects host to have config attrs and panel refs."""
@@ -72,6 +74,20 @@ class SimulationMixin:
                 cfg = self.env_config.validate()
         except Exception:
             cfg = self.env_config.validate()
+        # Seed global RNG for deterministic disturbances (AI-ready) — GUI now deterministic per seed
+        try:
+            seed_global(int(cfg.seed) if cfg.seed is not None else None)
+            self.rng = get_rng(None, int(cfg.seed) if cfg.seed is not None else None)
+            # Reset global disturbance state for determinism (turbulence _turb_state etc)
+            try:
+                from disturbance.state import reset_disturbance_state
+                reset_disturbance_state()
+                from disturbance.image_noise import clear_hot_pixel_cache
+                clear_hot_pixel_cache()
+            except Exception:
+                pass
+        except Exception:
+            self.rng = get_rng(None)
         # Sync scene size from config (single source)
         scene_w, scene_h = int(cfg.world_width), int(cfg.world_height)
         self._scene_size = (scene_w, scene_h)
@@ -156,9 +172,9 @@ class SimulationMixin:
         from target.config import MultiBeaconConfig
         self.beacon_config = MultiBeaconConfig(beacon_count=len(self.beacons), target_index=int(tgt_id), shape=shape, size_w=size_w, size_h=size_h, x=float(tgt_x) if tgt_x is not None else 2500, y=float(tgt_y) if tgt_y is not None else 2500, profile=str(profile) if isinstance(profile, str) else profile.value if hasattr(profile, 'value') else "curved", speed=float(speed), blinking=bool(blinking), speed_random=bool(speed_random)).validate()
         self.target = self.beacons[tgt_id] if self.beacons else self.beacons[0]
-        # Camera — full mechanics (slew, resolution, latency, ranges, home, optics)
+        # Camera — full mechanics (slew, resolution, latency, ranges, home, optics) — deterministic via rng
         from camera.ptz_camera import PTZCamera
-        self.camera = PTZCamera(config=cam_cfg, scene_bounds=(scene_w, scene_h))
+        self.camera = PTZCamera(config=cam_cfg, scene_bounds=(scene_w, scene_h), rng=getattr(self, "rng", None))
         # Sync vignetting (camera image-space, follows FOV — not world)
         try:
             vig = float(getattr(cfg, 'vignetting_pct', 0) if 'cfg' in locals() else getattr(self.env_config, 'vignetting_pct', 0)) / 100.0

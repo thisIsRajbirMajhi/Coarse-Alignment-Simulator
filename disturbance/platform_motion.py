@@ -6,6 +6,8 @@ import math
 
 import numpy as np
 
+from common.rng import get_rng
+
 from disturbance.constants import PLATFORM_MAX_PX_PER_FRAME, PLATFORM_PROFILE_MAP
 from disturbance.dt_provider import DtProvider
 
@@ -46,6 +48,7 @@ def apply_platform_motion(
     dt: float | None = None,
     state: dict | None = None,
     bounds: tuple[int, int] | None = None,
+    rng: np.random.Generator | None = None,
 ) -> tuple[float, float]:
     """
     Platform motion disturbance — moves camera/platform per frame with selectable trajectory.
@@ -71,6 +74,7 @@ def apply_platform_motion(
     """
     if state is None:
         state = {}
+    _rng = get_rng(rng)
 
     # Resolve speed px/frame -> px/s via dt. We need dt first.
     dt_resolved = DtProvider.resolve(state, dt, key="_pm_last_wall") if dt is None else float(np.clip(dt, 0.005, 0.08))
@@ -115,15 +119,15 @@ def apply_platform_motion(
         state["t"] = 0.0
     if "heading" not in state:
         # random heading but deterministic per state
-        state["heading"] = float(np.random.uniform(0, 2 * math.pi))
+        state["heading"] = float(_rng.uniform(0, 2 * math.pi))
     if "orbit_phase" not in state:
-        state["orbit_phase"] = float(np.random.uniform(0, 2 * math.pi))
+        state["orbit_phase"] = float(_rng.uniform(0, 2 * math.pi))
     if "rw_vx" not in state:
         # random walk velocity
-        state["rw_vx"] = float(np.random.normal(0, speed_px_s * 0.25))
-        state["rw_vy"] = float(np.random.normal(0, speed_px_s * 0.25))
+        state["rw_vx"] = float(_rng.normal(0, speed_px_s * 0.25))
+        state["rw_vy"] = float(_rng.normal(0, speed_px_s * 0.25))
     if "zig_next_turn" not in state:
-        state["zig_next_turn"] = float(np.random.uniform(1.0, 2.0))
+        state["zig_next_turn"] = float(_rng.uniform(1.0, 2.0))
     if "fe_A" not in state:
         state["fe_A"] = _DEFAULT_AMPLITUDE
         state["fe_B"] = _DEFAULT_AMPLITUDE * 0.55
@@ -134,7 +138,7 @@ def apply_platform_motion(
         state["sp_omega"] = speed_px_s / 80.0
         state["sp_expand_rate"] = 0.5
     if "sin_phase" not in state:
-        state["sin_phase"] = float(np.random.uniform(0, 2 * math.pi))
+        state["sin_phase"] = float(_rng.uniform(0, 2 * math.pi))
         state["sin_cy"] = 0.0  # will be centred
 
     t = float(state["t"] + dt_resolved)
@@ -192,8 +196,8 @@ def apply_platform_motion(
         # Langevin / OU random walk, similar to target random_walk
         damping = 2.0
         noise_scale = speed_px_s * 1.7
-        rx = float(np.random.normal(0, 1))
-        ry = float(np.random.normal(0, 1))
+        rx = float(_rng.normal(0, 1))
+        ry = float(_rng.normal(0, 1))
         state["rw_vx"] = float(state["rw_vx"] + (-damping * state["rw_vx"] * dt_resolved + rx * noise_scale * math.sqrt(dt_resolved)))
         state["rw_vy"] = float(state["rw_vy"] + (-damping * state["rw_vy"] * dt_resolved + ry * noise_scale * math.sqrt(dt_resolved)))
         # clamp magnitude
@@ -264,11 +268,11 @@ def apply_platform_motion(
         # Straight segments with periodic heading flips
         state["zig_next_turn"] = float(state["zig_next_turn"] - dt_resolved)
         if float(state["zig_next_turn"]) <= 0:
-            turn = float(np.random.uniform(55, 120)) * math.pi / 180.0
-            if np.random.random() < 0.5:
+            turn = float(_rng.uniform(55, 120)) * math.pi / 180.0
+            if _rng.random() < 0.5:
                 turn = -turn
             state["heading"] = float((state["heading"] + turn) % (2 * math.pi))
-            state["zig_next_turn"] = float(np.random.uniform(1.0, 1.8))
+            state["zig_next_turn"] = float(_rng.uniform(1.0, 1.8))
         hdg = float(state["heading"])
         vx = speed_px_s * math.cos(hdg)
         vy = speed_px_s * math.sin(hdg)
@@ -280,9 +284,9 @@ def apply_platform_motion(
             ny = tilt + dy
             if nx <= 0 or nx >= w or ny <= 0 or ny >= h:
                 # bounce and reset turn timer
-                hdg = float((hdg + math.pi * 0.5 + np.random.uniform(-0.3, 0.3)) % (2 * math.pi))
+                hdg = float((hdg + math.pi * 0.5 + _rng.uniform(-0.3, 0.3)) % (2 * math.pi))
                 state["heading"] = hdg
-                state["zig_next_turn"] = float(np.random.uniform(0.8, 1.5))
+                state["zig_next_turn"] = float(_rng.uniform(0.8, 1.5))
                 dx = speed_px_s * math.cos(hdg) * dt_resolved
                 dy = speed_px_s * math.sin(hdg) * dt_resolved
 

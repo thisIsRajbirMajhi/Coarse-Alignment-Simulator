@@ -30,6 +30,7 @@ CONTROL_DEFAULTS: dict = {
     "derivative_filter": 0.80,  # 0.80 = 0.2*raw+0.8*prev (was hardcoded)
     "setpoint_weight": 1.0,   # 1.0 = no weighting, 0.7 reduces kick on acquire
     "smith_latency_ms": 0.0,  # 0=off, 12 = Smith predictor for camera latency
+    "use_privileged_velocity": False,  # False=AI-ready (tracker velocity), True=legacy GT cheat
 }
 
 CONTROLLER_TYPES: list[str] = ["P", "PI", "PID"]
