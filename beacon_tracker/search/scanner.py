@@ -1,14 +1,18 @@
-# searching/scanner.py - Active-search scan geometries — future drive for camera when SEARCHING
+# beacon_tracker/search/scanner.py
+# Active-search scan geometries — moved from searching/scanner.py
+# No internal imports changed (pure math, no package references)
 
 from __future__ import annotations
 
 import math
 from enum import Enum
 
+
 class ScanPattern(Enum):
     SPIRAL = "spiral"
     RASTER = "raster"
     RANDOM = "random"
+
 
 class SearchingStrategy:
     """
@@ -62,7 +66,7 @@ class SearchingStrategy:
         return (dx, dy)
 
     @staticmethod
-    def next_offset(pattern: ScanPattern | str, step: int, **kwargs) -> tuple[float, float]:
+    def next_offset(pattern: "ScanPattern | str", step: int, **kwargs) -> tuple[float, float]:
         """Dispatch to pattern."""
         pat = pattern.value if isinstance(pattern, ScanPattern) else str(pattern)
         if pat == ScanPattern.SPIRAL.value:

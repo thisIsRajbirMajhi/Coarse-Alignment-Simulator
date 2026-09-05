@@ -1,4 +1,5 @@
-# searching/constants.py - Single source for SEARCHING-phase limits & defaults
+# beacon_tracker/search/constants.py
+# Single source for SEARCHING-phase limits & defaults — moved from searching/constants.py
 
 SEARCHING_LIMITS: dict[str, tuple[float, float]] = {
     # Max frames to remain in SEARCHING before declaring timeout (diagnostics)

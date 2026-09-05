@@ -1,11 +1,13 @@
-# lost/config.py - Typed, validated configuration for LOST phase
+# beacon_tracker/phases/lost/config.py
+# Typed, validated configuration for LOST phase — moved from lost/config.py
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from beacon_tracker.phases.lost.constants import LOST_DEFAULTS, LOST_LIMITS
 from common.config_base import BaseValidatedConfig, clip_field
-from lost.constants import LOST_DEFAULTS, LOST_LIMITS
+
 
 @dataclass
 class LostConfig(BaseValidatedConfig):

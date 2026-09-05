@@ -1,4 +1,5 @@
-# locked/filter.py - Isolated smoothing filter for LOCKED phase — first-order IIR
+# beacon_tracker/phases/locked/filter.py
+# Re-export ExponentialFilter as LockedFilter — alias, single implementation
 
 from __future__ import annotations
 

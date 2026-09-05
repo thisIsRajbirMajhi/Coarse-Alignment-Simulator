@@ -21,8 +21,8 @@ from camera.ptz_camera import PTZCamera
 from common.rng import get_rng, seed_global
 from control.config import ControllerConfig
 from control.controller import PIDController
-from detection.config import DetectorConfig
-from detection.detector import BeaconDetector
+from beacon_tracker.detection.config import DetectorConfig
+from beacon_tracker.detection.detector import BeaconDetector
 from disturbance import disturbances as dist
 from disturbance.config import DisturbanceConfig
 from environment.config import EnvironmentConfig

@@ -1,4 +1,5 @@
-# lost/constants.py - Single source for LOST-phase limits & defaults
+# beacon_tracker/phases/lost/constants.py
+# Single source for LOST-phase limits & defaults — moved from lost/constants.py
 
 LOST_LIMITS: dict[str, tuple[float, float]] = {
     # Misses before ACQUIRED/TRACKING → LOST (same as locked)

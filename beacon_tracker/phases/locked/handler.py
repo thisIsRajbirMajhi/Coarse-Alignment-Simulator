@@ -1,9 +1,12 @@
-# locked/handler.py - Isolated LOCKED (=TRACKING) algorithm — stable lock, retention
+# beacon_tracker/phases/locked/handler.py
+# Isolated LOCKED (=TRACKING) algorithm — stable lock, retention
+# Moved from locked/handler.py; imports updated to beacon_tracker paths
 
 from __future__ import annotations
 
 from common.colors import lock_color_hex
-from tracking.types import LockStatus
+from tracking.types import LockStatus  # tracking/types.py is the canonical single source
+
 
 class LockedHandler:
     """

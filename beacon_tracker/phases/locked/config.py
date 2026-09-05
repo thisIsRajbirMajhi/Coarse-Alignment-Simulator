@@ -1,11 +1,13 @@
-# locked/config.py - Typed, validated configuration for LOCKED (=TRACKING) phase
+# beacon_tracker/phases/locked/config.py
+# Typed, validated configuration for LOCKED (=TRACKING) phase — moved from locked/config.py
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from beacon_tracker.phases.locked.constants import LOCKED_DEFAULTS, LOCKED_LIMITS
 from common.config_base import BaseValidatedConfig, clip_field
-from locked.constants import LOCKED_DEFAULTS, LOCKED_LIMITS
+
 
 @dataclass
 class LockedConfig(BaseValidatedConfig):

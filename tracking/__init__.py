@@ -12,7 +12,7 @@ Architecture (refactored):
   - lost/               : LostHandler (LOST hold & grace)
   - detection/          : BeaconDetector (stateless per-frame input)
 Notes: This package remains the entry point for `from tracking.tracker import Tracker, LockStatus`
-       for backward compat. New code may also `from locked.handler import LockedHandler`, etc.
+       for backward compat. New code should use `from beacon_tracker.phases.locked.handler import LockedHandler`, etc.
 """
 
 from tracking.config import TrackerConfig  # noqa: F401

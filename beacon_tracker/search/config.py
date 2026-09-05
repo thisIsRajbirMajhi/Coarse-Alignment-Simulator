@@ -1,11 +1,13 @@
-# searching/config.py - Typed, validated configuration for SEARCHING phase
+# beacon_tracker/search/config.py
+# Typed, validated configuration for SEARCHING phase — moved from searching/config.py
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from beacon_tracker.search.constants import SCAN_PATTERNS, SEARCHING_DEFAULTS, SEARCHING_LIMITS
 from common.config_base import BaseValidatedConfig, clip_field
-from searching.constants import SEARCHING_DEFAULTS, SEARCHING_LIMITS, SCAN_PATTERNS
+
 
 @dataclass
 class SearchingConfig(BaseValidatedConfig):

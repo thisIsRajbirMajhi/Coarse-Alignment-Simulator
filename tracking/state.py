@@ -70,19 +70,19 @@ class LockStateMachine:
         # Try delegated isolated handlers (lazy imports avoid circular)
         try:
             if self.status == LockStatus.SEARCHING:
-                from searching.handler import SearchingHandler
+                from beacon_tracker.search.handler import SearchingHandler
 
                 new_status, should_clear = SearchingHandler.update(self, bool(has_detection))
             elif self.status == LockStatus.ACQUIRED:
-                from acquired.handler import AcquiredHandler
+                from beacon_tracker.phases.acquired.handler import AcquiredHandler
 
                 new_status, should_clear = AcquiredHandler.update(self, bool(has_detection))
             elif self.status == LockStatus.TRACKING:
-                from locked.handler import LockedHandler
+                from beacon_tracker.phases.locked.handler import LockedHandler
 
                 new_status, should_clear = LockedHandler.update(self, bool(has_detection))
             elif self.status == LockStatus.LOST:
-                from lost.handler import LostHandler
+                from beacon_tracker.phases.lost.handler import LostHandler
 
                 new_status, should_clear = LostHandler.update(self, bool(has_detection))
             else:

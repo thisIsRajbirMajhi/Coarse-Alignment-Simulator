@@ -1,13 +1,16 @@
-# detection/detector.py - Beacon detection — raw per-frame input (no lock state), well-commented maths/phy
+# beacon_tracker/detection/detector.py
+# Beacon detection — raw per-frame input (no lock state), well-commented maths/physics
+# Moved from detection/detector.py; internal imports updated to beacon_tracker paths
 
 from __future__ import annotations
 
 import cv2
 import numpy as np
 
-from detection.config import DetectorConfig
-from detection.constants import DETECTOR_DEFAULTS
-from detection.preprocessing import close_gaps, threshold_frame, to_grayscale
+from beacon_tracker.detection.config import DetectorConfig
+from beacon_tracker.detection.constants import DETECTOR_DEFAULTS
+from beacon_tracker.detection.preprocessor import close_gaps, threshold_frame, to_grayscale
+
 
 class BeaconDetector:
     """
@@ -32,7 +35,7 @@ class BeaconDetector:
             self.brightness_threshold = int(self.config.brightness_threshold)
             self.min_area = int(self.config.min_area)
 
-    # Config bridge — -apply without rebuild
+    # Config bridge — apply without rebuild
 
     def apply_config(self, config: DetectorConfig) -> None:
         cfg = config.validate()
@@ -79,7 +82,7 @@ class BeaconDetector:
         Returns list[dict] sorted descending by confidence, capped to max_beacons.
         Each dict: {x,y, area, peak, confidence, bbox}
         """
-        # Input validation (H3)
+        # Input validation
         if frame is None or not isinstance(frame, np.ndarray) or frame.size == 0:
             return []
         if frame.ndim not in (2, 3):

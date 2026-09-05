@@ -1,4 +1,5 @@
-# detection/constants.py - Single source for detector limits & defaults
+# beacon_tracker/detection/constants.py
+# Single source for detector limits & defaults — moved from detection/constants.py
 
 import numpy as np
 

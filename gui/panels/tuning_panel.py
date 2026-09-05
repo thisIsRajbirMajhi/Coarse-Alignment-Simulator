@@ -2,8 +2,8 @@
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import QDoubleSpinBox, QGridLayout, QGroupBox, QLabel, QSpinBox, QVBoxLayout
 
-from detection.config import DetectorConfig
-from detection.constants import DETECTOR_LIMITS
+from beacon_tracker.detection.config import DetectorConfig
+from beacon_tracker.detection.constants import DETECTOR_LIMITS
 from gui.panels.base import BaseConfigPanel
 from tracking.config import TrackerConfig
 from tracking.constants import TRACKER_LIMITS

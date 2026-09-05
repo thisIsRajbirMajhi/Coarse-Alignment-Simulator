@@ -1,9 +1,12 @@
-# detection/preprocessing.py - Frame preprocessing — grayscale + threshold + morphology (well-commented physics
+# beacon_tracker/detection/preprocessor.py
+# Frame preprocessing — grayscale + threshold + morphology
+# Moved from detection/preprocessing.py; renamed to preprocessor.py for clarity
 
 import cv2
 import numpy as np
 
-from detection.constants import MORPH_KERNEL
+from beacon_tracker.detection.constants import MORPH_KERNEL
+
 
 def to_grayscale(frame: np.ndarray) -> np.ndarray:
     """
@@ -21,6 +24,7 @@ def to_grayscale(frame: np.ndarray) -> np.ndarray:
             return frame.squeeze(axis=2)
     return frame
 
+
 def threshold_frame(gray: np.ndarray, brightness_threshold: int) -> np.ndarray:
     """
     Binary threshold: mask = 255 where gray > T, else 0.
@@ -30,6 +34,7 @@ def threshold_frame(gray: np.ndarray, brightness_threshold: int) -> np.ndarray:
     """
     _, mask = cv2.threshold(gray, int(brightness_threshold), 255, cv2.THRESH_BINARY)
     return mask
+
 
 def close_gaps(mask: np.ndarray, kernel: np.ndarray = MORPH_KERNEL, iterations: int = 1) -> np.ndarray:
     """

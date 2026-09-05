@@ -1,11 +1,13 @@
-# acquired/config.py - Typed, validated configuration for ACQUIRED phase
+# beacon_tracker/phases/acquired/config.py
+# Typed, validated configuration for ACQUIRED phase — moved from acquired/config.py
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from acquired.constants import ACQUIRED_DEFAULTS, ACQUIRED_LIMITS
+from beacon_tracker.phases.acquired.constants import ACQUIRED_DEFAULTS, ACQUIRED_LIMITS
 from common.config_base import BaseValidatedConfig, clip_field
+
 
 @dataclass
 class AcquiredConfig(BaseValidatedConfig):

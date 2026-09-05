@@ -5,8 +5,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import cv2
 import numpy as np
 import pytest
-from detection.detector import BeaconDetector
-from detection.config import DetectorConfig
+from beacon_tracker.detection.detector import BeaconDetector
+from beacon_tracker.detection.config import DetectorConfig
 from disturbance import disturbances as dist
 
 

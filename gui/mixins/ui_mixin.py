@@ -329,7 +329,7 @@ class UIMixin:
         # ── Tuning Tab — Detection & Tracking (threshold, smoothing, lock) ──
         try:
             from gui.panels.tuning_panel import TuningPanel
-            from detection.config import DetectorConfig as _DetCfg
+            from beacon_tracker.detection.config import DetectorConfig as _DetCfg
             from tracking.config import TrackerConfig as _TrkCfg
             # Initial from current detector/tracker or defaults
             try:

@@ -181,7 +181,7 @@ class SimulationMixin:
             self.camera.set_vignetting(vig)
         except:
             pass
-        from detection.detector import BeaconDetector
+        from beacon_tracker.detection.detector import BeaconDetector
         self.detector = BeaconDetector(brightness_threshold=thresh, min_area=min_area)
         from tracking.tracker import Tracker
         self.tracker = Tracker(smoothing=smoothing, miss_limit=miss_limit)

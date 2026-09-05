@@ -6,7 +6,7 @@ import numpy as np
 from PyQt5.QtWidgets import QMessageBox  # noqa
 from target.motion import MotionProfile  # noqa
 from control.config import ControllerConfig  # noqa
-from detection.detector import BeaconDetector  # noqa
+from beacon_tracker.detection.detector import BeaconDetector  # noqa
 from tracking.tracker import Tracker  # noqa
 
 

@@ -1,9 +1,12 @@
-# lost/handler.py - Isolated LOST algorithm — retain estimate, await reacquisition or timeout
+# beacon_tracker/phases/lost/handler.py
+# Isolated LOST algorithm — retain estimate, await reacquisition or timeout
+# Moved from lost/handler.py; imports updated to beacon_tracker paths
 
 from __future__ import annotations
 
 from common.colors import lock_color_hex
-from tracking.types import LockStatus
+from tracking.types import LockStatus  # tracking/types.py is the canonical single source
+
 
 class LostHandler:
     """

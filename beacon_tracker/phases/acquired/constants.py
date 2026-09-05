@@ -1,4 +1,5 @@
-# acquired/constants.py - Single source for ACQUIRED-phase limits & defaults
+# beacon_tracker/phases/acquired/constants.py
+# Single source for ACQUIRED-phase limits & defaults — moved from acquired/constants.py
 
 ACQUIRED_LIMITS: dict[str, tuple[float, float]] = {
     # Consecutive hits required to confirm TRACKING/LOCKED from ACQUIRED

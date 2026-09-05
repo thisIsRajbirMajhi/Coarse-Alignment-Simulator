@@ -1,11 +1,13 @@
-# detection/config.py - Typed, validated configuration for beacon detection
+# beacon_tracker/detection/config.py
+# Typed, validated configuration for beacon detection — moved from detection/config.py
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from beacon_tracker.detection.constants import DETECTOR_DEFAULTS, DETECTOR_LIMITS
 from common.config_base import BaseValidatedConfig, clip_field
-from detection.constants import DETECTOR_DEFAULTS, DETECTOR_LIMITS
+
 
 @dataclass
 class DetectorConfig(BaseValidatedConfig):
