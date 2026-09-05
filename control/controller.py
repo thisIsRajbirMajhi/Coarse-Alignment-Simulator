@@ -160,7 +160,7 @@ class PIDController:
                 try:
                     cam_clamp_i = float(camera_max_slew) * float(dt)
                     clamp = min(clamp, cam_clamp_i)
-                except:
+                except Exception:
                     pass
             # Check if adding would push same direction as saturation
             would_sat_x = (i_x > 0 and error_x > 0 and abs(i_x + p_x) >= clamp) or (i_x < 0 and error_x < 0 and abs(i_x + p_x) >= clamp)
@@ -174,7 +174,7 @@ class PIDController:
                 try:
                     cam_clamp_i = float(camera_max_slew) * float(dt)
                     clamp = min(clamp, cam_clamp_i)
-                except:
+                except Exception:
                     pass
             i_x = float(np.clip(i_x, -clamp, clamp))
             i_y = float(np.clip(i_y, -clamp, clamp))
@@ -228,7 +228,7 @@ class PIDController:
             try:
                 cam_clamp = float(camera_max_slew) * float(dt)
                 clamp = min(float(clamp), float(cam_clamp))
-            except:
+            except Exception:
                 pass
         u_x = float(np.clip(u_x, -clamp, clamp))
         u_y = float(np.clip(u_y, -clamp, clamp))

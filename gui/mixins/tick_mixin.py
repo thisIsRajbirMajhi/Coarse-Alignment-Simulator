@@ -23,7 +23,7 @@ class TickMixin:
         # Global sim speed scales physics dt (realtime configurable 0.2–3.0x)
         try:
             sim_speed = float(self.sim_speed_spin.value()) if hasattr(self, "sim_speed_spin") else float(getattr(self, "_sim_speed", 1.0))
-        except:
+        except Exception:
             sim_speed = float(getattr(self, "_sim_speed", 1.0))
         self._sim_speed = float(sim_speed)
         dt_eff = float(np.clip(dt * sim_speed, 1e-4, 0.1))
@@ -35,7 +35,7 @@ class TickMixin:
         if hasattr(self, "beacons") and self.beacons:
             try:
                 tid = int(self.target_beacon_spin.value()) if hasattr(self, "target_beacon_spin") else int(getattr(self, "_target_beacon_id", 0))
-            except:
+            except Exception:
                 tid = int(getattr(self, "_target_beacon_id", 0))
             tid = int(np.clip(tid, 0, len(self.beacons)-1))
             self._target_beacon_id = tid
@@ -55,13 +55,13 @@ class TickMixin:
                     if not panel.spin_x.hasFocus() and not panel.spin_y.hasFocus():
                         panel.spin_x.blockSignals(True); panel.spin_x.setValue(int(b.x)); panel.spin_x.blockSignals(False)
                         panel.spin_y.blockSignals(True); panel.spin_y.setValue(int(b.y)); panel.spin_y.blockSignals(False)
-        except: pass
+        except Exception: pass
         try: self.scene.update(dt_eff)
-        except: pass
+        except Exception: pass
         # Camera latency queue — advance time and execute due moves
         try:
             self.camera.update(dt)
-        except: pass
+        except Exception: pass
         # ── PERFORMANCE FIX: Optimized FOV rendering — crop first (640×640 ≈1.2M px)
         #   instead of rebuilding full 5000×5000 (75M px, 300 MB float32) every 33 ms.
         #   Scene.get_region(x0,y0,x1,y1) applies haze shimmer + twinkle only to
@@ -76,7 +76,7 @@ class TickMixin:
             dc = getattr(self, "disturbance_config", None)
             if dc is not None:
                 dc = dc.validate() if hasattr(dc, "validate") else dc
-        except:
+        except Exception:
             dc = None
         if dc is None and hasattr(self, "sliders") and self.sliders:
             try:
@@ -87,7 +87,7 @@ class TickMixin:
                     camera_motion=int(self.sliders["Camera Motion"].value()) if "Camera Motion" in self.sliders else 0,
                     noise=int(self.sliders["Noise"].value()) if "Noise" in self.sliders else 0,
                 ).validate()
-            except:
+            except Exception:
                 dc = None
 
         # Determine vignetting strength for camera image-space (follows FOV)
@@ -95,11 +95,11 @@ class TickMixin:
             vig_strength = float(getattr(self.scene, 'vignetting', 0.0) or 0.0)
             if hasattr(self, 'env_config') and hasattr(self.env_config, 'vignetting_pct'):
                 vig_strength = float(self.env_config.vignetting_pct) / 100.0
-        except:
+        except Exception:
             vig_strength = 0.0
         try:
             self.camera.set_vignetting(vig_strength)
-        except:
+        except Exception:
             pass
         # Decide path: optimized if Scene has get_region
         use_optimized = hasattr(self.scene, 'get_region')
@@ -259,7 +259,7 @@ class TickMixin:
                     try:
                         # Use last filtered/Kalman estimate as gate (continuity)
                         gate_x, gate_y = float(self.tracker.estimated_position[0]), float(self.tracker.estimated_position[1])
-                    except:
+                    except Exception:
                         gate_x, gate_y = proj_x, proj_y
                 detection = None
                 min_dist = float("inf")
@@ -295,7 +295,7 @@ class TickMixin:
             # Feedforward uses target velocity (ground truth for now; later tracker velocity for non-cheating)
             try:
                 cam_slew = float(self.camera_config.max_slew_rate) if hasattr(self, "camera_config") else None
-            except: cam_slew = None
+            except Exception: cam_slew = None
             # Target velocity for feedforward/Smith (px/s)
             # AI-ready: default uses tracker-estimated velocity (non-cheating); set use_privileged_velocity=True to use GT (legacy cheat)
             use_priv = bool(getattr(getattr(self, "controller_config", None), "use_privileged_velocity", False))
@@ -311,7 +311,7 @@ class TickMixin:
                             st = getattr(self.tracker.kalman, "state", None)
                             if st is not None and len(st) >= 4:
                                 vel = (float(st[2]), float(st[3]))
-                except: vel = None
+                except Exception: vel = None
                 # If tracker has no velocity (e.g., SEARCHING), keep None (no feedforward) — do not fall back to GT
             else:
                 try:
@@ -321,19 +321,50 @@ class TickMixin:
                         st = getattr(self.tracker.kalman, "state", None)
                         if st is not None and len(st) >= 4:
                             vel = (float(st[2]), float(st[3]))
-                except: vel = None
+                except Exception: vel = None
             try:
-                d_pan,d_tilt=self.controller.compute_correction(err_x, err_y, dt=dt, camera_max_slew=cam_slew, target_velocity=vel)
+                d_pan,d_tilt=self.controller.compute_correction(err_x, err_y, dt=dt_eff, camera_max_slew=cam_slew, target_velocity=vel)
             except TypeError:
                 try:
-                    d_pan,d_tilt=self.controller.compute_correction(err_x, err_y, dt=dt, camera_max_slew=cam_slew)
+                    d_pan,d_tilt=self.controller.compute_correction(err_x, err_y, dt=dt_eff, camera_max_slew=cam_slew)
                 except TypeError:
                     d_pan,d_tilt=self.controller.compute_correction(err_x, err_y)
             try:
-                self.camera.move(d_pan, d_tilt, dt)
+                self.camera.move(d_pan, d_tilt, dt_eff)
             except TypeError:
                 # Back-compat fallback (PTZCamera without dt)
                 self.camera.move(d_pan, d_tilt)
+            # Reset search step when tracking (have estimate)
+            try:
+                self._search_step = 0
+            except Exception:
+                pass
+        else:
+            # No estimate — active search when SEARCHING (wires scanner.py spiral into tick)
+            try:
+                if self.tracker.status == LockStatus.SEARCHING:
+                    if not hasattr(self, "_search_step"):
+                        self._search_step = 0
+                    self._search_step += 1
+                    try:
+                        from beacon_tracker.search.scanner import SearchingStrategy
+                    except Exception:
+                        SearchingStrategy = None
+                    if SearchingStrategy is not None:
+                        # Incremental spiral delta for smooth expanding coverage (k=6.0)
+                        cur_dx, cur_dy = SearchingStrategy.spiral_offset(self._search_step, k=6.0)
+                        prev_dx, prev_dy = SearchingStrategy.spiral_offset(self._search_step - 1, k=6.0) if self._search_step > 1 else (0.0, 0.0)
+                        d_pan = float(np.clip((cur_dx - prev_dx) * 0.7, -14, 14))
+                        d_tilt = float(np.clip((cur_dy - prev_dy) * 0.7, -14, 14))
+                        try:
+                            self.camera.move(d_pan, d_tilt, dt_eff)
+                        except TypeError:
+                            self.camera.move(d_pan, d_tilt)
+                else:
+                    # LOST etc without estimate — reset search
+                    self._search_step = 0
+            except Exception:
+                pass
         is_locked=self.tracker.status==LockStatus.TRACKING
         # Real-time accurate: detected = primary hitbox hit (not any distractor) + dt for time accounting
         self.perf.log_frame(is_locked, tracking_error_px, time.time()-frame_start,

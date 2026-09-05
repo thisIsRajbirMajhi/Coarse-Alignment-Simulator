@@ -48,13 +48,13 @@ class RenderingMixin:
             try:
                 px = float(beacon.x) - float(fov_x0)
                 py = float(beacon.y) - float(fov_y0)
-            except:
+            except Exception:
                 continue
             if px < -40 or px > w + 40 or py < -40 or py > h + 40:
                 continue
             try:
                 brightness, radius = beacon.get_photometry()
-            except:
+            except Exception:
                 brightness, radius = float(getattr(beacon, "brightness", 200)), float(getattr(beacon, "radius", 5))
             if brightness < 8:
                 continue  # eclipsed / deeply faded — invisible
@@ -135,7 +135,7 @@ class RenderingMixin:
                 ix, iy = int(round(px)), int(round(py))
                 try:
                     vib = Renderer.beacon_vibrant_color(int(getattr(beacon, "beacon_id", 0)), float(brightness))
-                except:
+                except Exception:
                     vib = (0, 255, 255)
                 if shape == "square":
                     hw, hh = size_w // 2, size_h // 2
@@ -166,7 +166,7 @@ class RenderingMixin:
         pixel_scale = 0.035
         try:
             pixel_scale = float(getattr(getattr(self, "camera", None).config, "pixel_scale_mrad", 0.035))
-        except: pass
+        except Exception: pass
         try:
             display = Renderer.render_viewport(fov_frame, self.camera, getattr(self, "beacons", [self.target]), self.target, self.tracker, all_dets, pixel_scale_mrad=pixel_scale)
         except Exception:
@@ -216,7 +216,7 @@ class RenderingMixin:
         if scene_frame is None:
             try:
                 scene_frame = self.scene._static_background.copy() if hasattr(self.scene, '_static_background') and self.scene._static_background is not None else self.scene.get_frame()
-            except:
+            except Exception:
                 scene_frame = self.scene.get_frame()
         display = Renderer.render_minimap(scene_frame, self.camera, getattr(self, "beacons", [self.target]), self.target, self.tracker, (lw, lh), self._scene_size)
         self._last_god_frame = display

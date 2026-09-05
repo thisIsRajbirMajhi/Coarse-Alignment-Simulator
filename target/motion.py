@@ -398,35 +398,35 @@ class Target:
         # Call all 8 _init_*_params to make randomize_all truly complete for the new profile.
         try:
             self._init_orbit_params()
-        except:
+        except Exception:
             pass
         try:
             self._init_random_walk_params()
-        except:
+        except Exception:
             pass
         try:
             self._init_sinusoidal_params()
-        except:
+        except Exception:
             pass
         try:
             self._init_zigzag_params()
-        except:
+        except Exception:
             pass
         try:
             self._init_figure_eight_params()
-        except:
+        except Exception:
             pass
         try:
             self._init_spiral_params()
-        except:
+        except Exception:
             pass
         try:
             self._init_accelerating_params()
-        except:
+        except Exception:
             pass
         try:
             self._init_waypoint_params()
-        except:
+        except Exception:
             pass
         try:
             self._init_realistic_photometry()
@@ -435,7 +435,7 @@ class Target:
             self._init_beacon_coding()
             self._init_eclipse()
             self._gimbal_x, self._gimbal_y = float(self.x), float(self.y)
-        except:
+        except Exception:
             pass
 
     def update(self, dt: float):

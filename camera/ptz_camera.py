@@ -77,12 +77,12 @@ class PTZCamera:
         if _vign == 0.0 and config is not None and hasattr(config, "vignetting"):
             try:
                 _vign = float(getattr(config, "vignetting", 0.0) or 0.0)
-            except:
+            except Exception:
                 _vign = 0.0
         if _vign == 0.0 and config is not None and hasattr(config, "vignetting_strength"):
             try:
                 _vign = float(getattr(config, "vignetting_strength", 0.0) or 0.0)
-            except:
+            except Exception:
                 _vign = 0.0
         self.vignetting: float = float(np.clip(_vign, 0.0, 0.92))
 
@@ -165,7 +165,7 @@ class PTZCamera:
             scale = float(self.config.pixel_scale_mrad) if is_pan else float(getattr(self.config, "pixel_scale_mrad_y", self.config.pixel_scale_mrad))
             px_per_deg = 17.453292519943295 / max(1e-6, scale)
             max_rate = deg * px_per_deg
-        except:
+        except Exception:
             max_rate = float(self.config.max_slew_rate)
         if max_rate <= 1e-6:
             return float(delta)
@@ -360,12 +360,12 @@ class PTZCamera:
         if hasattr(config, "vignetting"):
             try:
                 self.set_vignetting(float(getattr(config, "vignetting", self.vignetting) or 0.0))
-            except:
+            except Exception:
                 pass
         if hasattr(config, "vignetting_strength"):
             try:
                 self.set_vignetting(float(getattr(config, "vignetting_strength", self.vignetting) or 0.0))
-            except:
+            except Exception:
                 pass
         # Re-clamp current pan/tilt to new ranges
         self._clamp_to_range()

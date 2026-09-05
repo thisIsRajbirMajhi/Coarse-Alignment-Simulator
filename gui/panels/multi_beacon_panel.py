@@ -333,7 +333,7 @@ class MultiBeaconPanel(QWidget):
             w, h = bounds
             self.spin_x.setRange(0, w)
             self.spin_y.setRange(0, h)
-        except: pass
+        except Exception: pass
 
     def get_per_beacon_panels(self):
         return []

@@ -291,4 +291,4 @@ class ControlPanel(BaseConfigPanel):
         try:
             cfg = self.collect_config()
             self.configChanged.emit(cfg)
-        except: pass
+        except Exception: pass

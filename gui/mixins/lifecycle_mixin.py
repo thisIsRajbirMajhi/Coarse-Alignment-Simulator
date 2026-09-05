@@ -35,7 +35,7 @@ class LifecycleMixin:
                     if hasattr(self, "disturbance_config"):
                         try:
                             cfg_snap.update({f"dist_{k}": v for k, v in self.disturbance_config.to_dict().items()})
-                        except: pass
+                        except Exception: pass
                     cfg_snap["world_size"] = getattr(self, "_scene_size", None)
                     cfg_snap["fov_size"] = getattr(self, "_fov_size", None)
                     self.perf.start(prefix="simulation", config=cfg_snap)
@@ -58,25 +58,25 @@ class LifecycleMixin:
                 self._pause_time = None
             self.timer.start(TICK_MS); self._running = True
             try: self._update_live_indicators()
-            except: pass
+            except Exception: pass
             self.statusBar().showMessage("Running — tracking…", 2000)
 
     def _pause(self):
         if self._running:
             self.timer.stop(); self._running = False; self._pause_time = time.time()
             try: self._update_live_indicators()
-            except: pass
+            except Exception: pass
             self.statusBar().showMessage("Paused", 2000)
         else: self._pause_time = None
 
     def _reset(self):
         self.timer.stop(); self._running=False; self._pause_time=None
         try: self._update_live_indicators()
-        except: pass
+        except Exception: pass
         try:
             if hasattr(self, "perf") and hasattr(self.perf, "close"):
                 self.perf.close()
-        except: pass
+        except Exception: pass
         # Reset all panels to defaults
         try:
             from environment.config import EnvironmentConfig as _EC
@@ -99,7 +99,7 @@ class LifecycleMixin:
                 self._beacon_count = 1; self._target_beacon_id = 0
                 try:
                     self.beacon_manager.spin_thresh.setValue(200)
-                except: pass
+                except Exception: pass
             # Disturbances to 0 — full spec reset (all new modules to Clear/Off)
             try:
                 from disturbance.config import DisturbanceConfig as _DCReset
@@ -110,23 +110,23 @@ class LifecycleMixin:
                     # keep legacy alias in sync
                     try:
                         self.sliders = self.disturbances_panel.sliders
-                    except: pass
-            except:
+                    except Exception: pass
+            except Exception:
                 if hasattr(self, "sliders"):
                     for s in self.sliders.values():
                         try:
                             s.blockSignals(True); s.setValue(0); s.blockSignals(False)
-                        except: pass
+                        except Exception: pass
                 if hasattr(self, "disturbances_panel"):
                     for s in self.disturbances_panel.sliders.values():
                         try:
                             s.blockSignals(True); s.setValue(0); s.blockSignals(False)
-                        except: pass
+                        except Exception: pass
             # Clear per-instance platform/jitter states
             try:
                 if hasattr(self, "_platform_motion_state"): self._platform_motion_state.clear()
                 if hasattr(self, "_jitter_state"): self._jitter_state.clear()
-            except: pass
+            except Exception: pass
             # Control to defaults (P, kp 0.15, 30Hz fixed)
             if hasattr(self, "control_panel"):
                 self.control_panel.set_config(_CtrlC().validate(), emit=False)
@@ -137,28 +137,28 @@ class LifecycleMixin:
             if hasattr(self, "speed_slider"):
                 self.speed_slider.blockSignals(True); self.speed_slider.setValue(60); self.speed_slider.blockSignals(False)
                 try: self.speed_slider._value_label.setText("60")
-                except: pass
+                except Exception: pass
             if hasattr(self, "thresh_slider"):
                 self.thresh_slider.blockSignals(True); self.thresh_slider.setValue(200); self.thresh_slider.blockSignals(False)
                 try: self.thresh_slider._value_label.setText("200")
-                except: pass
+                except Exception: pass
             self._target_speed = 60; self._det_thresh = 200; self._ctrl_gain = 0.15
             self._tracker_smoothing = 0.25; self._tracker_miss_limit = 5; self._detector_min_area = 2; self._sim_speed = 1.0; self._global_brightness = 255; self._global_radius = 5
             self._hitbox_radius = 14; self._center_radius = 2
             # Clear dirty
             try:
                 self._dirty_tabs.clear(); self._applied_snapshot.clear()
-            except: pass
+            except Exception: pass
         except Exception as e:
             print(f"Reset defaults error: {e}")
         self._build_simulation()
         try:
             self._invalidate_minimap_cache()
-        except: pass
+        except Exception: pass
         try:
             self._rebuild_per_beacon_panels()
             self._sync_per_beacon_xy_ranges()
-        except: pass
+        except Exception: pass
         self.perf=PerformanceLogger(); self._camera_drift_state={}; self._platform_motion_state={}; self._jitter_state={}; self._last_tick_time=None
         # FIX: reset dashboard history immediately so graph clears on reset (not lazy on next tick)
         try:
@@ -193,7 +193,7 @@ class LifecycleMixin:
             for lbl in self.stat_labels.values():
                 try:
                     lbl.setText("0.0")
-                except: pass
+                except Exception: pass
         self.footer_lock.setText("SEARCHING"); self.lock_dot.setStyleSheet("color:#64748b; font-size:14px;")
         self.viewport_label.clear(); self.minimap_label.clear()
         # Force repaint for immediate visibility

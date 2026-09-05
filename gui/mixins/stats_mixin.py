@@ -83,13 +83,13 @@ class StatsMixin:
                 if cam_scale is None:
                     try:
                         cam_scale = float(getattr(getattr(self, "camera", None).config, "pixel_scale_mrad", None))
-                    except: pass
+                    except Exception: pass
                 self.dashboard_panel.update_from_summary(s, self.tracker.status.value, tracking_error_px, camera_scale_mrad=cam_scale)
                 # Inform dashboard window status bar (intuitive live indicator)
                 try:
                     if hasattr(self, "dashboard_window") and hasattr(self.dashboard_window, "update_live_status"):
                         self.dashboard_window.update_live_status(s)
-                except: pass
+                except Exception: pass
             else:
                 # Fallback legacy direct label updates
                 for k in ["fps","simulation_duration_s","acquisition_time_s","avg_processing_time_ms","avg_tracking_error_px","max_tracking_error_px","tracking_error_pct","lock_retention_rate_pct","acquisitions","detection_rate_pct","detection_time_s","searching_rate_pct","searching_time_s","center_hit_rate_pct","center_hit_time_s"]:
@@ -97,7 +97,7 @@ class StatsMixin:
                         self.stat_labels[k].setText(str(s.get(k, "-")))
                 if "lock_status" in getattr(self, "stat_labels", {}):
                     self.stat_labels["lock_status"].setText(self.tracker.status.value)
-        except: pass
+        except Exception: pass
 
         # Dashboard-only: external telemetry/header/footer metric displays hidden; dashboard is single source
         try:
@@ -106,7 +106,7 @@ class StatsMixin:
                 if w is not None:
                     try:
                         w.hide()
-                    except: pass
+                    except Exception: pass
             # Status bar no longer shows metric values outside dashboard — points to dashboard (metrics dashboard-only)
             self.statusBar().showMessage("Metrics -> Dashboard only -- see Dashboard tab/window for live FPS, error, retention, reacq, etc. (Sr.16-20)", 2000)
-        except: pass
+        except Exception: pass

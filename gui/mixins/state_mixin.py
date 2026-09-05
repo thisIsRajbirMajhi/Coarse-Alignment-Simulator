@@ -16,40 +16,17 @@ class StateMixin:
     # Dirty marking
 
     def _mark_dirty(self, section: str):
+        """Mark section dirty — HOT auto-apply path (debounced) handles apply.
+
+        Previously tried to style non-existent Apply buttons (global_apply_btn etc.),
+        which never existed after refactor to HOT debounced panels. Now simply tracks
+        dirty set; ControlDeckWindow polls _dirty_tabs for badge/● display.
+        """
         self._dirty_tabs.add(section)
-        btn_map = {
-            "global": getattr(self, "global_apply_btn", None),
-            "beacons": getattr(self, "beacons_apply_btn2", None),
-            "camera": getattr(self, "camera_apply_btn", None),
-            "environment": getattr(self, "env_apply_btn", None),
-            "disturbances": getattr(self, "disturbances_apply_btn", None),
-        }
-        btn = btn_map.get(section)
-        if btn is not None:
-            btn.setStyleSheet("background:#e5e7eb; color:#111827; font-weight:600; border:1px solid #d1d5db; border-radius:4px;")
-            btn.setText(f"Apply {section.title} — ")
 
     def _clear_dirty(self, section: str):
+        """Clear dirty flag — called after successful HOT apply."""
         self._dirty_tabs.discard(section)
-        btn_map = {
-            "global": getattr(self, "global_apply_btn", None),
-            "beacons": getattr(self, "beacons_apply_btn2", None),
-            "camera": getattr(self, "camera_apply_btn", None),
-            "environment": getattr(self, "env_apply_btn", None),
-            "disturbances": getattr(self, "disturbances_apply_btn", None),
-        }
-        btn = btn_map.get(section)
-        if btn is not None:
-            defaults = {
-                "global": ("Apply Global — ", "#ffffff"),
-                "beacons": ("Apply Beacons Section — ", "#ffffff"),
-                "camera": ("Apply Camera — ", "#ffffff"),
-                "environment": ("Apply Environment", "#ffffff"),
-                "disturbances": ("Apply Disturbances — ", "#ffffff"),
-            }
-            txt, col = defaults.get(section, ("Apply", "#ffffff"))
-            btn.setStyleSheet(f"background:{col}; color:#111827; font-weight:500; border:1px solid #d1d5db; border-radius:4px;")
-            btn.setText(txt)
 
     # Apply / Discard per section ()
 
@@ -113,7 +90,7 @@ class StateMixin:
                     try:
                         self.beacon_count_spin.blockSignals(True); self.beacon_count_spin.setValue(int(multi.beacon_count)); self.beacon_count_spin.blockSignals(False)
                         self.target_beacon_spin.blockSignals(True); self.target_beacon_spin.setValue(int(multi.target_index)); self.target_beacon_spin.blockSignals(False)
-                    except: pass
+                    except Exception: pass
                 except Exception:
                     for key, val in snap.items():
                         if key == "beacons": continue
@@ -144,18 +121,18 @@ class StateMixin:
                                     w.blockSignals(True)
                                     # value already set via panel, but keep alias in sync
                                     w.blockSignals(False)
-                            except: pass
+                            except Exception: pass
                     # Apply to live camera
                     try:
                         self.camera.apply_config(cam_cfg, scene_bounds=self._scene_size)
-                    except: pass
+                    except Exception: pass
                     # Update display sizes
                     try:
                         self.fov_res_lbl.setText(f"{int(cam_cfg.fov_width)}x{int(cam_cfg.fov_height)}")
                         from gui.core.renderer import Renderer, ScreenSpec
                         spec = ScreenSpec(viewport_w=int(cam_cfg.viewport_width), viewport_h=int(cam_cfg.viewport_height), god_w=int(cam_cfg.god_width), god_h=int(cam_cfg.god_height))
                         Renderer.apply_screen_sizes(self.viewport_label, self.minimap_label, spec)
-                    except: pass
+                    except Exception: pass
                 except Exception:
                     for key, val in snap.items():
                         w = getattr(self, key, None)
@@ -202,7 +179,7 @@ class StateMixin:
                                     # value already synced via panel, but keep alias reference consistent
                                     pass
                             self.sliders = self.disturbances_panel.sliders
-                        except: pass
+                        except Exception: pass
                 except Exception:
                     for key, val in snap.items():
                         w = getattr(self, key, None)
@@ -268,7 +245,7 @@ class StateMixin:
                     w = getattr(self, attr, None)
                     if w is not None:
                         try: self._applied_snapshot[section][attr] = w.value()
-                        except: pass
+                        except Exception: pass
             elif section == "camera":
                 # Snaps via CameraPanel (full 11 params) if available
                 try:
@@ -305,7 +282,7 @@ class StateMixin:
                 except Exception:
                     try:
                         self._applied_snapshot[section] = self.controller_config.to_dict()
-                    except: pass
+                    except Exception: pass
             elif section == "environment":
                 try:
                     cfg_dict = self.env_panel.collect_config().to_dict() if hasattr(self, "env_panel") else self.env_config.to_dict()
@@ -335,7 +312,7 @@ class StateMixin:
                 except Exception:
                     try:
                         self._applied_snapshot[section] = {k: s.value() for k, s in self.sliders.items()}
-                    except:
+                    except Exception:
                         self._applied_snapshot[section] = {}
             elif section == "beacons":
                 try:
@@ -355,7 +332,7 @@ class StateMixin:
                         "center_spin": self.center_spin.value(),
                         "target_beacon_spin": self.target_beacon_spin.value(),
                     }
-        except: pass
+        except Exception: pass
 
     # Debounced — every slider change auto-applies
 
@@ -366,7 +343,7 @@ class StateMixin:
         old = self._auto_timers.get(section)
         if old is not None:
             try: old.stop()
-            except: pass
+            except Exception: pass
         t = QTimer(self)
         t.setSingleShot(True)
         t.timeout.connect(lambda: func())

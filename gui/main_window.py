@@ -76,10 +76,11 @@ class MainWindow(
         self._camera_drift_state: dict = {}
         self._platform_motion_state: dict = {}
         self._jitter_state: dict = {}
+        self._search_step: int = 0
         self._scene_size = SCENE_SIZE
         self._fov_size = FOV_SIZE
-        self._viewport_display_size = (400, 300)
-        self._god_display_size = (400, 300)
+        self._viewport_display_size = (2000, 2000)
+        self._god_display_size = (2000, 2000)
         # Beacon/Target — simplified: only count and target index, fixed defaults
         self.beacon_config = MultiBeaconConfig(beacon_count=1, target_index=0).validate()
         self._beacon_count = int(self.beacon_config.beacon_count)
@@ -161,3 +162,85 @@ class MainWindow(
                 self.dashboard_panel.update_from_summary(self.perf.summary(), self.tracker.status.value, None, camera_scale_mrad=cam_scale)
         except Exception:
             pass
+
+    # ── Single-source sizes: proxy to configs (fixes duplication warnings) ──
+    @property
+    def _scene_size(self):
+        try:
+            if hasattr(self, "env_config") and self.env_config is not None:
+                return (int(self.env_config.world_width), int(self.env_config.world_height))
+        except Exception:
+            pass
+        return getattr(self, "_scene_cache", (2000, 2000))
+
+    @_scene_size.setter
+    def _scene_size(self, val):
+        try:
+            w, h = int(val[0]), int(val[1])
+            self.__dict__["_scene_cache"] = (w, h)
+            if hasattr(self, "env_config") and self.env_config is not None:
+                self.env_config.world_width = w
+                self.env_config.world_height = h
+        except Exception:
+            self.__dict__["_scene_cache"] = (2000, 2000)
+
+    @property
+    def _fov_size(self):
+        try:
+            if hasattr(self, "camera_config") and self.camera_config is not None:
+                return (int(self.camera_config.fov_width), int(self.camera_config.fov_height))
+        except Exception:
+            pass
+        return getattr(self, "_fov_cache", (640, 480))
+
+    @_fov_size.setter
+    def _fov_size(self, val):
+        try:
+            w, h = int(val[0]), int(val[1])
+            self.__dict__["_fov_cache"] = (w, h)
+            if hasattr(self, "camera_config") and self.camera_config is not None:
+                self.camera_config.fov_width = w
+                self.camera_config.fov_height = h
+        except Exception:
+            self.__dict__["_fov_cache"] = (640, 480)
+
+    @property
+    def _viewport_display_size(self):
+        # camera_config is single source; fallback cache for early init before config exists
+        try:
+            if hasattr(self, "camera_config") and self.camera_config is not None:
+                return (int(self.camera_config.viewport_width), int(self.camera_config.viewport_height))
+        except Exception:
+            pass
+        return getattr(self, "_viewport_cache", (2000, 2000))
+
+    @_viewport_display_size.setter
+    def _viewport_display_size(self, val):
+        try:
+            w, h = int(val[0]), int(val[1])
+            self.__dict__["_viewport_cache"] = (w, h)
+            if hasattr(self, "camera_config") and self.camera_config is not None:
+                self.camera_config.viewport_width = w
+                self.camera_config.viewport_height = h
+        except Exception:
+            self.__dict__["_viewport_cache"] = (2000, 2000)
+
+    @property
+    def _god_display_size(self):
+        try:
+            if hasattr(self, "camera_config") and self.camera_config is not None:
+                return (int(self.camera_config.god_width), int(self.camera_config.god_height))
+        except Exception:
+            pass
+        return getattr(self, "_god_cache", (2000, 2000))
+
+    @_god_display_size.setter
+    def _god_display_size(self, val):
+        try:
+            w, h = int(val[0]), int(val[1])
+            self.__dict__["_god_cache"] = (w, h)
+            if hasattr(self, "camera_config") and self.camera_config is not None:
+                self.camera_config.god_width = w
+                self.camera_config.god_height = h
+        except Exception:
+            self.__dict__["_god_cache"] = (2000, 2000)

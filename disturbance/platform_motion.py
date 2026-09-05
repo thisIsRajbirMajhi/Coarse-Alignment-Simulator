@@ -84,7 +84,7 @@ def apply_platform_motion(
         try:
             import time
             state["_pm_last_wall"] = time.time()
-        except: pass
+        except Exception: pass
 
     # Resolve speed
     if speed_px_per_frame is not None:

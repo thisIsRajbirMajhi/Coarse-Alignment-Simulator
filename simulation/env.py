@@ -139,7 +139,7 @@ if _HAS_GYM:
             try:
                 vx, vy = self.sim.tracker.get_velocity() or (0.0, 0.0)
                 if vx is None: vx, vy = 0.0, 0.0
-            except: vx, vy = 0.0, 0.0
+            except Exception: vx, vy = 0.0, 0.0
             vec = np.array([err_x, err_y, pan, tilt, float(vx), float(vy)], dtype=np.float32)
             # Lock discrete
             lock_map = {"searching":0, "acquired":1, "tracking":2, "lost":3, "locked":2}
@@ -159,7 +159,7 @@ if _HAS_GYM:
 
         def close(self):
             try: self.sim.close()
-            except: pass
+            except Exception: pass
 
 else:
     # Fallback lightweight Gym-like (no gymnasium dep) — mirrors gym branch obs format
@@ -204,7 +204,7 @@ else:
             try:
                 vx, vy = self.sim.tracker.get_velocity() or (0.0, 0.0)
                 if vx is None: vx, vy = 0.0, 0.0
-            except: vx, vy = 0.0, 0.0
+            except Exception: vx, vy = 0.0, 0.0
             vec = np.array([err_x, err_y, pan, tilt, float(vx), float(vy)], dtype=np.float32)
             lock_map = {"searching":0, "acquired":1, "tracking":2, "lost":3, "locked":2}
             lock = lock_map.get(str(obs_dict.get("lock_status","searching")).lower(), 0)
@@ -225,7 +225,7 @@ else:
 
         def close(self):
             try: self.sim.close()
-            except: pass
+            except Exception: pass
 
         @property
         def observation_space(self):
@@ -237,6 +237,6 @@ else:
         def action_space(self):
             try:
                 clamp = float(self.sim.controller_config.output_clamp)
-            except:
+            except Exception:
                 clamp = 120.0
             return {"d_pan": (-clamp, clamp), "d_tilt": (-clamp, clamp), "shape": (2,)}

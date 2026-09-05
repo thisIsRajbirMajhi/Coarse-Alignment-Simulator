@@ -280,7 +280,7 @@ class CameraPanel(BaseConfigPanel):
             self.scale_spin.blockSignals(False)
             urad = mrad * 1000
             self.scale_hint.setText(f"{deg:.1f} deg / {res} px = {mrad:.3f} mrad/px ({urad:.0f} urad/px)")
-        except: pass
+        except Exception: pass
         self.configChanged.emit()
 
     def _on_scale_changed(self, v: float) -> None:
@@ -305,7 +305,7 @@ class CameraPanel(BaseConfigPanel):
             deg = float(self.fov_deg_x_spin.value())
             res = int(self.fov_w_spin.value())
             pixel_scale = (deg * 17.453292519943295) / max(1, res)
-        except:
+        except Exception:
             pixel_scale = float(self.scale_spin.value())
         # Pan/tilt deg/sec to px/s for legacy max_slew_rate
         try:
@@ -313,7 +313,7 @@ class CameraPanel(BaseConfigPanel):
             tilt_deg = float(self.tilt_speed_deg_spin.value())
             px_per_deg = 17.453292519943295 / max(1e-6, pixel_scale)
             max_slew = max(pan_deg * px_per_deg, tilt_deg * px_per_deg)
-        except:
+        except Exception:
             max_slew = 800.0
         return CameraConfig(
             fov_width=int(self.fov_w_spin.value()),
@@ -399,4 +399,4 @@ class CameraPanel(BaseConfigPanel):
         # Ensure signals wired once
         try:
             self._wire_signals()
-        except: pass
+        except Exception: pass

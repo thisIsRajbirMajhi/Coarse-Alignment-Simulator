@@ -105,13 +105,13 @@ class HeadlessSimulation:
 
         # Camera config 11 params
         if camera_config is None:
-            # Default viewport/god from _scene_size etc.
+            # Default viewport/god from _scene_size etc. (single source: DISPLAY_DEFAULTS 2000)
             from gui.styles import FOV_SIZE  # noqa, for default FOV
             fov = FOV_SIZE
             self.camera_config = CameraConfig(
                 fov_width=fov[0], fov_height=fov[1],
-                viewport_width=400, viewport_height=300,
-                god_width=400, god_height=300,
+                viewport_width=2000, viewport_height=2000,
+                god_width=2000, god_height=2000,
             ).validate(self._scene_size)
         else:
             self.camera_config = camera_config.validate(self._scene_size)
@@ -130,6 +130,7 @@ class HeadlessSimulation:
         self._camera_drift_state: dict = {}
         self._platform_motion_state: dict = {}
         self._jitter_state: dict = {}
+        self._search_step: int = 0
 
         # Build simulation objects
         self._build_simulation()
@@ -164,7 +165,7 @@ class HeadlessSimulation:
         try:
             vig = float(cfg.vignetting_pct) / 100.0
             self.camera.set_vignetting(vig)
-        except: pass
+        except Exception: pass
 
         # Beacons
         bc = self.beacon_config.validate()
@@ -179,7 +180,7 @@ class HeadlessSimulation:
         tgt_y = float(getattr(bc, "y", sh/2))
         try:
             profile = bc.profile  # may be MotionProfile or str
-        except:
+        except Exception:
             profile = MotionProfile.CURVED
         speed = float(getattr(bc, "speed", 60))
         # Deterministic base seed from headless seed + step_count for variety but reproducible
@@ -202,7 +203,7 @@ class HeadlessSimulation:
         # Also store max_beacons if present
         try:
             self.detector.max_beacons = int(det_cfg.max_beacons)
-        except: pass
+        except Exception: pass
         # Tracker from env? Use defaults 0.25/5 if not specified
         self.tracker = Tracker(smoothing=0.25, miss_limit=5)
         # If we had TrackerConfig, honor it
@@ -210,7 +211,7 @@ class HeadlessSimulation:
             from tracking.config import TrackerConfig
             # Try to get from controller? Not, use defaults
             pass
-        except: pass
+        except Exception: pass
 
         ctrl_cfg = self.controller_config.validate()
         self.controller = PIDController(config=ctrl_cfg)
@@ -240,7 +241,7 @@ class HeadlessSimulation:
         try:
             from disturbance.state import reset_disturbance_state
             reset_disturbance_state()
-        except: pass
+        except Exception: pass
         self._build_simulation()
         self.perf = PerformanceLogger(auto_log=False)
         self.perf.start()
@@ -254,7 +255,7 @@ class HeadlessSimulation:
         # Synthesize minimal obs: estimate, error, pan/tilt, fov
         try:
             est = self.tracker.estimated_position
-        except:
+        except Exception:
             est = None
         err = None
         if est is not None:
@@ -299,9 +300,9 @@ class HeadlessSimulation:
             self.target = self.beacons[tid]
 
         try: self.scene.update(dt_eff)
-        except: pass
+        except Exception: pass
         try: self.camera.update(dt_wall)
-        except: pass
+        except Exception: pass
 
         # Disturbances with seeded rng
         dc = self.disturbance_config.validate() if hasattr(self.disturbance_config, "validate") else self.disturbance_config
@@ -309,7 +310,7 @@ class HeadlessSimulation:
         try:
             vig = float(getattr(self.env_config, "vignetting_pct", 0)) / 100.0
             self.camera.set_vignetting(vig)
-        except: vig = 0.0
+        except Exception: vig = 0.0
 
         use_optimized = hasattr(self.scene, "get_region")
         fov_capture_x0 = None
@@ -414,7 +415,7 @@ class HeadlessSimulation:
                 if self.tracker.estimated_position is not None and self.tracker.status != LockStatus.SEARCHING:
                     try:
                         gate_x, gate_y = float(self.tracker.estimated_position[0]), float(self.tracker.estimated_position[1])
-                    except:
+                    except Exception:
                         gate_x, gate_y = proj_x, proj_y
                 detection = None
                 min_dist = float("inf")
@@ -451,17 +452,17 @@ class HeadlessSimulation:
                     arr = np.asarray(action, dtype=float).reshape(-1)
                     d_pan = float(arr[0]) if len(arr) > 0 else 0.0
                     d_tilt = float(arr[1]) if len(arr) > 1 else 0.0
-                except:
+                except Exception:
                     d_pan, d_tilt = 0.0, 0.0
                 try:
-                    self.camera.move(d_pan, d_tilt, dt_wall)
+                    self.camera.move(d_pan, d_tilt, dt_eff)
                 except TypeError:
                     self.camera.move(d_pan, d_tilt)
             else:
                 # PID with AI-ready velocity (tracker vs GT)
                 try:
                     cam_slew = float(self.camera_config.max_slew_rate) if hasattr(self, "camera_config") else None
-                except: cam_slew = None
+                except Exception: cam_slew = None
                 # Velocity selection
                 use_priv = bool(getattr(self.controller_config, "use_privileged_velocity", False))
                 vel = None
@@ -473,23 +474,29 @@ class HeadlessSimulation:
                             st = getattr(self.tracker.kalman, "state", None)
                             if st is not None and len(st) >= 4:
                                 vel = (float(st[2]), float(st[3]))
-                    except: vel = None
+                    except Exception: vel = None
                 else:
                     try:
                         if hasattr(self.target, "get_velocity"):
                             vel = self.target.get_velocity()
-                    except: vel = None
+                    except Exception: vel = None
                 try:
-                    d_pan,d_tilt=self.controller.compute_correction(err_x, err_y, dt=dt_wall, camera_max_slew=cam_slew, target_velocity=vel)
+                    d_pan,d_tilt=self.controller.compute_correction(err_x, err_y, dt=dt_eff, camera_max_slew=cam_slew, target_velocity=vel)
                 except TypeError:
                     try:
-                        d_pan,d_tilt=self.controller.compute_correction(err_x, err_y, dt=dt_wall, camera_max_slew=cam_slew)
+                        d_pan,d_tilt=self.controller.compute_correction(err_x, err_y, dt=dt_eff, camera_max_slew=cam_slew)
                     except TypeError:
                         d_pan,d_tilt=self.controller.compute_correction(err_x, err_y)
                 try:
-                    self.camera.move(d_pan, d_tilt, dt_wall)
+                    self.camera.move(d_pan, d_tilt, dt_eff)
                 except TypeError:
                     self.camera.move(d_pan, d_tilt)
+            # Reset search when tracking
+            try:
+                if hasattr(self, "_search_step"):
+                    self._search_step = 0
+            except Exception:
+                pass
         else:
             # No estimate: if action provided, still allow direct move (e.g., searching)
             if action is not None:
@@ -497,9 +504,34 @@ class HeadlessSimulation:
                     arr = np.asarray(action, dtype=float).reshape(-1)
                     d_pan = float(arr[0]) if len(arr) > 0 else 0.0
                     d_tilt = float(arr[1]) if len(arr) > 1 else 0.0
-                    try: self.camera.move(d_pan, d_tilt, dt_wall)
-                    except: self.camera.move(d_pan, d_tilt)
-                except: pass
+                    try: self.camera.move(d_pan, d_tilt, dt_eff)
+                    except Exception: self.camera.move(d_pan, d_tilt)
+                except Exception: pass
+            else:
+                # Active spiral search when SEARCHING and no external action
+                try:
+                    if self.tracker.status == LockStatus.SEARCHING:
+                        if not hasattr(self, "_search_step"):
+                            self._search_step = 0
+                        self._search_step += 1
+                        try:
+                            from beacon_tracker.search.scanner import SearchingStrategy
+                        except Exception:
+                            SearchingStrategy = None
+                        if SearchingStrategy is not None:
+                            cur_dx, cur_dy = SearchingStrategy.spiral_offset(self._search_step, k=6.0)
+                            prev_dx, prev_dy = SearchingStrategy.spiral_offset(self._search_step - 1, k=6.0) if self._search_step > 1 else (0.0, 0.0)
+                            d_pan = float(np.clip((cur_dx - prev_dx) * 0.7, -14, 14))
+                            d_tilt = float(np.clip((cur_dy - prev_dy) * 0.7, -14, 14))
+                            try:
+                                self.camera.move(d_pan, d_tilt, dt_eff)
+                            except TypeError:
+                                self.camera.move(d_pan, d_tilt)
+                    else:
+                        if hasattr(self, "_search_step"):
+                            self._search_step = 0
+                except Exception:
+                    pass
 
         is_locked = self.tracker.status == LockStatus.TRACKING
         self.perf.log_frame(is_locked, tracking_error_px, time.time()-step_start,
@@ -535,7 +567,7 @@ class HeadlessSimulation:
         # Render viewport for debugging (optional, not Qt)
         try:
             obs["viewport"] = Renderer.render_viewport(fov_frame, self.camera, self.beacons, self.target, self.tracker, all_dets)
-        except:
+        except Exception:
             obs["viewport"] = fov_frame
 
         info = {
@@ -565,7 +597,7 @@ class HeadlessSimulation:
                 bloom_base = 0.12
             elif preset == "rain":
                 fog_factor = max(fog_factor, 0.12)
-        except: pass
+        except Exception: pass
         fog_factor = float(np.clip(fog_factor, 0.0, 0.85))
         for beacon in beacons:
             if not getattr(beacon, "enabled", True):
@@ -575,12 +607,12 @@ class HeadlessSimulation:
             try:
                 px = float(beacon.x) - float(fov_x0)
                 py = float(beacon.y) - float(fov_y0)
-            except: continue
+            except Exception: continue
             if px < -40 or px > w + 40 or py < -40 or py > h + 40:
                 continue
             try:
                 brightness, radius = beacon.get_photometry()
-            except:
+            except Exception:
                 brightness, radius = float(getattr(beacon, "brightness", 200)), float(getattr(beacon, "radius", 5))
             if brightness < 8:
                 continue
@@ -601,10 +633,10 @@ class HeadlessSimulation:
                     try:
                         from target.optics import get_beacon_color_bgr
                         color_bgr = get_beacon_color_bgr(bid, float(brightness))
-                    except: color_bgr = None
+                    except Exception: color_bgr = None
                 if float(brightness) > 210 and fog_factor > 0.2:
                     bloom_strength += 0.06
-            except: pass
+            except Exception: pass
             rendered = False
             try:
                 from target.optics import render_beacon_patch
@@ -638,12 +670,12 @@ class HeadlessSimulation:
                             blended[bright_mask] = np.maximum(blended[bright_mask], patch_crop[bright_mask].astype(np.float32))
                     fov_frame[sy0:sy1, sx0:sx1] = np.clip(blended, 0, 255).astype(np.uint8)
                     rendered = True
-            except: rendered = False
+            except Exception: rendered = False
             if not rendered:
                 ix, iy = int(round(px)), int(round(py))
                 try:
                     vib = Renderer.beacon_vibrant_color(int(getattr(beacon, "beacon_id", 0)), float(brightness))
-                except:
+                except Exception:
                     vib = (0, 255, 255)
                 if shape == "square":
                     hw, hh = size_w // 2, size_h // 2
@@ -664,7 +696,7 @@ class HeadlessSimulation:
         try:
             if hasattr(self, "perf") and hasattr(self.perf, "close"):
                 self.perf.close()
-        except: pass
+        except Exception: pass
 
     # Gym-like helpers
     @property
@@ -673,7 +705,7 @@ class HeadlessSimulation:
         # Image: FOV size from camera_config
         try:
             h, w = int(self.camera_config.fov_height), int(self.camera_config.fov_width)
-        except:
+        except Exception:
             h, w = 480, 640
         return {
             "frame": (h, w, 3),
@@ -689,7 +721,7 @@ class HeadlessSimulation:
         """Direct pan/tilt delta in px, clipped to [-output_clamp, output_clamp]."""
         try:
             clamp = float(self.controller_config.output_clamp)
-        except:
+        except Exception:
             clamp = 120.0
         return {"d_pan": (-clamp, clamp), "d_tilt": (-clamp, clamp), "shape": (2,)}
 

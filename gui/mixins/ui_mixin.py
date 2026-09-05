@@ -322,7 +322,7 @@ class UIMixin:
             self.beacon_manager.threshChanged.connect(lambda v: (self.thresh_slider.blockSignals(True), self.thresh_slider.setValue(int(v)), self.thresh_slider.blockSignals(False)))
             # Also sync global motion/speed to beacon motion for single-panel consistency
             self.beacon_manager.multiConfigChanged.connect(self._sync_beacon_to_global)
-        except: pass
+        except Exception: pass
         beacons_layout_outer.addStretch()
         tabs.addTab(beacons_tab, "Beacons")
 
@@ -334,10 +334,10 @@ class UIMixin:
             # Initial from current detector/tracker or defaults
             try:
                 det_init = _DetCfg(brightness_threshold=int(getattr(self, "_det_thresh", 200)), min_area=int(getattr(self, "_detector_min_area", 2))).validate()
-            except: det_init = _DetCfg().validate()
+            except Exception: det_init = _DetCfg().validate()
             try:
                 trk_init = _TrkCfg(smoothing=float(getattr(self, "_tracker_smoothing", 0.25)), miss_limit=int(getattr(self, "_tracker_miss_limit", 5))).validate()
-            except: trk_init = _TrkCfg().validate()
+            except Exception: trk_init = _TrkCfg().validate()
             self.tuning_panel = TuningPanel(detector=det_init, tracker=trk_init)
             # Back-compat aliases for MainWindow legacy handlers
             self.thresh_spin = self.tuning_panel.thresh_spin
@@ -434,7 +434,7 @@ class UIMixin:
         # Also keep camera dirty when world size changes (affects FOV clamping)
         for w in [self.scene_w_spin, self.scene_h_spin]:
             try: w.valueChanged.connect(lambda _, s="camera": self._mark_dirty(s))
-            except: pass
+            except Exception: pass
         env_layout.addStretch()
         tabs.addTab(env_tab, "Environment")
 
@@ -443,20 +443,20 @@ class UIMixin:
         try:
             from disturbance.config import DisturbanceConfig as _DC2
             init_dc = getattr(self, "disturbance_config", _DC2().validate())
-        except:
+        except Exception:
             init_dc = None
         self.disturbances_panel = DisturbancesPanel(initial=init_dc)
         self.sliders = self.disturbances_panel.sliders
         # Wire configChanged → disturbance dirty + auto (debounced)
         try:
             self.disturbances_panel.configChanged.connect(self._on_disturbance_config_changed)
-        except: pass
+        except Exception: pass
         tabs.addTab(self.disturbances_panel, "Disturbances")
 
         # initial snapshots for dirty tracking — then clear so deck starts clean (no dirty badge)
         for sec in ["global", "beacons", "camera", "control", "environment", "disturbances", "tuning", "presets"]:
             try: self._snapshot_section(sec)
-            except: pass
+            except Exception: pass
         try:
             self._dirty_tabs.clear()
         except Exception:
@@ -520,7 +520,7 @@ class UIMixin:
             try:
                 self.beacon_manager.set_world_bounds(self._scene_size)
                 return
-            except: pass
+            except Exception: pass
         for panel in getattr(self, "per_beacon_panels", []):
             try:
                 if isinstance(panel, dict):
@@ -528,7 +528,7 @@ class UIMixin:
                     panel["y"].setRange(0, h)
                 else:
                     panel.set_world_bounds(self._scene_size)
-            except: pass
+            except Exception: pass
 
     def _update_live_indicators(self):
         """Dashboard-only: all live metrics are in DashboardPanel; external header/footer badges hidden."""

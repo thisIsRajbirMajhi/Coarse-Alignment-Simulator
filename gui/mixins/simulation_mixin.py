@@ -24,33 +24,33 @@ class SimulationMixin:
                 thresh = int(self.tuning_panel.thresh_spin.value())
             else:
                 thresh = getattr(self, "_det_thresh", 200)
-        except:
+        except Exception:
             thresh = getattr(self, "_det_thresh", 200)
         gain = getattr(self, "_ctrl_gain", 0.15)
         # Global tuning — use live widget values if available, else stored defaults
         try:
             smoothing = float(self.tracker_smoothing_spin.value()) if hasattr(self, "tracker_smoothing_spin") else float(getattr(self, "_tracker_smoothing", 0.25))  # type: ignore
-        except:
+        except Exception:
             smoothing = float(getattr(self, "_tracker_smoothing", 0.25))
         try:
             miss_limit = int(self.tracker_miss_spin.value()) if hasattr(self, "tracker_miss_spin") else int(getattr(self, "_tracker_miss_limit", 5))  # type: ignore
-        except:
+        except Exception:
             miss_limit = int(getattr(self, "_tracker_miss_limit", 5))
         try:
             min_area = int(self.detector_min_area_spin.value()) if hasattr(self, "detector_min_area_spin") else int(getattr(self, "_detector_min_area", 2))  # type: ignore
-        except:
+        except Exception:
             min_area = int(getattr(self, "_detector_min_area", 2))
         try:
             sim_speed = float(self.sim_speed_spin.value()) if hasattr(self, "sim_speed_spin") else float(getattr(self, "_sim_speed", 1.0))  # type: ignore
-        except:
+        except Exception:
             sim_speed = float(getattr(self, "_sim_speed", 1.0))
         try:
             g_bright = int(self.global_brightness_spin.value()) if hasattr(self, "global_brightness_spin") else int(getattr(self, "_global_brightness", 255))  # type: ignore
-        except:
+        except Exception:
             g_bright = int(getattr(self, "_global_brightness", 255))
         try:
             g_radius = int(self.global_radius_spin.value()) if hasattr(self, "global_radius_spin") else int(getattr(self, "_global_radius", 5))  # type: ignore
-        except:
+        except Exception:
             g_radius = int(getattr(self, "_global_radius", 5))
         try:
             from target.motion import MotionProfile
@@ -142,7 +142,7 @@ class SimulationMixin:
                 tgt_y = float(getattr(multi_cfg, "y", 2500))
                 try:
                     profile = multi_cfg.profile
-                except: pass
+                except Exception: pass
                 speed = float(getattr(multi_cfg, "speed", speed))
             elif hasattr(self, "beacon_config"):
                 multi_cfg = self.beacon_config.validate()
@@ -179,7 +179,7 @@ class SimulationMixin:
         try:
             vig = float(getattr(cfg, 'vignetting_pct', 0) if 'cfg' in locals() else getattr(self.env_config, 'vignetting_pct', 0)) / 100.0
             self.camera.set_vignetting(vig)
-        except:
+        except Exception:
             pass
         from beacon_tracker.detection.detector import BeaconDetector
         self.detector = BeaconDetector(brightness_threshold=thresh, min_area=min_area)
@@ -197,7 +197,7 @@ class SimulationMixin:
                         ctrl_cfg.kp = float(gain)
                         ctrl_cfg.validate()
                         self.controller_config = ctrl_cfg
-                except: pass
+                except Exception: pass
         except Exception:
             ctrl_cfg = self.controller_config.validate()
         # Sync camera panel gain alias for backward compat (if exists)
@@ -209,7 +209,7 @@ class SimulationMixin:
                 self.camera_panel.gain_slider.setValue(int(round(float(ctrl_cfg.kp)*100)))
                 self.camera_panel.gain_spin.blockSignals(False)
                 self.camera_panel.gain_slider.blockSignals(False)
-        except: pass
+        except Exception: pass
         from control.controller import PIDController
         self.controller = PIDController(config=ctrl_cfg)
         # store sim speed for tick

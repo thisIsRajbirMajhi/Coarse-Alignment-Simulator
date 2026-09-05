@@ -55,7 +55,7 @@ class Renderer:
             x, y = beacon.get_position()
             try:
                 brightness, radius = beacon.get_photometry()
-            except:
+            except Exception:
                 brightness, radius = float(beacon.brightness), float(beacon.radius)
             ix, iy = int(round(x)), int(round(y))
             vib = Renderer.beacon_vibrant_color(beacon.beacon_id, brightness)
@@ -138,7 +138,7 @@ class Renderer:
         if pixel_scale_mrad is None:
             try:
                 pixel_scale_mrad = float(getattr(getattr(camera, "config", None), "pixel_scale_mrad", 0.035))
-            except:
+            except Exception:
                 pixel_scale_mrad = 0.035
 
         # Standard crosshair
@@ -226,7 +226,7 @@ class Renderer:
             pts = np.array([[hxs, hys-4],[hxs+4, hys],[hxs, hys+4],[hxs-4, hys]], np.int32)
             cv2.polylines(display, [pts], True, (255, 200, 50), 1, cv2.LINE_AA)
             cv2.putText(display, "H", (hxs+5, hys+2), cv2.FONT_HERSHEY_SIMPLEX, 0.28, (255, 200, 50), 1, cv2.LINE_AA)
-        except: pass
+        except Exception: pass
         try:
             pan_lo, pan_hi = camera.get_pan_range()
             tilt_lo, tilt_hi = camera.get_tilt_range()
@@ -235,7 +235,7 @@ class Renderer:
             rx0 = max(0, min(rx0, display.shape[1]-1)); rx1 = max(0, min(rx1, display.shape[1]-1))
             ry0 = max(0, min(ry0, display.shape[0]-1)); ry1 = max(0, min(ry1, display.shape[0]-1))
             cv2.rectangle(display, (rx0, ry0), (rx1, ry1), (90, 90, 90), 1, cv2.LINE_AA)
-        except: pass
+        except Exception: pass
         cv2.putText(display, f"{sw}x{sh}", (4, 10), cv2.FONT_HERSHEY_SIMPLEX, 0.28, (180, 180, 180), 1, cv2.LINE_AA)
         for beacon in beacons:
             if not getattr(beacon, "enabled", True):
@@ -293,7 +293,7 @@ class Renderer:
             pts = np.array([[hxs, hys-4],[hxs+4, hys],[hxs, hys+4],[hxs-4, hys]], np.int32)
             cv2.polylines(display, [pts], True, (255, 200, 50), 1, cv2.LINE_AA)
             cv2.putText(display, "H", (hxs+5, hys+2), cv2.FONT_HERSHEY_SIMPLEX, 0.28, (255, 200, 50), 1, cv2.LINE_AA)
-        except: pass
+        except Exception: pass
         try:
             pan_lo, pan_hi = camera.get_pan_range()
             tilt_lo, tilt_hi = camera.get_tilt_range()
@@ -302,7 +302,7 @@ class Renderer:
             rx0 = max(0, min(rx0, display.shape[1]-1)); rx1 = max(0, min(rx1, display.shape[1]-1))
             ry0 = max(0, min(ry0, display.shape[0]-1)); ry1 = max(0, min(ry1, display.shape[0]-1))
             cv2.rectangle(display, (rx0, ry0), (rx1, ry1), (90, 90, 90), 1, cv2.LINE_AA)
-        except: pass
+        except Exception: pass
         cv2.putText(display, f"{sw}x{sh}", (4, 10), cv2.FONT_HERSHEY_SIMPLEX, 0.28, (180, 180, 180), 1, cv2.LINE_AA)
         for beacon in beacons:
             if not getattr(beacon, "enabled", True):

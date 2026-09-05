@@ -78,12 +78,12 @@ class Tracker:
         if hasattr(cfg, "kalman_process_var"):
             try:
                 self._kalman.process_var = float(cfg.kalman_process_var)  # type: ignore
-            except:
+            except Exception:
                 pass
         if hasattr(cfg, "kalman_meas_var"):
             try:
                 self._kalman.meas_var = float(cfg.kalman_meas_var)  # type: ignore
-            except:
+            except Exception:
                 pass
 
     def to_config(self) -> TrackerConfig:
@@ -211,7 +211,7 @@ class Tracker:
         self._filter.reset()
         try:
             self._kalman.reset()
-        except:
+        except Exception:
             pass
         self._state.reset()
         self.status = self._state.status

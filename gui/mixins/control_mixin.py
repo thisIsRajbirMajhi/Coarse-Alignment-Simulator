@@ -22,7 +22,7 @@ class ControlMixin:
             # for b in getattr(self, "beacons", []):
             #     b.profile = prof
             self.target.profile = prof
-        except: pass
+        except Exception: pass
 
     def _on_speed_change(self, value: int):
         self._target_speed = int(value)
@@ -60,14 +60,14 @@ class ControlMixin:
                 self.detector.brightness_threshold = int(cfg.brightness_threshold)
                 self.detector.min_area = int(cfg.min_area)
                 try: self.detector.max_beacons = int(cfg.max_beacons)
-                except: pass
+                except Exception: pass
             # Keep beacon_manager thresh in sync
             try:
                 if hasattr(self, "beacon_manager"):
                     self.beacon_manager.spin_thresh.blockSignals(True)
                     self.beacon_manager.spin_thresh.setValue(int(cfg.brightness_threshold))
                     self.beacon_manager.spin_thresh.blockSignals(False)
-            except: pass
+            except Exception: pass
             self._mark_dirty("tuning")
             self._schedule_auto("tuning", lambda: self._clear_dirty("tuning"), 300)
         except Exception: pass
@@ -84,7 +84,7 @@ class ControlMixin:
                 try:
                     self.tracker.acquire_hits = int(cfg.acquire_hits)
                     self.tracker.lost_grace_mult = float(cfg.lost_grace_mult)
-                except: pass
+                except Exception: pass
             self._mark_dirty("tuning")
             self._schedule_auto("tuning", lambda: self._clear_dirty("tuning"), 300)
         except Exception: pass
@@ -163,7 +163,7 @@ class ControlMixin:
                     self.camera_panel.gain_slider.setValue(int(round(float(cfg.kp)*100)))
                     self.camera_panel.gain_spin.blockSignals(False)
                     self.camera_panel.gain_slider.blockSignals(False)
-            except: pass
+            except Exception: pass
             self._clear_dirty("control")
             self._snapshot_section("control")
             self.statusBar().showMessage(f"Control — {cfg.controller_type} Kp {cfg.kp:.3f} Ki {cfg.ki:.3f} Kd {cfg.kd:.3f} dead {cfg.dead_zone:.1f}px clamp {cfg.output_clamp:.0f}px rate {cfg.update_rate_hz:.0f}Hz", 2000)
@@ -180,7 +180,7 @@ class ControlMixin:
                 self.camera_panel.gain_slider.setValue(int(round(float(v)*100)))
                 self.camera_panel.gain_spin.blockSignals(False)
                 self.camera_panel.gain_slider.blockSignals(False)
-        except: pass
+        except Exception: pass
 
     def _sync_camera_gain_to_control(self, v: float) -> None:
         # Camera gain → Control Kp
@@ -196,7 +196,7 @@ class ControlMixin:
                 # Update controller directly for immediate response
                 if hasattr(self, "controller"):
                     self.controller.config.kp = float(v)
-        except: pass
+        except Exception: pass
         # Mark dirty for 
         self._mark_dirty("control")
         self._schedule_auto("control", self._apply_control_hot, 80)

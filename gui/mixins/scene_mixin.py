@@ -114,13 +114,13 @@ class SceneMixin:
                 self.scene.regenerate_from_config(cfg)
         try:
             self._invalidate_minimap_cache()
-        except: pass
+        except Exception: pass
         # Camera — update scene bounds and re-validate ranges/home against new world (modular)
         # Sync vignetting (camera image-space) from env config to camera
         try:
             vig = float(cfg.vignetting_pct) / 100.0 if 'cfg' in locals() else float(getattr(self.env_config, 'vignetting_pct', 0)) / 100.0
             self.camera.set_vignetting(vig)
-        except:
+        except Exception:
             pass
         try:
             if hasattr(self, "camera_panel"):
@@ -139,13 +139,13 @@ class SceneMixin:
                 _R3.apply_screen_sizes(self.viewport_label, self.minimap_label, spec)
                 self.fov_res_lbl.setText(f"{int(cam_cfg2.fov_width)}x{int(cam_cfg2.fov_height)}")
                 self.god_res_lbl.setText(f"{sw}x{sh}")
-            except: pass
+            except Exception: pass
         except Exception:
             self.camera.scene_bounds = (sw, sh)
             self.camera.fov_width = fw; self.camera.fov_height = fh
             try:
                 self.camera.go_home()
-            except:
+            except Exception:
                 self.camera.set_position(sw/2, sh/2)
         for b in getattr(self, "beacons", [self.target]):
             try:
@@ -170,12 +170,12 @@ class SceneMixin:
                 else:
                     panel.spin_x.blockSignals(True); panel.spin_x.setValue(int(b.x)); panel.spin_x.blockSignals(False)
                     panel.spin_y.blockSignals(True); panel.spin_y.setValue(int(b.y)); panel.spin_y.blockSignals(False)
-        except: pass
+        except Exception: pass
         self._snapshot_section("environment"); self._snapshot_section("camera")
         try:
             cam_scale = float(self.camera_config.pixel_scale_mrad)
             self.statusBar().showMessage(f"Environment/Camera — world {sw}x{sh} FOV {self.camera_config.fov_width}x{self.camera_config.fov_height} pan {self.camera_config.pan_min}:{self.camera_config.pan_max} scale {cam_scale:.3f}mrad/px", 3000)
-        except:
+        except Exception:
             self.statusBar().showMessage(f"Environment/Camera applied — world {sw}x{sh} FOV {fw}x{fh}", 3000)
 
     def _apply_camera_hot(self):
@@ -211,7 +211,7 @@ class SceneMixin:
             from gui.core.renderer import Renderer as _R
             try:
                 _R.apply_screen_sizes(self.viewport_label, self.minimap_label, spec)
-            except:
+            except Exception:
                 self.viewport_label.setMinimumSize(max(200, min(vw, 900)), max(140, min(vh, 700)))
                 self.minimap_label.setMinimumSize(max(200, min(gw, 900)), max(140, min(gh, 700)))
             # Reflect clamped FOV back to panel without re-triggering
@@ -228,7 +228,7 @@ class SceneMixin:
                 self.camera.scene_bounds = (sw, sh)
             # Gain — controller
             try: self.controller.gain = float(self.camera_panel.gain_spin.value())
-            except: pass
+            except Exception: pass
             self._snapshot_section("camera")
             # Report includes angular scale for units verification
             scale = float(cam_cfg.pixel_scale_mrad)
@@ -276,12 +276,12 @@ class SceneMixin:
             seed = int(self.seed_spin.value()); dynamic = bool(self.dynamic_check.isChecked()); haze = float(self.haze_spin.value())/100.0
             try:
                 self.scene.regenerate(width=sw, height=sh, seed=seed, dynamic=dynamic, haze_strength=haze)
-            except:
+            except Exception:
                 self._build_simulation()
                 self.scene.regenerate(width=sw, height=sh, seed=seed, dynamic=dynamic, haze_strength=haze)
         try:
             self._invalidate_minimap_cache()
-        except: pass
+        except Exception: pass
         # Camera — apply full config (FOV, mechanics, display, units) with new scene bounds
         try:
             if hasattr(self, "camera_panel"):
@@ -300,13 +300,13 @@ class SceneMixin:
                 _R4.apply_screen_sizes(self.viewport_label, self.minimap_label, spec)
                 self.fov_res_lbl.setText(f"{int(cam_cfg2.fov_width)}x{int(cam_cfg2.fov_height)}")
                 self.god_res_lbl.setText(f"{sw}x{sh}")
-            except: pass
+            except Exception: pass
         except Exception:
             self.camera.scene_bounds = (sw, sh)
             self.camera.fov_width = fw; self.camera.fov_height = fh
             try:
                 self.camera.go_home()
-            except:
+            except Exception:
                 self.camera.set_position(sw/2, sh/2)
         for b in getattr(self, "beacons", [self.target]):
             try:
@@ -331,10 +331,10 @@ class SceneMixin:
                 else:
                     panel.spin_x.blockSignals(True); panel.spin_x.setValue(int(b.x)); panel.spin_x.blockSignals(False)
                     panel.spin_y.blockSignals(True); panel.spin_y.setValue(int(b.y)); panel.spin_y.blockSignals(False)
-        except: pass
+        except Exception: pass
         try:
             scale = float(self.camera_config.pixel_scale_mrad)
             self.statusBar().showMessage(f"Applied world {sw}x{sh} FOV {self.camera_config.fov_width}x{self.camera_config.fov_height} scale {scale:.3f}mrad/px seed {seed} dynamic={dynamic}", 4000)
-        except:
+        except Exception:
             self.statusBar().showMessage(f"Applied world {sw}x{sh} FOV {fw}x{fh} seed {seed} dynamic={dynamic}", 4000)
         if was_running: self._start()

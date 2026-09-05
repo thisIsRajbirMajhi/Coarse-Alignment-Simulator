@@ -64,7 +64,7 @@ def create_beacons(
             return "random"
         try:
             return MotionProfile(s)
-        except:
+        except Exception:
             return MotionProfile.CURVED
 
     is_random_profile = str(profile).lower().strip() in ("random", "random walk", "random_motion")
@@ -73,7 +73,7 @@ def create_beacons(
         norm = _norm_profile(profile)
         is_random_profile = (norm == "random")
         prof_base = norm if not is_random_profile else None
-    except:
+    except Exception:
         is_random_profile = False
         prof_base = MotionProfile.CURVED
 
