@@ -16,7 +16,7 @@ import numpy as np
 # Re-export limits for back-compat (gui/app.py imports these)
 from environment.constants import MAX_RES, MIN_RES, DEFAULTS
 from environment.gradient import build_gradient
-from environment.haze import build_haze_field, haze_modulation
+from environment.haze import build_haze_field, get_haze_advect_offset, haze_modulation
 from environment.stars import draw_static_stars, draw_twinkling_stars, generate_starfield
 
 # Optional typed config (avoid hard import cycle at runtime)
@@ -109,6 +109,8 @@ class Scene:
         self._star_sizes: np.ndarray = np.array([], dtype=np.int32)
         self._star_phases: np.ndarray = np.array([], dtype=np.float32)
         self._star_freqs: np.ndarray = np.array([], dtype=np.float32)
+        self._star_colors: np.ndarray = np.zeros((0, 3), dtype=np.float32)
+        self._star_is_hard_negative: np.ndarray = np.array([], dtype=bool)
 
         self._build_background()
 
@@ -193,19 +195,24 @@ class Scene:
         # Save base without stars for dynamic twinkle path — crystal sharp
         self._base_no_stars = base.astype(np.uint8)
 
-        # 3) Starfield — magnitude-tiered generation (subpix removed — unused)
+        # 3) Starfield — magnitude-tiered + spectral colors + hard negatives
         star_data = generate_starfield(w, h, rng, self._star_count, self.star_brightness_scale)
         self._stars_xy = star_data["xy"]
         self._star_base_brightness = star_data["brightness"]
         self._star_sizes = star_data["sizes"]
         self._star_phases = star_data["phases"]
         self._star_freqs = star_data["freqs"]
+        self._star_colors = star_data.get("colors", np.zeros((len(self._stars_xy), 3), dtype=np.float32))
+        self._star_is_hard_negative = star_data.get("is_hard_negative", np.zeros(len(self._stars_xy), dtype=bool))
         self._star_count = int(self._stars_xy.shape[0])
         self.num_clutter_points = self._star_count
 
         # Precompute static background (with stars at mean brightness) for fast path
         static = self._base_no_stars.copy()
-        draw_static_stars(static, self._stars_xy, self._star_base_brightness, self._star_sizes)
+        if self._star_colors is not None and len(self._star_colors) == len(self._stars_xy) and len(self._stars_xy) > 0:
+            draw_static_stars(static, self._stars_xy, self._star_base_brightness, self._star_sizes, self._star_colors)
+        else:
+            draw_static_stars(static, self._stars_xy, self._star_base_brightness, self._star_sizes)
         self._static_background = static
         self._static_with_stars = static  # alias for clarity
         self._time = 0.0
@@ -231,31 +238,54 @@ class Scene:
         if not self.dynamic:
             return self._static_background.copy()
 
-        # Dynamic path — optimized to avoid 5000×5000 float32 allocation where possible.
-        # Haze modulation is scalar ±1.2 DN, so we use int16 path on uint8 rather than
-        # float32 75M buffer. Still copies full frame (heavy); prefer get_region for FOV.
+        # Dynamic path — fractal haze advection + chromatic twinkle
         if self.haze_strength > 1e-6:
             mod = haze_modulation(self._time)
-            if abs(mod) > 1e-6:
-                # int16 addition with clipping (no float32 300 MB temp)
+            # Advected haze shift for realism: small scroll of haze base
+            ox, oy = get_haze_advect_offset(self._time, float(self.haze_strength))
+            if abs(mod) > 1e-6 or (ox | oy) != 0:
+                # Use base + scalar shimmer; advection via roll is visually extra but still cheap on full frame
                 tmp = self._base_no_stars.astype(np.int16) + int(round(mod))
                 np.clip(tmp, 0, 255, out=tmp)
                 frame = tmp.astype(np.uint8)
+                # Subtle advected haze overlay: blend 18% of shifted haze difference
+                if (ox | oy) != 0 and self._haze_base is not None:
+                    shifted = np.roll(np.roll(self._haze_base, oy, axis=0), ox, axis=1)
+                    delta = (shifted - self._haze_base) * 0.18
+                    # Apply delta as faint modulation
+                    delta_i = np.clip(np.round(delta), -6, 6).astype(np.int16)
+                    # Add to frame via int16 path on one channel proxy (apply to all channels)
+                    # Cheap: reuse tmp already; apply extra delta via luma shift
+                    tmp2 = frame.astype(np.int16) + delta_i[:, :, None]
+                    np.clip(tmp2, 0, 255, out=tmp2)
+                    frame = tmp2.astype(np.uint8)
             else:
                 frame = self._base_no_stars.copy()
         else:
             frame = self._base_no_stars.copy()
 
-        # Twinkling stars — ±18% variation per star (all stars, full frame)
-        draw_twinkling_stars(
-            frame,
-            self._stars_xy,
-            self._star_base_brightness,
-            self._star_sizes,
-            self._star_phases,
-            self._star_freqs,
-            self._time,
-        )
+        # Twinkling stars — chromatic ±18% + color shift
+        if self._star_colors is not None and len(self._star_colors) == len(self._stars_xy):
+            draw_twinkling_stars(
+                frame,
+                self._stars_xy,
+                self._star_base_brightness,
+                self._star_sizes,
+                self._star_phases,
+                self._star_freqs,
+                self._time,
+                self._star_colors,
+            )
+        else:
+            draw_twinkling_stars(
+                frame,
+                self._stars_xy,
+                self._star_base_brightness,
+                self._star_sizes,
+                self._star_phases,
+                self._star_freqs,
+                self._time,
+            )
         return frame
 
     def get_region(self, x0: int, y0: int, x1: int, y1: int) -> np.ndarray:
@@ -300,7 +330,7 @@ class Scene:
             out[dy0:dy0+dh, dx0:dx0+dw] = crop
             return out
 
-        # Dynamic: crop from base_no_stars, add scalar haze shimmer, draw subset twinkle
+        # Dynamic: crop from base_no_stars, add scalar haze shimmer + advection, draw subset twinkle
         base_crop = self._base_no_stars[sy0:sy1, sx0:sx1]
         if self.haze_strength > 1e-6:
             mod = haze_modulation(self._time)
@@ -310,14 +340,25 @@ class Scene:
                 base_crop = tmp.astype(np.uint8)
             else:
                 base_crop = base_crop.copy()
+            # Advected haze delta in cropped view: use rolled haze base delta if available
+            if self._haze_base is not None:
+                ox, oy = get_haze_advect_offset(self._time, float(self.haze_strength))
+                if (ox | oy) != 0:
+                    # Extract shifted vs original delta for cropped region only
+                    # We approximate by rolling the whole haze then cropping
+                    shifted_full = np.roll(np.roll(self._haze_base, oy, axis=0), ox, axis=1)
+                    delta_crop = (shifted_full[sy0:sy1, sx0:sx1] - self._haze_base[sy0:sy1, sx0:sx1]) * 0.18
+                    delta_i = np.clip(np.round(delta_crop), -6, 6).astype(np.int16)
+                    tmp2 = base_crop.astype(np.int16) + delta_i[:, :, None]
+                    np.clip(tmp2, 0, 255, out=tmp2)
+                    base_crop = tmp2.astype(np.uint8)
         else:
             base_crop = base_crop.copy()
         out[dy0:dy0+dh, dx0:dx0+dw] = base_crop
 
-        # Twinkling stars subset — only those visible in FOV
+        # Twinkling stars subset — only those visible in FOV (with colors)
         if self._stars_xy.shape[0] > 0:
             xs = self._stars_xy[:, 0]; ys = self._stars_xy[:, 1]
-            # vectorized filter for stars inside intersected region (world coords)
             mask = (xs >= sx0) & (xs < sx1) & (ys >= sy0) & (ys < sy1)
             if np.any(mask):
                 xy_sub = self._stars_xy[mask]
@@ -325,17 +366,12 @@ class Scene:
                 sizes_sub = self._star_sizes[mask]
                 phases_sub = self._star_phases[mask]
                 freqs_sub = self._star_freqs[mask]
-                # translate to output-local coords (relative to x0,y0)
+                colors_sub = self._star_colors[mask] if self._star_colors is not None and len(self._star_colors) == len(self._stars_xy) else None
                 xy_local = xy_sub - np.array([x0, y0], dtype=int)
-                draw_twinkling_stars(
-                    out,
-                    xy_local,
-                    brightness_sub,
-                    sizes_sub,
-                    phases_sub,
-                    freqs_sub,
-                    self._time,
-                )
+                if colors_sub is not None:
+                    draw_twinkling_stars(out, xy_local, brightness_sub, sizes_sub, phases_sub, freqs_sub, self._time, colors_sub)
+                else:
+                    draw_twinkling_stars(out, xy_local, brightness_sub, sizes_sub, phases_sub, freqs_sub, self._time)
         return out
 
     def get_cropped_frame(self, x0: int, y0: int, x1: int, y1: int) -> np.ndarray:

@@ -19,10 +19,15 @@ CAMERA_LIMITS: dict[str, tuple[float, float]] = {
     "home_tilt": (0, MAX_RES),
     "max_pan_speed_deg": (5.0, 10.0),
     "max_tilt_speed_deg": (5.0, 10.0),
-    # Legacy px/s kept for internal conversion
+    # Legacy px/s — now DERIVED from deg/s, not user-set (kept for back-compat only)
     "max_slew_rate": (10, 5000),
     "resolution": (0.01, 5.0),
     "latency_ms": (0, 500),
+    # Realism extensions — acceleration, backlash, encoder/latency jitter
+    "max_accel_deg": (20.0, 300.0),
+    "backlash_px": (0.0, 2.0),
+    "encoder_sigma_px": (0.0, 0.5),
+    "latency_jitter_ms": (0.0, 5.0),
     "pixel_scale_mrad": (0.001, 2.0),
     "update_rate_hz": (20, 120),
 }
@@ -40,9 +45,13 @@ CAMERA_DEFAULTS: dict = {
     "home_tilt": None,
     "max_pan_speed_deg": 8.0,
     "max_tilt_speed_deg": 8.0,
-    "max_slew_rate": 1280.0,
+    "max_slew_rate": 1280.0,  # legacy derived — overwritten by deg/s derive in validate()
     "resolution": 0.1,
     "latency_ms": 12,
+    "max_accel_deg": 120.0,  # ~2040 px/s² at 0.109 scale
+    "backlash_px": 0.25,
+    "encoder_sigma_px": 0.04,
+    "latency_jitter_ms": 1.2,
     "pixel_scale_mrad": 0.109,
     "scene_width": 5000,
     "scene_height": 5000,

@@ -257,3 +257,83 @@ class DisturbanceConfig(BaseValidatedConfig):
 
     def image_noise_enabled(self) -> bool:
         return bool(self.enable_salt_pepper or self.enable_gaussian or self.enable_poisson)
+
+    # ---------- AI Training Helpers (robust-simple) ----------
+    def randomize_for_training(self, rng=None, difficulty: str = "mixed") -> "DisturbanceConfig":
+        """
+        Domain randomization for AI data generation — challenging but valid combos.
+
+        difficulty: "easy" | "medium" | "hard" | "mixed"
+        """
+        import random as _rnd
+        import numpy as _np
+        if rng is None:
+            rng = _np.random.default_rng(_rnd.randint(0, 999999))
+        diff = str(difficulty).lower()
+        if diff == "easy":
+            self.enable_salt_pepper = bool(rng.random() < 0.15)
+            self.enable_gaussian = bool(rng.random() < 0.25)
+            self.enable_poisson = False
+            if self.enable_salt_pepper:
+                self.salt_pepper_density = float(rng.uniform(0.01, 0.04))
+            if self.enable_gaussian:
+                self.gaussian_sigma = float(rng.uniform(2, 6))
+            self.camera_jitter = float(rng.uniform(0, 3))
+            self.atmospheric_preset = str(rng.choice(["Clear", "Clear", "Haze"]))
+            if self.atmospheric_preset != "Clear":
+                self.atmospheric_preset = "Haze"
+            self.platform_speed = float(rng.uniform(0, 4))
+            self.turbulence = int(rng.integers(0, 2))
+        elif diff == "medium":
+            # 40% chance each noise type, mixed presets
+            self.enable_salt_pepper = bool(rng.random() < 0.35)
+            self.enable_gaussian = bool(rng.random() < 0.45)
+            self.enable_poisson = bool(rng.random() < 0.30)
+            if self.enable_salt_pepper:
+                self.salt_pepper_density = float(rng.uniform(0.03, 0.10))
+            if self.enable_gaussian:
+                self.gaussian_sigma = float(rng.uniform(5, 12))
+            if self.enable_poisson:
+                self.poisson_scale = float(rng.uniform(0.8, 1.6))
+            self.camera_jitter = float(rng.uniform(2, 10))
+            self.atmospheric_preset = str(rng.choice(["Clear", "Haze", "Fog", "Rain"], p=[0.25, 0.35, 0.25, 0.15]))
+            self.platform_speed = float(rng.uniform(3, 12))
+            self.platform_profile = str(rng.choice(["Linear", "Circular", "Random", "Sin"]))
+            self.turbulence = int(rng.integers(1, 5))
+        elif diff == "hard":
+            # All noises on, worst case — beacon barely visible
+            self.enable_salt_pepper = True
+            self.enable_gaussian = True
+            self.enable_poisson = bool(rng.random() < 0.7)
+            self.salt_pepper_density = float(rng.uniform(0.08, 0.16))
+            self.salt_pepper_ratio = float(rng.uniform(0.45, 0.55))
+            self.gaussian_sigma = float(rng.uniform(10, 18))
+            self.gaussian_sigma_max = 22.0
+            self.poisson_scale = float(rng.uniform(1.0, 2.2))
+            self.poisson_peak = float(rng.uniform(60, 120))
+            self.camera_jitter = float(rng.uniform(10, 18))
+            self.atmospheric_preset = str(rng.choice(["Fog", "Rain", "Low Light"], p=[0.45, 0.30, 0.25]))
+            if self.atmospheric_preset == "Fog":
+                self.atmospheric_contrast = float(rng.uniform(35, 55))
+                self.atmospheric_brightness = float(rng.uniform(18, 32))
+            elif self.atmospheric_preset == "Low Light":
+                self.atmospheric_contrast = float(rng.uniform(15, 30))
+                self.atmospheric_brightness = float(rng.uniform(38, 60))
+            self.platform_speed = float(rng.uniform(12, 20))
+            self.platform_profile = str(rng.choice(["Random", "Spiral", "Figure 8", "Zig-Zag"]))
+            self.turbulence = int(rng.integers(4, 9))
+            self.vibration = int(rng.integers(3, 8))
+        else:  # mixed
+            pick = rng.choice(["easy", "medium", "hard"], p=[0.30, 0.40, 0.30])
+            return self.randomize_for_training(rng, str(pick))
+        # Common
+        if rng.random() < 0.12 and diff != "easy":
+            # Occasional hot-pixel heavy case
+            self.salt_pepper_density = max(self.salt_pepper_density, 0.12)
+        return self.validate()
+
+    @classmethod
+    def generate_training_batch(cls, n: int = 100, difficulty: str = "mixed", seed: int | None = 42) -> list["DisturbanceConfig"]:
+        import numpy as _np
+        rng = _np.random.default_rng(seed)
+        return [cls().randomize_for_training(rng, difficulty) for _ in range(n)]

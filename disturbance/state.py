@@ -103,6 +103,14 @@ def reset_disturbance_state() -> None:
     _platform_state_global.clear()
     _platform_state_global.update({"t": 0.0, "_pm_last_wall": None})
     _jitter_state_global.clear()
+    _jitter_state_global.pop("jx", None)
+    _jitter_state_global.pop("jy", None)
+    _jitter_state_global.pop("_jit_last_wall", None)
+    try:
+        from disturbance.image_noise import clear_hot_pixel_cache
+        clear_hot_pixel_cache()
+    except Exception:
+        pass
 
 # Also clear per-call camera Motion state dicts passed explicitly:
 # Caller should pass a fresh dict or call reset_disturbance_state() which clears global;
@@ -131,3 +139,13 @@ def reset_platform_motion_state() -> None:
 def reset_jitter_state() -> None:
     """Reset only jitter state."""
     _jitter_state_global.clear()
+    # Also clear OU jitter memory (jx/jy) if present
+    _jitter_state_global.pop("jx", None)
+    _jitter_state_global.pop("jy", None)
+    _jitter_state_global.pop("_jit_last_wall", None)
+    # Also clear hot-pixel cache for fresh sensor defects per run
+    try:
+        from disturbance.image_noise import clear_hot_pixel_cache
+        clear_hot_pixel_cache()
+    except Exception:
+        pass

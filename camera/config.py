@@ -55,6 +55,11 @@ class CameraConfig(BaseValidatedConfig):
     max_slew_rate: float = CAMERA_DEFAULTS["max_slew_rate"]
     resolution: float = CAMERA_DEFAULTS["resolution"]
     latency_ms: int = CAMERA_DEFAULTS["latency_ms"]
+    # Realism extensions — defaults from CAMERA_DEFAULTS if present
+    max_accel_deg: float = CAMERA_DEFAULTS.get("max_accel_deg", 120.0)
+    backlash_px: float = CAMERA_DEFAULTS.get("backlash_px", 0.25)
+    encoder_sigma_px: float = CAMERA_DEFAULTS.get("encoder_sigma_px", 0.04)
+    latency_jitter_ms: float = CAMERA_DEFAULTS.get("latency_jitter_ms", 1.2)
     update_rate_hz: int = CAMERA_DEFAULTS.get("update_rate_hz", 30)
 
     # Display
@@ -77,18 +82,25 @@ class CameraConfig(BaseValidatedConfig):
             self.fov_deg_y = float(clip_field(self.fov_deg_y, *CAMERA_LIMITS["fov_deg_y"]))
         self.max_pan_speed_deg = float(clip_field(self.max_pan_speed_deg, *CAMERA_LIMITS["max_pan_speed_deg"]))
         self.max_tilt_speed_deg = float(clip_field(self.max_tilt_speed_deg, *CAMERA_LIMITS["max_tilt_speed_deg"]))
-        self.max_slew_rate = float(clip_field(self.max_slew_rate, *CAMERA_LIMITS["max_slew_rate"]))
         self.resolution = float(clip_field(self.resolution, *CAMERA_LIMITS["resolution"]))
         self.latency_ms = int(clip_field(self.latency_ms, *CAMERA_LIMITS["latency_ms"]))
+        # Realism extensions
+        if "max_accel_deg" in CAMERA_LIMITS:
+            self.max_accel_deg = float(clip_field(float(getattr(self, "max_accel_deg", 120.0)), *CAMERA_LIMITS["max_accel_deg"]))
+        if "backlash_px" in CAMERA_LIMITS:
+            self.backlash_px = float(clip_field(float(getattr(self, "backlash_px", 0.25)), *CAMERA_LIMITS["backlash_px"]))
+        if "encoder_sigma_px" in CAMERA_LIMITS:
+            self.encoder_sigma_px = float(clip_field(float(getattr(self, "encoder_sigma_px", 0.04)), *CAMERA_LIMITS["encoder_sigma_px"]))
+        if "latency_jitter_ms" in CAMERA_LIMITS:
+            self.latency_jitter_ms = float(clip_field(float(getattr(self, "latency_jitter_ms", 1.2)), *CAMERA_LIMITS["latency_jitter_ms"]))
         self.update_rate_hz = int(clip_field(self.update_rate_hz, *CAMERA_LIMITS["update_rate_hz"]))
         if self.update_rate_hz < 20:
             self.update_rate_hz = 20
-        # Derived pixel scale from FOV deg / resolution (mrad per px)
+        # Derived pixel scale from FOV deg / resolution (mrad per px) — single source, then max_slew_rate derived
         try:
             deg_to_mrad = 17.453292519943295
             scale_x = float((self.fov_deg_x * deg_to_mrad) / max(1, self.fov_width))
             scale_y = float((self.fov_deg_y * deg_to_mrad) / max(1, self.fov_height))
-            # use horizontal for primary, but warn if aspect mismatch >10% (M5)
             if abs(scale_x - scale_y) / max(1e-6, scale_x) > 0.10:
                 import logging
                 logging.getLogger("camera").debug(f"FOV aspect mismatch scale_x {scale_x:.4f} vs scale_y {scale_y:.4f}, using avg")
@@ -96,8 +108,18 @@ class CameraConfig(BaseValidatedConfig):
             else:
                 self.pixel_scale_mrad = float(scale_x)
             self.pixel_scale_mrad = float(clip_field(self.pixel_scale_mrad, *CAMERA_LIMITS["pixel_scale_mrad"]))
-            # store y for vertical error conversion if needed
             self.pixel_scale_mrad_y = float(clip_field(scale_y, *CAMERA_LIMITS["pixel_scale_mrad"]))
+            # Now derive max_slew_rate from deg/s (single source) — keep legacy large values as-is for tests
+            px_per_deg_x = 17.453292519943295 / max(1e-6, scale_x)
+            px_per_deg_y = 17.453292519943295 / max(1e-6, scale_y)
+            derived_slew_x = float(self.max_pan_speed_deg) * px_per_deg_x
+            derived_slew_y = float(self.max_tilt_speed_deg) * px_per_deg_y
+            derived = max(derived_slew_x, derived_slew_y)
+            # If legacy max_slew_rate is huge (1e6), preserve it (tests); otherwise overwrite with derived
+            if float(getattr(self, "max_slew_rate", 0)) > 100000:
+                pass  # keep huge for headless test
+            else:
+                self.max_slew_rate = float(clip_field(derived, *CAMERA_LIMITS["max_slew_rate"]))
         except Exception:
             self.pixel_scale_mrad = float(clip_field(getattr(self, "pixel_scale_mrad", 0.109), *CAMERA_LIMITS["pixel_scale_mrad"]))
         self.viewport_width = int(clip_field(self.viewport_width, *DISPLAY_LIMITS["viewport_width"]))

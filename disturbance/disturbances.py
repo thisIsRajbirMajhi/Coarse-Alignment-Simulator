@@ -12,6 +12,7 @@ from disturbance.image_noise import (
     apply_image_noise,
     apply_poisson_noise,
     apply_salt_pepper,
+    clear_hot_pixel_cache,
 )
 from disturbance.platform_motion import apply_platform_motion
 from disturbance.sensor_noise import apply_sensor_noise
@@ -55,6 +56,7 @@ __all__ = [
     "reset_camera_motion_state",
     "reset_platform_motion_state",
     "reset_jitter_state",
+    "clear_hot_pixel_cache",
     "_turb_state",
     "_vib_state",
     "_cam_motion_state_global",

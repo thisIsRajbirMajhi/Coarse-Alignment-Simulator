@@ -110,13 +110,6 @@ class CameraPanel(BaseConfigPanel):
         mech_grid.addWidget(self._label("Tilt"), 2, 2)
         self.home_tilt_spin = QSpinBox(); self.home_tilt_spin.setRange(0, MAX_RES); self.home_tilt_spin.setEnabled(False); self.home_tilt_spin.setToolTip("Initial position fixed to centre."); self.home_tilt_spin.setMinimumHeight(26)
         mech_grid.addWidget(self.home_tilt_spin, 2, 3)
-        # Update rate fixed 30Hz
-        mech_grid.addWidget(self._label("Update Rate"), 5, 0)
-        self.update_rate_lbl = QLabel("30 Hz (Fixed)")
-        self.update_rate_lbl.setStyleSheet("color:#374151; font-size:11px; font-weight:600; background:#f9fafb; border:1px solid #e5e7eb; border-radius:4px; padding:4px 8px;")
-        mech_grid.addWidget(self.update_rate_lbl, 5, 1)
-        mech_grid.addWidget(QLabel(""), 5, 2, 1, 2)
-
         # Pan/Tilt max speeds in degree/sec
         mech_grid.addWidget(self._label("Pan Speed"), 3, 0)
         self.pan_speed_deg_spin = QDoubleSpinBox(); lo,hi = CAMERA_LIMITS["max_pan_speed_deg"]; self.pan_speed_deg_spin.setRange(lo, hi); self.pan_speed_deg_spin.setSingleStep(0.5); self.pan_speed_deg_spin.setDecimals(1); self.pan_speed_deg_spin.setSuffix(" deg/s"); self.pan_speed_deg_spin.setToolTip("Max pan speed 5-10 deg/sec — actuator limit."); self.pan_speed_deg_spin.setMinimumHeight(26)
@@ -184,13 +177,52 @@ class CameraPanel(BaseConfigPanel):
         units_grid.addWidget(self.scale_hint, 0, 2, 1, 2)
         layout.addWidget(units_box)
 
-        gain_box = QGroupBox("E — Controller Gain")
+        # — NEW: Realism & Mechanical Errors (previously hidden constants — now user-tunable)
+        realism_box = QGroupBox("E — Realism & Mechanical Errors")
+        realism_grid = QGridLayout(realism_box)
+        realism_grid.setContentsMargins(12, 18, 12, 12)
+        realism_grid.setHorizontalSpacing(8)
+        realism_grid.setVerticalSpacing(8)
+        realism_grid.setColumnStretch(1, 1)
+        realism_grid.setColumnStretch(3, 1)
+
+        realism_grid.addWidget(self._label("Max Accel"), 0, 0)
+        self.accel_spin = QDoubleSpinBox(); lo,hi = CAMERA_LIMITS["max_accel_deg"]; self.accel_spin.setRange(lo, hi); self.accel_spin.setSingleStep(10.0); self.accel_spin.setDecimals(1); self.accel_spin.setSuffix(" deg/s²"); self.accel_spin.setToolTip("Slew acceleration limit — px/s² = deg/s² * px/deg. 120 deg/s² ≈ 2040 px/s² at 0.109 mrad/px; lower → smoother, higher → snappier."); self.accel_spin.setMinimumHeight(26)
+        realism_grid.addWidget(self.accel_spin, 0, 1)
+
+        realism_grid.addWidget(self._label("Backlash"), 0, 2)
+        self.backlash_spin = QDoubleSpinBox(); lo,hi = CAMERA_LIMITS["backlash_px"]; self.backlash_spin.setRange(lo, hi); self.backlash_spin.setSingleStep(0.05); self.backlash_spin.setDecimals(2); self.backlash_spin.setSuffix(" px"); self.backlash_spin.setToolTip("Gear backlash — dead band on reversal. 0 = ideal, 2 px worst. Overcome by moving through backlash before motion starts."); self.backlash_spin.setMinimumHeight(26)
+        realism_grid.addWidget(self.backlash_spin, 0, 3)
+
+        realism_grid.addWidget(self._label("Encoder σ"), 1, 0)
+        self.encoder_spin = QDoubleSpinBox(); lo,hi = CAMERA_LIMITS["encoder_sigma_px"]; self.encoder_spin.setRange(lo, hi); self.encoder_spin.setSingleStep(0.01); self.encoder_spin.setDecimals(3); self.encoder_spin.setSuffix(" px"); self.encoder_spin.setToolTip("Encoder noise σ — Gaussian jitter on reported pan/tilt (not executed). 0 = perfect, 0.5 px worst."); self.encoder_spin.setMinimumHeight(26)
+        realism_grid.addWidget(self.encoder_spin, 1, 1)
+
+        realism_grid.addWidget(self._label("Latency Jitter"), 1, 2)
+        self.latency_jitter_spin = QDoubleSpinBox(); lo,hi = CAMERA_LIMITS["latency_jitter_ms"]; self.latency_jitter_spin.setRange(lo, hi); self.latency_jitter_spin.setSingleStep(0.2); self.latency_jitter_spin.setDecimals(1); self.latency_jitter_spin.setSuffix(" ms"); self.latency_jitter_spin.setToolTip("Latency jitter σ — Gaussian variation on queue delay (e.g., 12 ± 1.2 ms). 0 = deterministic."); self.latency_jitter_spin.setMinimumHeight(26)
+        realism_grid.addWidget(self.latency_jitter_spin, 1, 3)
+
+        realism_hint = QLabel("Realism adds accel-limited slew, reversal backlash, encoder noise, and stochastic latency. Increase for stress-testing.")
+        realism_hint.setWordWrap(True)
+        realism_hint.setStyleSheet("color:#64748b; font-size:10px; font-style:italic;")
+        realism_grid.addWidget(realism_hint, 2, 0, 1, 4)
+        layout.addWidget(realism_box)
+
+        # Controller Gain moved to Control tab — keep hidden aliases for MainWindow backward compat
+        gain_box = QGroupBox("E — Controller Gain (MOVED to Control tab)")
         gain_box.setStyleSheet("QGroupBox { padding-top: 14px; }")
         gain_layout = QVBoxLayout(gain_box)
         gain_layout.setContentsMargins(10, 14, 10, 10)
         gain_layout.setSpacing(6)
         self._add_gain_row(gain_layout)
+        gain_box.hide()  # hidden — Control tab is single source for Kp
         layout.addWidget(gain_box)
+        # Keep hidden hint for clarity when debugging
+        moved_hint = QLabel("Gain is now in Control → Gains / Kp. This box is hidden for spec compliance.")
+        moved_hint.setStyleSheet("color:#6b7280; font-size:9px; font-style:italic;")
+        moved_hint.setWordWrap(True)
+        moved_hint.hide()
+        layout.addWidget(moved_hint)
 
         layout.addStretch()
         self._wire_signals()
@@ -235,6 +267,8 @@ class CameraPanel(BaseConfigPanel):
         for w in [self.fov_deg_x_spin, self.fov_deg_y_spin, self.fov_w_spin]:
             w.valueChanged.connect(self._update_scale_from_fov)
         self.gain_slider.valueChanged.connect(lambda _: self.configChanged.emit())
+        for w in [self.accel_spin, self.backlash_spin, self.encoder_spin, self.latency_jitter_spin]:
+            w.valueChanged.connect(lambda _: self.configChanged.emit())
 
     def _update_scale_from_fov(self, _=None) -> None:
         try:
@@ -300,11 +334,15 @@ class CameraPanel(BaseConfigPanel):
             god_height=int(self.god_h_spin.value()),
             pixel_scale_mrad=float(pixel_scale),
             update_rate_hz=int(self.update_rate_spin.value()),
+            max_accel_deg=float(self.accel_spin.value()),
+            backlash_px=float(self.backlash_spin.value()),
+            encoder_sigma_px=float(self.encoder_spin.value()),
+            latency_jitter_ms=float(self.latency_jitter_spin.value()),
         ).validate(self._scene_bounds)
 
     def set_config(self, cfg: CameraConfig, emit: bool = False) -> None:
         cfg = cfg.validate(self._scene_bounds)
-        for w in [self.fov_w_spin, self.fov_h_spin, self.fov_deg_x_spin, self.fov_deg_y_spin, self.pan_min_spin, self.pan_max_spin, self.tilt_min_spin, self.tilt_max_spin, self.home_pan_spin, self.home_tilt_spin, self.pan_speed_deg_spin, self.tilt_speed_deg_spin, self.slew_spin, self.res_spin, self.latency_spin, self.update_rate_spin, self.viewport_w_spin, self.viewport_h_spin, self.god_w_spin, self.god_h_spin, self.scale_spin, self.gain_spin, self.gain_slider]:
+        for w in [self.fov_w_spin, self.fov_h_spin, self.fov_deg_x_spin, self.fov_deg_y_spin, self.pan_min_spin, self.pan_max_spin, self.tilt_min_spin, self.tilt_max_spin, self.home_pan_spin, self.home_tilt_spin, self.pan_speed_deg_spin, self.tilt_speed_deg_spin, self.slew_spin, self.res_spin, self.latency_spin, self.update_rate_spin, self.viewport_w_spin, self.viewport_h_spin, self.god_w_spin, self.god_h_spin, self.scale_spin, self.gain_spin, self.gain_slider, self.accel_spin, self.backlash_spin, self.encoder_spin, self.latency_jitter_spin]:
             w.blockSignals(True)
         try:
             self.fov_w_spin.setValue(int(cfg.fov_width)); self.fov_h_spin.setValue(int(cfg.fov_height))
@@ -323,9 +361,13 @@ class CameraPanel(BaseConfigPanel):
             self.viewport_w_spin.setValue(int(cfg.viewport_width)); self.viewport_h_spin.setValue(int(cfg.viewport_height))
             self.god_w_spin.setValue(int(cfg.god_width)); self.god_h_spin.setValue(int(cfg.god_height))
             self.scale_spin.setValue(float(cfg.pixel_scale_mrad))
+            self.accel_spin.setValue(float(getattr(cfg, 'max_accel_deg', 120.0)))
+            self.backlash_spin.setValue(float(getattr(cfg, 'backlash_px', 0.25)))
+            self.encoder_spin.setValue(float(getattr(cfg, 'encoder_sigma_px', 0.04)))
+            self.latency_jitter_spin.setValue(float(getattr(cfg, 'latency_jitter_ms', 1.2)))
             self._update_scale_from_fov()
         finally:
-            for w in [self.fov_w_spin, self.fov_h_spin, self.fov_deg_x_spin, self.fov_deg_y_spin, self.pan_min_spin, self.pan_max_spin, self.tilt_min_spin, self.tilt_max_spin, self.home_pan_spin, self.home_tilt_spin, self.pan_speed_deg_spin, self.tilt_speed_deg_spin, self.slew_spin, self.res_spin, self.latency_spin, self.update_rate_spin, self.viewport_w_spin, self.viewport_h_spin, self.god_w_spin, self.god_h_spin, self.scale_spin]:
+            for w in [self.fov_w_spin, self.fov_h_spin, self.fov_deg_x_spin, self.fov_deg_y_spin, self.pan_min_spin, self.pan_max_spin, self.tilt_min_spin, self.tilt_max_spin, self.home_pan_spin, self.home_tilt_spin, self.pan_speed_deg_spin, self.tilt_speed_deg_spin, self.slew_spin, self.res_spin, self.latency_spin, self.update_rate_spin, self.viewport_w_spin, self.viewport_h_spin, self.god_w_spin, self.god_h_spin, self.scale_spin, self.accel_spin, self.backlash_spin, self.encoder_spin, self.latency_jitter_spin]:
                 w.blockSignals(False)
             self.gain_spin.blockSignals(False); self.gain_slider.blockSignals(False)
         if emit:
@@ -333,7 +375,23 @@ class CameraPanel(BaseConfigPanel):
 
     def set_scene_bounds(self, bounds: tuple[int,int]) -> None:
         self._scene_bounds = bounds
-        # Update home/range hints but keep current values
+        # Sync God View to world size (spec: God View = World size)
+        try:
+            w, h = bounds
+            self.god_w_spin.blockSignals(True)
+            self.god_h_spin.blockSignals(True)
+            self.god_w_spin.setValue(int(w))
+            self.god_h_spin.setValue(int(h))
+            self.home_pan_spin.setValue(int(w//2))
+            self.home_tilt_spin.setValue(int(h//2))
+        except Exception:
+            pass
+        finally:
+            try:
+                self.god_w_spin.blockSignals(False)
+                self.god_h_spin.blockSignals(False)
+            except Exception:
+                pass
 
     # Ensure wiring after build
     def showEvent(self, e):

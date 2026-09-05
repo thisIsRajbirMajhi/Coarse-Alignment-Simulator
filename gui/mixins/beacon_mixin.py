@@ -1,0 +1,321 @@
+# gui/mixins/beacon_mixin.py - Beacon/target handling
+# Extracted from gui/main_window.py beacon section (200+ lines).
+
+import time
+import numpy as np
+from PyQt5.QtWidgets import QGroupBox
+from target.motion import MotionProfile, create_beacons  # noqa
+from target.config import MultiBeaconConfig  # noqa
+from tracking.tracker import Tracker  # noqa
+
+
+class BeaconMixin:
+    """Mixin: Beacon count/target logic, randomization, hot-apply."""
+
+    def _update_beacon_count_label(self, v: int):
+        try:
+            tgt = int(getattr(self, "target_beacon_spin", self).value()) if hasattr(self, "target_beacon_spin") else int(getattr(self, "_target_beacon_id", 0))
+            self.beacon_count_label.setText(f"{v} beacon{'s' if v!=1 else ''}, Target #{tgt}")
+        except:
+            try: self.beacon_count_label.setText(f"{v} beacon{'s' if v!=1 else ''}")
+            except: pass
+
+    def _on_hitbox_change(self, _v=None):
+        pass
+
+    def _on_beacon_count_changed(self, v: int):
+        try:
+            self.target_beacon_spin.setMaximum(max(0, v - 1))
+            if self.target_beacon_spin.value() >= v:
+                self.target_beacon_spin.setValue(v - 1)
+            self._update_beacon_count_label(v)
+        except: pass
+
+    def _on_target_beacon_change(self, idx: int):
+        try:
+            idx = int(np.clip(int(idx), 0, max(0, len(getattr(self, "beacons", [])) - 1)))
+            self._target_beacon_id = idx
+            try:
+                self.beacon_config.target_index = int(idx)
+                if hasattr(self, "beacon_manager"):
+                    self.beacon_manager.spin_target_index.blockSignals(True)
+                    self.beacon_manager.spin_target_index.setValue(int(idx))
+                    self.beacon_manager.spin_target_index.blockSignals(False)
+            except Exception:
+                pass
+            if hasattr(self, "beacons") and 0 <= idx < len(self.beacons):
+                self.target = self.beacons[idx]
+                try: self.tracker = Tracker(smoothing=0.25, miss_limit=5)
+                except: pass
+                self.statusBar().showMessage(f"Target -> Beacon #{idx}", 2500)
+                try:
+                    if hasattr(self, "beacon_manager"):
+                        self.beacon_manager._update_status()
+                except: pass
+        except: pass
+
+    def _on_multi_beacon_config_changed(self, cfg):
+        try:
+            cfg = cfg.validate() if hasattr(cfg, "validate") else cfg
+            self.beacon_config = cfg
+            self._beacon_count = int(cfg.beacon_count)
+            self._target_beacon_id = int(cfg.target_index)
+            self._mark_dirty("beacons")
+            self._schedule_auto("beacons", self._apply_beacons_hot, 400)
+            try:
+                self._schedule_auto("beacons_highlight", lambda: self._on_target_beacon_change(int(cfg.target_index)), 80)
+            except: pass
+        except:
+            try: self._schedule_auto("beacons", self._apply_beacons_hot, 400)
+            except: pass
+
+    def _sync_beacon_to_global(self, cfg):
+        try:
+            # Keep hidden global motion/speed in sync with beacon panel (single source)
+            cfg = cfg.validate() if hasattr(cfg, "validate") else cfg
+            # Map beacon profile to global MotionProfile string
+            rev = {"linear": "linear", "curved": "curved", "figure_eight": "figure_eight", "spiral": "spiral", "sinusoidal": "sinusoidal", "zigzag": "zigzag", "random": "curved"}
+            prof = rev.get(str(getattr(cfg, "profile", "curved")).lower(), "curved")
+            if hasattr(self, "motion_combo"):
+                self.motion_combo.blockSignals(True)
+                idx = self.motion_combo.findText(prof)
+                if idx >= 0:
+                    self.motion_combo.setCurrentIndex(idx)
+                else:
+                    self.motion_combo.setCurrentText(prof)
+                self.motion_combo.blockSignals(False)
+            if hasattr(self, "speed_slider"):
+                self.speed_slider.blockSignals(True)
+                self.speed_slider.setValue(int(getattr(cfg, "speed", 60)))
+                if hasattr(self.speed_slider, "_value_label"):
+                    self.speed_slider._value_label.setText(str(int(getattr(cfg, "speed", 60))))
+                self.speed_slider.blockSignals(False)
+        except: pass
+
+    def _apply_beacon_configs_hot(self):
+        try:
+            self._clear_dirty("beacons")
+            self._snapshot_section("beacons")
+        except: pass
+
+    def _apply_beacons(self):
+        if hasattr(self, "beacon_manager") and self.beacon_manager is not None:
+            try:
+                multi_cfg = self.beacon_manager.collect_multi_config().validate()
+                self.beacon_config = multi_cfg
+                was_running = getattr(self, "_running", False)
+                if was_running: self._pause()
+                profile = str(getattr(multi_cfg, "profile", "curved"))
+                speed = float(getattr(multi_cfg, "speed", 60))
+                shape = str(getattr(multi_cfg, "shape", "square"))
+                size_w = int(getattr(multi_cfg, "size_w", 10))
+                size_h = int(getattr(multi_cfg, "size_h", 10))
+                blinking = bool(getattr(multi_cfg, "blinking", False))
+                speed_random = bool(getattr(multi_cfg, "speed_random", False))
+                tgt_x = float(getattr(multi_cfg, "x", 2500)) if multi_cfg.beacon_count == 1 else None
+                tgt_y = float(getattr(multi_cfg, "y", 2500)) if multi_cfg.beacon_count == 1 else None
+                scene_w, scene_h = self._scene_size
+                seed = int(self.seed_spin.value()) + int(time.time()) % 1000 if hasattr(self, "seed_spin") else 42
+                self.beacons = create_beacons(int(multi_cfg.beacon_count), (scene_w, scene_h), profile, speed,
+                                               seed=seed, hitbox_radius=14, center_radius=2, shape=shape, size_w=size_w, size_h=size_h, blinking=blinking, x=tgt_x, y=tgt_y, speed_random=speed_random)
+                tid = int(np.clip(int(multi_cfg.target_index), 0, max(0, len(self.beacons)-1)))
+                self._target_beacon_id = tid; self._beacon_count = int(multi_cfg.beacon_count)
+                self.target = self.beacons[tid] if self.beacons else self.beacons[0]
+                self.statusBar().showMessage(f"Beacons: {self._beacon_count} Target #{tid} {shape} {size_w}x{size_h}", 3000)
+                try: self.tracker = Tracker(smoothing=0.25, miss_limit=5)
+                except: pass
+                self._rebuild_per_beacon_panels()
+                try: self._on_target_beacon_change(tid)
+                except: pass
+                if was_running: self._start()
+                return
+            except Exception:
+                pass
+        try:
+            self._beacon_count = int(self.beacon_count_spin.value())
+        except: return
+        was_running = getattr(self, "_running", False)
+        if was_running: self._pause()
+        try: profile = MotionProfile(self.motion_combo.currentText())
+        except: profile = self.target.profile if hasattr(self, "target") else MotionProfile.CURVED
+        speed = float(getattr(self, "_target_speed", 60))
+        scene_w, scene_h = self._scene_size
+        seed = int(self.seed_spin.value()) + int(time.time()) % 1000
+        self.beacons = create_beacons(self._beacon_count, (scene_w, scene_h), profile, speed,
+                                       seed=seed, hitbox_radius=self._hitbox_radius, center_radius=self._center_radius)
+        # respect selected target id
+        try:
+            tid = int(self.target_beacon_spin.value())
+        except:
+            tid = int(getattr(self, "_target_beacon_id", 0))
+        tid = int(np.clip(tid, 0, max(0, len(self.beacons)-1)))
+        self._target_beacon_id = tid
+        self.target = self.beacons[tid] if self.beacons else self.beacons[0]
+        self.statusBar().showMessage(f"Beacons: {self._beacon_count}  Target #{tid}  hitbox {self._hitbox_radius}px  center {self._center_radius}px", 3000)
+        try: self.tracker = Tracker(smoothing=0.25, miss_limit=5)
+        except: pass
+        self._rebuild_per_beacon_panels()
+        # highlight target
+        try: self._on_target_beacon_change(tid)
+        except: pass
+        if was_running: self._start()
+
+    def _apply_beacons_hot(self):
+        try:
+            if hasattr(self, "beacon_manager") and self.beacon_manager is not None:
+                multi_cfg = self.beacon_manager.collect_multi_config().validate()
+                self.beacon_config = multi_cfg
+                self._beacon_count = int(multi_cfg.beacon_count)
+                tid = int(multi_cfg.target_index)
+                profile = str(getattr(multi_cfg, "profile", "curved"))
+                speed = float(getattr(multi_cfg, "speed", 60))
+                shape = str(getattr(multi_cfg, "shape", "square"))
+                size_w = int(getattr(multi_cfg, "size_w", 10))
+                size_h = int(getattr(multi_cfg, "size_h", 10))
+                blinking = bool(getattr(multi_cfg, "blinking", False))
+                speed_random = bool(getattr(multi_cfg, "speed_random", False))
+                tgt_x = float(getattr(multi_cfg, "x", 2500)) if multi_cfg.beacon_count == 1 else None
+                tgt_y = float(getattr(multi_cfg, "y", 2500)) if multi_cfg.beacon_count == 1 else None
+                scene_w, scene_h = self._scene_size
+                seed = int(self.seed_spin.value()) + int(time.time()) % 1000 if hasattr(self, "seed_spin") else 42
+                self.beacons = create_beacons(self._beacon_count, (scene_w, scene_h), profile, speed,
+                                               seed=seed, hitbox_radius=14, center_radius=2, shape=shape, size_w=size_w, size_h=size_h, blinking=blinking, x=tgt_x, y=tgt_y, speed_random=speed_random)
+                tid = int(np.clip(int(tid), 0, max(0, len(self.beacons)-1)))
+                self._target_beacon_id = tid
+                self.target = self.beacons[tid] if self.beacons else self.beacons[0]
+                try: self.tracker = Tracker(smoothing=0.25, miss_limit=5)
+                except: pass
+                self._rebuild_per_beacon_panels()
+                try: self._on_target_beacon_change(tid)
+                except: pass
+                self.statusBar().showMessage(f"Beacons — {self._beacon_count} {shape} {size_w}x{size_h} Target #{tid}", 2000)
+                try: self._snapshot_section("beacons"); self._clear_dirty("beacons")
+                except: pass
+                return
+        except Exception:
+            pass
+        try:
+            self._beacon_count = int(self.beacon_count_spin.value())
+        except: return
+        try: profile = MotionProfile(self.motion_combo.currentText())
+        except: profile = self.target.profile if hasattr(self, "target") else MotionProfile.CURVED
+        speed = float(getattr(self, "_target_speed", 60))
+        scene_w, scene_h = self._scene_size
+        seed = int(self.seed_spin.value()) + int(time.time()) % 1000
+        self.beacons = create_beacons(self._beacon_count, (scene_w, scene_h), profile, speed,
+                                       seed=seed, hitbox_radius=self._hitbox_radius, center_radius=self._center_radius)
+        try: tid = int(self.target_beacon_spin.value())
+        except: tid = int(getattr(self, "_target_beacon_id", 0))
+        tid = int(np.clip(tid, 0, max(0, len(self.beacons)-1)))
+        self._target_beacon_id = tid
+        self.target = self.beacons[tid] if self.beacons else self.beacons[0]
+        try: self.tracker = Tracker(smoothing=0.25, miss_limit=5)
+        except: pass
+        self._rebuild_per_beacon_panels()
+        try: self._on_target_beacon_change(tid)
+        except: pass
+        self.statusBar().showMessage(f"Beacons — {self._beacon_count} beacons Target #{tid} (auto)", 2000)
+        try: self._snapshot_section("beacons"); self._clear_dirty("beacons")
+        except: pass
+
+    def _rebuild_per_beacon_panels(self):
+        # Single panel — no per-beacon rebuild needed, keep current beacon config
+        try:
+            if hasattr(self, "beacon_manager"):
+                self.beacon_manager._update_status()
+        except: pass
+
+    def _create_single_beacon_panel(self, idx, beacon):
+        return QGroupBox(f"Beacon #{idx}")
+
+    def _on_per_beacon_enabled(self, idx, checked): pass
+
+    def _on_per_beacon_profile(self, idx, txt): pass
+
+    def _on_per_beacon_speed(self, idx, v): pass
+
+    def _on_per_beacon_brightness(self, idx, v): pass
+
+    def _on_per_beacon_radius(self, idx, v): pass
+
+    def _on_per_beacon_hitbox(self, idx, v): pass
+
+    def _on_per_beacon_center(self, idx, v): pass
+
+    def _on_per_beacon_x(self, idx, v): pass
+
+    def _on_per_beacon_y(self, idx, v): pass
+
+    def _on_per_beacon_heading(self, idx, deg): pass
+
+    def _randomize_single_beacon_pos(self, idx): pass
+
+    def _randomize_all_beacons(self):
+        try:
+            import random
+            # Randomize all beacon parameters via panel
+            if hasattr(self, "beacon_manager"):
+                bm = self.beacon_manager
+                # Random shape
+                try:
+                    bm.combo_shape.setCurrentIndex(random.randint(0, bm.combo_shape.count()-1))
+                except: pass
+                try:
+                    bm.spin_size_w.setValue(random.randint(5, 20))
+                    bm.spin_size_h.setValue(random.randint(2, 20))
+                except: pass
+                try:
+                    bm.spin_x.setValue(random.randint(200, 4800))
+                    bm.spin_y.setValue(random.randint(200, 4800))
+                except: pass
+                try:
+                    bm.combo_motion.setCurrentIndex(random.randint(0, bm.combo_motion.count()-1))
+                except: pass
+                try:
+                    bm.spin_speed.setValue(random.randint(20, 150))
+                    bm.chk_random_speed.setChecked(random.choice([True, False]))
+                except: pass
+                try:
+                    bm.chk_blinking.setChecked(random.choice([True, False]))
+                except: pass
+                self.statusBar().showMessage(f"Randomized parameters for {len(getattr(self,'beacons',[]))} beacons", 2500)
+                return
+            # Fallback: randomize live beacons directly
+            import random as _rnd
+            for b in getattr(self, "beacons", []):
+                try:
+                    b.profile = _rnd.choice(list(MotionProfile))
+                except: pass
+                try:
+                    b.shape = _rnd.choice(["square", "circle"])
+                    b.size_w = _rnd.randint(5, 20)
+                    b.size_h = _rnd.randint(2, 20)
+                    b.speed = float(_rnd.randint(20, 150))
+                    b.blinking = _rnd.choice([True, False])
+                    b.randomize_position(seed=int(_rnd.randint(0, 999999)))
+                except:
+                    try:
+                        b.x = float(_rnd.uniform(60, self._scene_size[0]-60))
+                        b.y = float(_rnd.uniform(60, self._scene_size[1]-60))
+                    except: pass
+            self.statusBar().showMessage(f"Randomized parameters for {len(self.beacons)} beacons", 2500)
+        except: pass
+
+    def _randomize_beacon_motion(self):
+        try:
+            import random
+            if hasattr(self, "beacon_manager"):
+                bm = self.beacon_manager
+                bm.combo_motion.setCurrentIndex(random.randint(0, bm.combo_motion.count()-1))
+                self.statusBar().showMessage(f"Randomized motion for {len(getattr(self,'beacons',[]))} beacons", 2500)
+                return
+            import random as _rnd
+            for b in getattr(self, "beacons", []):
+                try:
+                    b.profile = _rnd.choice(list(MotionProfile))
+                    b.randomize_position(seed=int(_rnd.randint(0, 999999)))
+                except: pass
+            self.statusBar().showMessage(f"Randomized motion for {len(self.beacons)} beacons", 2500)
+        except: pass
+
+    def _on_per_beacon_apply(self, idx): pass

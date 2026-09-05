@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import random as _random
+
+import numpy as np
+
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING
 
@@ -129,3 +133,49 @@ class EnvironmentConfig(BaseValidatedConfig):
         known = {k: v for k, v in data.items() if k in DEFAULTS}
         cfg = cls(**{**DEFAULTS, **known})
         return cfg.validate()
+
+    # ---------- AI Training Helpers (robust-simple) ----------
+    def randomize_for_training(self, rng: np.random.Generator | None = None, difficulty: str = "mixed") -> "EnvironmentConfig":
+        """
+        Domain randomization for AI data generation — produces challenging variants.
+
+        Args:
+          rng: optional Generator for reproducibility
+          difficulty: "easy" | "medium" | "hard" | "mixed"
+        Returns self (mutated) for chaining.
+        """
+        if rng is None:
+            rng = np.random.default_rng(_random.randint(0, 999999))
+        diff = str(difficulty).lower()
+        if diff == "easy":
+            self.haze_pct = int(rng.integers(0, 20))
+            self.star_count = int(rng.integers(20, 120))
+            self.star_brightness = float(rng.uniform(0.7, 1.1))
+            self.vignetting_pct = int(rng.integers(0, 15))
+            self.dynamic = bool(rng.random() < 0.2)
+        elif diff == "medium":
+            self.haze_pct = int(rng.integers(15, 55))
+            self.star_count = int(rng.integers(80, 400))
+            self.star_brightness = float(rng.uniform(0.9, 1.4))
+            self.vignetting_pct = int(rng.integers(5, 35))
+            self.dynamic = bool(rng.random() < 0.5)
+        elif diff == "hard":
+            self.haze_pct = int(rng.integers(45, 95))
+            self.star_count = int(rng.integers(300, 2500))
+            self.star_brightness = float(rng.uniform(1.2, 1.8))
+            self.vignetting_pct = int(rng.integers(15, 60))
+            self.bg_bottom = int(rng.integers(18, 40))
+            self.dynamic = True
+        else:  # mixed — 30/40/30
+            pick = rng.choice(["easy", "medium", "hard"], p=[0.30, 0.40, 0.30])
+            return self.randomize_for_training(rng, pick)
+        self.bg_top = int(rng.integers(8, 18))
+        self.dynamic_speed = float(rng.uniform(0.5, 2.2))
+        self.seed = int(rng.integers(0, 999999))
+        return self.validate()
+
+    @classmethod
+    def generate_training_batch(cls, n: int = 100, difficulty: str = "mixed", seed: int | None = 42) -> list["EnvironmentConfig"]:
+        """Generate n randomized configs for batch AI data generation."""
+        rng = np.random.default_rng(seed)
+        return [cls().randomize_for_training(rng, difficulty) for _ in range(n)]

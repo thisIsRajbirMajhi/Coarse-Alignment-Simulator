@@ -200,6 +200,14 @@ class Target:
         self._init_accelerating_params()
         self._init_waypoint_params()
 
+        # Realistic beacon extensions — robust-simple, additive
+        self._init_realistic_photometry()
+        self._init_aoa_jitter()
+        self._init_wind_gust()
+        self._init_gimbal_lag()
+        self._init_beacon_coding()
+        self._init_eclipse()
+
     # Private — profile initializers (grouped for clarity)
 
     def _init_orbit_params(self) -> None:
@@ -255,6 +263,53 @@ class Target:
         self._wp_speed = float(self.speed)
         self._wp_turn_rate = 3.2  # 1/s lerp toward target heading
 
+    # ----- Realistic beacon extensions -----
+    def _init_realistic_photometry(self) -> None:
+        # Gamma-Gamma parameters: alpha~4.2 beta~2.8 for moderate turbulence, will vary per beacon
+        self._gg_alpha = float(self._rng.uniform(3.2, 5.8))
+        self._gg_beta = float(self._rng.uniform(2.2, 3.6))
+        self._scint_state = 0.0  # OU state for correlated flicker
+        self._aoa_phase = float(self._rng.uniform(0, 2 * math.pi))
+
+    def _init_aoa_jitter(self) -> None:
+        # Angle-of-arrival: 1.2-2.8 px high-frequency dance, OU tau 45ms
+        self._aoa_amp = float(self._rng.uniform(1.2, 2.8))
+        self._aoa_tau = 0.045
+        self._aoa_x = 0.0
+        self._aoa_y = 0.0
+        # Gimbal lag position
+        self._gimbal_x = float(self.x)
+        self._gimbal_y = float(self.y)
+        self._gimbal_tau = float(self._rng.uniform(0.022, 0.042))  # 22-42ms lag
+
+    def _init_wind_gust(self) -> None:
+        # Dryden-like wind gust state
+        self._wind_vx = 0.0
+        self._wind_vy = 0.0
+        self._wind_tau = float(self._rng.uniform(0.18, 0.35))
+        self._wind_sigma = float(self._rng.uniform(4.0, 9.0))
+        self._wind_next_gust = float(self._rng.uniform(2.0, 6.0))
+
+    def _init_gimbal_lag(self) -> None:
+        # Already done in _init_aoa_jitter — keep alias
+        pass
+
+    def _init_beacon_coding(self) -> None:
+        # PRN-like ID code: 10-bit LSFR per beacon_id, varies blink pattern subtly
+        # For multi-beacon challenge: IDs beacon 0..4 have different code phases
+        self._code_len = 20
+        self._code = np.array([int(b) for b in format((self.beacon_id * 73 + 0x2A) & 0x3FF, '010b')], dtype=int)
+        # Repeat to 20
+        self._code = np.tile(self._code, 2)[:20]
+        self._code_phase = float(self._rng.uniform(0, self._code_len))
+        self._code_rate = float(self._rng.uniform(8.0, 14.0))  # Hz
+
+    def _init_eclipse(self) -> None:
+        # Eclipse / dropout: 1-2% chance of 0.4-0.9 sec full dropout
+        self._eclipse_timer = 0.0
+        self._eclipse_time_left = 0.0
+        self._eclipse_interval = float(self._rng.uniform(18.0, 45.0))
+
     def to_config(self) -> "BeaconConfig":
         """Export this Target's 8 params + state as a BeaconConfig."""
         if BeaconConfig is None:
@@ -295,6 +350,16 @@ class Target:
         self._init_figure_eight_params()
         self._init_spiral_params()
         self._init_waypoint_params()
+        # Realistic extensions
+        try:
+            self._init_realistic_photometry()
+            self._init_aoa_jitter()
+            self._init_wind_gust()
+            self._init_beacon_coding()
+            self._init_eclipse()
+            self._gimbal_x, self._gimbal_y = float(self.x), float(self.y)
+        except Exception:
+            pass
         # Clamp
         self.x = float(np.clip(self.x, 0, w)); self.y = float(np.clip(self.y, 0, h))
 
@@ -361,6 +426,15 @@ class Target:
             pass
         try:
             self._init_waypoint_params()
+        except:
+            pass
+        try:
+            self._init_realistic_photometry()
+            self._init_aoa_jitter()
+            self._init_wind_gust()
+            self._init_beacon_coding()
+            self._init_eclipse()
+            self._gimbal_x, self._gimbal_y = float(self.x), float(self.y)
         except:
             pass
 
@@ -591,14 +665,128 @@ class Target:
         except Exception:
             pass
 
-        # Pometric scintillation — all profiles
-        fast=0.06*math.sin(self._t*self._scint_freq + self._scint_phase)
-        slow=0.04*math.sin(self._t*0.7)
-        noise=float(self._rng.normal(0,0.015))
-        scint=float(np.clip(1.0+fast+slow+noise,0.78,1.22))
-        self.current_brightness=float(np.clip(self.brightness*scint,180,255))
-        self.current_radius=float(np.clip(self.radius*(0.92+0.16*scint),1.0,self.radius*1.4))
-        # Blinking
+        # --- Realistic beacon contributions (additive, bounded) ---
+        # 1) Wind gust — Dryden-like OU gust added to x/y before photometry (affects apparent position)
+        try:
+            self._wind_next_gust -= dt
+            if self._wind_next_gust <= 0:
+                # New gust impulse
+                gust_amp = float(self._rng.uniform(-self._wind_sigma, self._wind_sigma))
+                self._wind_vx += gust_amp * 0.7
+                self._wind_vy += float(self._rng.uniform(-self._wind_sigma * 0.6, self._wind_sigma * 0.6)) * 0.6
+                self._wind_next_gust = float(self._rng.uniform(2.0, 6.0))
+            # OU decay
+            alpha_w = math.exp(-dt / max(self._wind_tau, 0.05))
+            self._wind_vx = self._wind_vx * alpha_w + float(self._rng.normal(0, 1.2)) * math.sqrt(max(0, 1 - alpha_w*alpha_w))
+            self._wind_vy = self._wind_vy * alpha_w + float(self._rng.normal(0, 1.0)) * math.sqrt(max(0, 1 - alpha_w*alpha_w))
+            self._wind_vx = float(np.clip(self._wind_vx, -18, 18))
+            self._wind_vy = float(np.clip(self._wind_vy, -12, 12))
+            self.x += self._wind_vx * dt * 0.18
+            self.y += self._wind_vy * dt * 0.18
+            self.x = float(np.clip(self.x, 0, w)); self.y = float(np.clip(self.y, 0, h))
+        except Exception:
+            pass
+
+        # 2) Gimbal lag — realistic pointing mechanics (exponential lag)
+        try:
+            tau_g = float(getattr(self, "_gimbal_tau", 0.032))
+            alpha_g = math.exp(-dt / max(tau_g, 0.008))
+            # Lagged position follows true position
+            self._gimbal_x = alpha_g * self._gimbal_x + (1 - alpha_g) * self.x
+            self._gimbal_y = alpha_g * self._gimbal_y + (1 - alpha_g) * self.y
+            # Use lagged position as effective reported position for rendering? Keep true x,y for physics
+            # but store lag delta for optics streak length (velocity already captures)
+        except Exception:
+            pass
+
+        # 3) Angle-of-Arrival jitter — high frequency 1.2-2.8 px dance
+        try:
+            alpha_aoa = math.exp(-dt / float(getattr(self, "_aoa_tau", 0.045)))
+            scale_aoa = float(getattr(self, "_aoa_amp", 1.8)) * math.sqrt(max(0, 1 - alpha_aoa*alpha_aoa))
+            self._aoa_x = self._aoa_x * alpha_aoa + float(self._rng.normal(0, 1)) * scale_aoa
+            self._aoa_y = self._aoa_y * alpha_aoa + float(self._rng.normal(0, 1)) * scale_aoa * 0.72
+            # Add to apparent position; also small 30Hz harmonic
+            aoa_harm = 0.55 * math.sin(self._t * 32 + self._aoa_phase)
+            self.x += self._aoa_x * 0.22 + aoa_harm * 0.12
+            self.y += self._aoa_y * 0.22 + aoa_harm * 0.08
+            self.x = float(np.clip(self.x, 0, w)); self.y = float(np.clip(self.y, 0, h))
+        except Exception:
+            pass
+
+        # 4) Photometric scintillation — Gamma-Gamma + harmonic + OU
+        try:
+            # Gamma-Gamma deep fade: sample occasionally (every ~80ms)
+            gg_factor = 1.0
+            if int(self._t * 60) % 5 == 0:  # ~12 Hz sampling
+                # Sample X~Gamma(alpha,1), Y~Gamma(beta,1) => I = X*Y/(alpha*beta)
+                try:
+                    # Use numpy gamma (fast) — keep mean ~1.0
+                    gx = float(self._rng.gamma(float(getattr(self, "_gg_alpha", 4.2)), 1.0))
+                    gy = float(self._rng.gamma(float(getattr(self, "_gg_beta", 2.8)), 1.0))
+                    gg_factor = (gx * gy) / (float(getattr(self, "_gg_alpha", 4.2)) * float(getattr(self, "_gg_beta", 2.8)))
+                    gg_factor = float(np.clip(gg_factor, 0.32, 1.85))
+                    # Smooth with OU so not too spiky
+                    alpha_sc = math.exp(-dt / 0.11)
+                    self._scint_state = alpha_sc * self._scint_state + (1 - alpha_sc) * (gg_factor - 1.0)
+                except Exception:
+                    gg_factor = 1.0
+            fast = 0.06 * math.sin(self._t * self._scint_freq + self._scint_phase)
+            slow = 0.04 * math.sin(self._t * 0.7 + self._aoa_phase * 0.3)
+            noise = float(self._rng.normal(0, 0.015))
+            ou_flicker = float(getattr(self, "_scint_state", 0.0)) * 0.45
+            scint = float(np.clip(1.0 + fast + slow + noise + ou_flicker, 0.32, 1.85))
+            # For very low gg_factor, allow deeper dim but not below 0.32
+            if gg_factor < 0.5:
+                scint = float(np.clip(scint * (0.72 + 0.28 * gg_factor / 0.5), 0.32, 1.85))
+        except Exception:
+            fast = 0.06 * math.sin(self._t * self._scint_freq + self._scint_phase)
+            slow = 0.04 * math.sin(self._t * 0.7)
+            noise = float(self._rng.normal(0, 0.015))
+            scint = float(np.clip(1.0 + fast + slow + noise, 0.78, 1.22))
+
+        # Beacon ID code — subtle amplitude modulation per ID (0.88-1.0) to aid ID learning
+        code_mod = 1.0
+        try:
+            self._code_phase = (self._code_phase + dt * float(getattr(self, "_code_rate", 10.0))) % float(getattr(self, "_code_len", 20))
+            idx = int(self._code_phase) % len(self._code)
+            code_bit = int(self._code[idx])
+            # Bright when bit=1 (1.0), slightly dim when 0 (0.88) — not full blink, just coding
+            code_mod = 0.88 + 0.12 * code_bit
+            # For blinking mode, code is overridden by full blink toggle below
+            if not getattr(self, "blinking", False):
+                scint = scint * (0.96 + 0.04 * code_mod)
+        except Exception:
+            pass
+
+        self.current_brightness = float(np.clip(self.brightness * scint, 45, 255))
+        # Radius breathes with scintillation and with fog scattering (softer when dim)
+        rad_factor = 0.92 + 0.18 * scint
+        # If deeply faded, beacon appears slightly larger due to scattering (harder for centroid)
+        if scint < 0.55:
+            rad_factor += (0.55 - scint) * 0.22
+        self.current_radius = float(np.clip(self.radius * rad_factor, 1.0, self.radius * 1.6))
+
+        # 5) Eclipse / dropout — 1-2% long dropout tests re-acquisition
+        try:
+            self._eclipse_timer += dt
+            if self._eclipse_time_left > 0:
+                self._eclipse_time_left -= dt
+                self.current_brightness = 0.0
+                self.current_radius = 0.0
+                if self._eclipse_time_left <= 0:
+                    self._eclipse_timer = 0.0
+                    self._eclipse_interval = float(self._rng.uniform(18.0, 45.0))
+            elif self._eclipse_timer >= float(getattr(self, "_eclipse_interval", 30.0)):
+                if float(self._rng.random()) < 0.018:  # 1.8% trigger
+                    self._eclipse_time_left = float(self._rng.uniform(0.35, 0.85))
+                    self.current_brightness = 0.0
+                else:
+                    self._eclipse_timer = 0.0
+                    self._eclipse_interval = float(self._rng.uniform(18.0, 45.0))
+        except Exception:
+            pass
+
+        # 6) Blinking (user-enabled) — overrides everything when off
         if self.blinking:
             self._blink_timer += dt
             if self._blink_timer >= 0.4:
@@ -606,6 +794,9 @@ class Target:
                 self._blink_visible = not self._blink_visible
             if not self._blink_visible:
                 self.current_brightness = 0.0
+        else:
+            # Keep _blink_visible True for renderer when not blinking
+            self._blink_visible = True
 
     def get_position(self) -> tuple[float,float]:
         return (float(self.x), float(self.y))
@@ -613,6 +804,30 @@ class Target:
         return (float(self.vx), float(self.vy))
     def get_photometry(self) -> tuple[float,float]:
         return (float(self.current_brightness), float(self.current_radius))
+
+    def get_optics_params(self) -> dict:
+        """Return optics rendering hints for renderer (motion vector, fog, bloom)."""
+        try:
+            mv = (float(self.vx * 0.033), float(self.vy * 0.033))
+        except Exception:
+            mv = (0.0, 0.0)
+        bloom = 0.0
+        try:
+            # Bloom stronger when deeply scintillated or in fog-like low brightness
+            if float(self.current_brightness) > 200:
+                bloom = 0.08 + 0.04 * (float(self.current_brightness) - 200) / 55
+            if float(self._scint_state) < -0.3:
+                bloom += 0.06
+        except Exception:
+            pass
+        return {
+            "motion_vector": mv,
+            "bloom_strength": float(np.clip(bloom, 0, 0.22)),
+            "aoa_jitter": float(getattr(self, "_aoa_amp", 1.5)),
+            "beacon_id": int(getattr(self, "beacon_id", 0)),
+            "fog_factor": 0.0,  # caller fills from haze/atmospheric
+        }
+
     def get_state_vector(self) -> np.ndarray:
         return np.array([self.x,self.y,self.vx,self.vy], dtype=np.float64)
 

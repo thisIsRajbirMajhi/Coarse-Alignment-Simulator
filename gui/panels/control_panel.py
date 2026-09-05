@@ -146,18 +146,75 @@ class ControlPanel(BaseConfigPanel):
         self.clamp_spin.setMinimumHeight(26)
         limits_grid.addWidget(self.clamp_spin, 1, 1)
 
-        # Hint for clamp vs camera
         clamp_hint = QLabel("Output clamp is capped by camera max_slew*dt if tighter — no double define.")
         clamp_hint.setWordWrap(True)
         clamp_hint.setStyleSheet("color:#64748b; font-size:10px; font-style:italic;")
         limits_grid.addWidget(clamp_hint, 1, 2, 1, 2)
 
         layout.addWidget(limits_box)
+
+        # D — Feedforward & Adaptive (AI-ready predictive control)
+        adv_box = QGroupBox("D — Feedforward & Adaptive (AI-Ready)")
+        adv_grid = QGridLayout(adv_box)
+        adv_grid.setContentsMargins(12, 18, 12, 12)
+        adv_grid.setHorizontalSpacing(8)
+        adv_grid.setVerticalSpacing(8)
+        adv_grid.setColumnStretch(1, 1)
+        adv_grid.setColumnStretch(3, 1)
+
+        adv_grid.addWidget(self._label("Feedforward"), 0, 0)
+        self.ff_spin = QDoubleSpinBox()
+        lo, hi = CONTROL_LIMITS["feedforward_gain"]
+        self.ff_spin.setRange(lo, hi); self.ff_spin.setSingleStep(0.05); self.ff_spin.setDecimals(2)
+        self.ff_spin.setToolTip("Velocity feedforward 0..1.2 — predicts target velocity (vx*dt) to cut lag 10→3px. 0=off, 0.45 recommended for 80 px/s.")
+        self.ff_spin.setMinimumHeight(26)
+        adv_grid.addWidget(self.ff_spin, 0, 1)
+
+        adv_grid.addWidget(self._label("Adaptive"), 0, 2)
+        self.adaptive_spin = QDoubleSpinBox()
+        lo, hi = CONTROL_LIMITS["adaptive_gain"]
+        self.adaptive_spin.setRange(lo, hi); self.adaptive_spin.setSingleStep(0.05); self.adaptive_spin.setDecimals(2)
+        self.adaptive_spin.setToolTip("Adaptive kp boost 0..0.5 — kp_eff = kp*(1+adaptive*|err|/20). Aggressive far, gentle near.")
+        self.adaptive_spin.setMinimumHeight(26)
+        adv_grid.addWidget(self.adaptive_spin, 0, 3)
+
+        adv_grid.addWidget(self._label("D Filter"), 1, 0)
+        self.dfilter_spin = QDoubleSpinBox()
+        lo, hi = CONTROL_LIMITS["derivative_filter"]
+        self.dfilter_spin.setRange(lo, hi); self.dfilter_spin.setSingleStep(0.05); self.dfilter_spin.setDecimals(2)
+        self.dfilter_spin.setToolTip("Derivative filter 0..0.99 — alpha for filtered derivative. 0.80 = 0.2*raw+0.8*prev.")
+        self.dfilter_spin.setMinimumHeight(26)
+        adv_grid.addWidget(self.dfilter_spin, 1, 1)
+
+        adv_grid.addWidget(self._label("Smith (ms)"), 1, 2)
+        self.smith_spin = QDoubleSpinBox()
+        lo, hi = CONTROL_LIMITS["smith_latency_ms"]
+        self.smith_spin.setRange(lo, hi); self.smith_spin.setSingleStep(1.0); self.smith_spin.setDecimals(0)
+        self.smith_spin.setSuffix(" ms")
+        self.smith_spin.setToolTip("Smith predictor for camera latency 0..50ms — predicts error ahead by velocity*latency. Set to camera latency (12ms) if feedforward on.")
+        self.smith_spin.setMinimumHeight(26)
+        adv_grid.addWidget(self.smith_spin, 1, 3)
+
+        adv_grid.addWidget(self._label("Setpoint W"), 2, 0)
+        self.setpoint_spin = QDoubleSpinBox()
+        lo, hi = CONTROL_LIMITS["setpoint_weight"]
+        self.setpoint_spin.setRange(lo, hi); self.setpoint_spin.setSingleStep(0.05); self.setpoint_spin.setDecimals(2)
+        self.setpoint_spin.setToolTip("Setpoint weighting b 0..1 — scales proportional kick on acquisition. 1.0 = full proportional on error, 0.7 reduces overshoot on lock re-acquire. Derivative always weighted.")
+        self.setpoint_spin.setMinimumHeight(26)
+        adv_grid.addWidget(self.setpoint_spin, 2, 1)
+
+        ff_hint = QLabel("Feedforward needs tracker velocity; Smith needs latency. Use 0.45/12ms for 80 px/s curved. Setpoint 0.7-1.0.")
+        ff_hint.setWordWrap(True)
+        ff_hint.setStyleSheet("color:#64748b; font-size:10px; font-style:italic;")
+        adv_grid.addWidget(ff_hint, 3, 0, 1, 4)
+
+        layout.addWidget(adv_box)
         layout.addStretch()
 
         # Wire — all emit configChanged, with Ki/Kd enable per type
         self.type_combo.currentTextChanged.connect(self._on_type_changed)
-        for w in [self.kp_spin, self.ki_spin, self.kd_spin, self.rate_spin, self.dead_spin, self.clamp_spin, self.gain_spin]:
+        for w in [self.kp_spin, self.ki_spin, self.kd_spin, self.rate_spin, self.dead_spin, self.clamp_spin, self.gain_spin,
+                  self.ff_spin, self.adaptive_spin, self.dfilter_spin, self.smith_spin, self.setpoint_spin]:
             w.valueChanged.connect(self._emit_config)
         # Gain alias syncs to Kp
         self.gain_spin.valueChanged.connect(self._on_gain_alias)
@@ -199,11 +256,17 @@ class ControlPanel(BaseConfigPanel):
             update_rate_hz=float(self.rate_spin.value()),
             dead_zone=float(self.dead_spin.value()),
             output_clamp=float(self.clamp_spin.value()),
+            feedforward_gain=float(self.ff_spin.value()),
+            adaptive_gain=float(self.adaptive_spin.value()),
+            derivative_filter=float(self.dfilter_spin.value()),
+            smith_latency_ms=float(self.smith_spin.value()),
+            setpoint_weight=float(self.setpoint_spin.value()),
         ).validate()
 
     def set_config(self, cfg: ControllerConfig, emit: bool = False) -> None:
         cfg = cfg.validate()
-        widgets = [self.type_combo, self.kp_spin, self.ki_spin, self.kd_spin, self.rate_spin, self.dead_spin, self.clamp_spin, self.gain_spin]
+        widgets = [self.type_combo, self.kp_spin, self.ki_spin, self.kd_spin, self.rate_spin, self.dead_spin, self.clamp_spin, self.gain_spin,
+                   self.ff_spin, self.adaptive_spin, self.dfilter_spin, self.smith_spin, self.setpoint_spin]
         with self._blocked(widgets):
             idx = self.type_combo.findText(cfg.controller_type)
             if idx >= 0:
@@ -214,6 +277,11 @@ class ControlPanel(BaseConfigPanel):
             self.rate_spin.setValue(float(cfg.update_rate_hz))
             self.dead_spin.setValue(float(cfg.dead_zone))
             self.clamp_spin.setValue(float(cfg.output_clamp))
+            self.ff_spin.setValue(float(getattr(cfg, "feedforward_gain", 0.0)))
+            self.adaptive_spin.setValue(float(getattr(cfg, "adaptive_gain", 0.0)))
+            self.dfilter_spin.setValue(float(getattr(cfg, "derivative_filter", 0.80)))
+            self.smith_spin.setValue(float(getattr(cfg, "smith_latency_ms", 0.0)))
+            self.setpoint_spin.setValue(float(getattr(cfg, "setpoint_weight", 1.0)))
             self.gain_spin.setValue(float(np.clip(cfg.kp, 0.02, 0.50)))
             self._on_type_changed(cfg.controller_type)
         if emit:

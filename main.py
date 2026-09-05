@@ -9,6 +9,12 @@ from gui.app import MainWindow  # to be implemented in gui/app.py
 
 def main():
     app = QApplication(sys.argv)
+    # Install global button click animations (control deck + main window)
+    try:
+        from gui.core.button_animator import install_global_button_animation
+        install_global_button_animation(app)
+    except Exception:
+        pass
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())

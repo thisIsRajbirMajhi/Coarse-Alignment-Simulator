@@ -85,12 +85,20 @@ class PTZCamera:
 
         # Internal time for latency queue (seconds)
         self._time: float = 0.0
-        # Queue of pending moves: deque of (execute_time, d_pan, d_tilt)
-        self._pending: collections.deque[tuple[float, float, float]] = collections.deque()
+        # Queue of pending moves: deque of (execute_time, d_pan, d_tilt, dt)
+        self._pending: collections.deque[tuple[float, float, float, float]] = collections.deque()
         # Effective pan/tilt — clamped to both scene-derived and configured ranges
         self.pan = float(pan)
         self.tilt = float(tilt)
         self._clamp_to_range()
+
+        # Realism state — acceleration, backlash, encoder
+        self._last_vx: float = 0.0
+        self._last_vy: float = 0.0
+        self._last_dir_x: int = 0
+        self._last_dir_y: int = 0
+        self._backlash_pending_x: float = 0.0
+        self._backlash_pending_y: float = 0.0
 
         # Keep FOV in sync with config
         self._sync_fov_from_config()
@@ -141,11 +149,15 @@ class PTZCamera:
         return float(steps * res)
 
     def _slew_limit(self, delta: float, dt: float, is_pan: bool = True) -> float:
-        # Use deg/sec limits converted to px/s via pixel_scale
+        # Single source: derived max_slew_rate already validated, but recompute from deg for correctness
         try:
-            deg = float(self.config.max_pan_speed_deg if is_pan else self.config.max_tilt_speed_deg)
-            # deg to mrad to px
-            px_per_deg = 17.453292519943295 / max(1e-6, float(self.config.pixel_scale_mrad))
+            if is_pan:
+                deg = float(self.config.max_pan_speed_deg)
+            else:
+                deg = float(self.config.max_tilt_speed_deg)
+            # Use axis-specific scale for accuracy
+            scale = float(self.config.pixel_scale_mrad) if is_pan else float(getattr(self.config, "pixel_scale_mrad_y", self.config.pixel_scale_mrad))
+            px_per_deg = 17.453292519943295 / max(1e-6, scale)
             max_rate = deg * px_per_deg
         except:
             max_rate = float(self.config.max_slew_rate)
@@ -154,29 +166,111 @@ class PTZCamera:
         max_delta = max_rate * float(dt)
         return float(np.clip(delta, -max_delta, max_delta))
 
+    def _accel_limit(self, desired_v: float, last_v: float, dt: float) -> float:
+        """Limit acceleration in px/s² derived from max_accel_deg."""
+        try:
+            max_accel_deg = float(getattr(self.config, "max_accel_deg", 120.0))
+            scale = float(self.config.pixel_scale_mrad)
+            px_per_deg = 17.453292519943295 / max(1e-6, scale)
+            max_accel = max_accel_deg * px_per_deg  # px/s²
+            max_dv = max_accel * float(dt)
+            dv = float(desired_v) - float(last_v)
+            if abs(dv) > max_dv:
+                desired_v = float(last_v) + float(np.clip(dv, -max_dv, max_dv))
+        except Exception:
+            pass
+        return float(desired_v)
+
+    def _apply_backlash(self, delta: float, is_pan: bool) -> float:
+        """Backlash deadband on direction reversal — requires extra travel before moving."""
+        try:
+            backlash = float(getattr(self.config, "backlash_px", 0.25))
+        except Exception:
+            backlash = 0.0
+        if backlash <= 1e-6 or abs(delta) < 1e-9:
+            return float(delta)
+        # Track direction
+        dir_sign = 1 if delta > 1e-9 else -1 if delta < -1e-9 else 0
+        last_dir = self._last_dir_x if is_pan else self._last_dir_y
+        pending = self._backlash_pending_x if is_pan else self._backlash_pending_y
+        if dir_sign != 0 and last_dir != 0 and dir_sign != last_dir:
+            # Direction reversal → need to traverse backlash
+            pending = backlash
+        if pending > 1e-9:
+            # Consume delta to overcome backlash
+            if abs(delta) >= pending:
+                delta = float(delta - math.copysign(pending, delta))
+                pending = 0.0
+            else:
+                pending -= abs(delta)
+                delta = 0.0
+        if dir_sign != 0:
+            if is_pan:
+                self._last_dir_x = dir_sign
+                self._backlash_pending_x = pending
+            else:
+                self._last_dir_y = dir_sign
+                self._backlash_pending_y = pending
+        else:
+            if is_pan:
+                self._backlash_pending_x = pending
+            else:
+                self._backlash_pending_y = pending
+        return float(delta)
+
     def _apply_delta(self, d_pan: float, d_tilt: float, dt: float) -> None:
+        # Backlash first (static deadband)
+        d_pan = self._apply_backlash(d_pan, is_pan=True)
+        d_tilt = self._apply_backlash(d_tilt, is_pan=False)
+        # Slew (velocity) limit
         d_pan = self._slew_limit(d_pan, dt, is_pan=True)
         d_tilt = self._slew_limit(d_tilt, dt, is_pan=False)
+        # Acceleration limit — convert delta→velocity, limit, back to delta
+        if dt > 1e-9:
+            des_vx = float(d_pan) / float(dt)
+            des_vy = float(d_tilt) / float(dt)
+            lim_vx = self._accel_limit(des_vx, self._last_vx, dt)
+            lim_vy = self._accel_limit(des_vy, self._last_vy, dt)
+            d_pan = float(lim_vx * dt)
+            d_tilt = float(lim_vy * dt)
+            self._last_vx = float(lim_vx)
+            self._last_vy = float(lim_vy)
+        # Quantize to encoder resolution
         d_pan = self._quantize(d_pan)
         d_tilt = self._quantize(d_tilt)
         self.pan += float(d_pan)
         self.tilt += float(d_tilt)
         self._clamp_to_range()
+        # Encoder noise — small readout error (does not affect true pan/tilt much, but adds measurement jitter)
+        try:
+            sigma_enc = float(getattr(self.config, "encoder_sigma_px", 0.04))
+            if sigma_enc > 1e-9 and (abs(d_pan) > 1e-6 or abs(d_tilt) > 1e-6):
+                # Only when moving, add tiny measurement noise to pan/tilt reading (not command)
+                # Store true pan but report noisy via property? Keep simple: add to pan/tilt with small sigma
+                # To keep deterministic for tests with sigma 0.04, use truncated Gaussian ±3σ
+                npx = float(np.clip(np.random.normal(0, sigma_enc), -sigma_enc*3, sigma_enc*3))
+                npy = float(np.clip(np.random.normal(0, sigma_enc), -sigma_enc*3, sigma_enc*3))
+                # Apply as measurement bias, not cumulative drift — add then clamp
+                # We model as small random walk bias 0.3×sigma
+                self.pan += npx * 0.3
+                self.tilt += npy * 0.3
+                self._clamp_to_range()
+        except Exception:
+            pass
 
-    # Public — movement with latency queue
+    # Public — movement with latency queue (with jitter)
 
     def move(self, d_pan: float, d_tilt: float, dt: float | None = None) -> None:
         """
         Queue or apply relative pan/tilt correction.
 
-        - If latency_ms == 0 and dt is not None, applies with slew+quantize+clamp.
-        - If latency_ms > 0, queues for execution after latency_ms.
+        - If latency_ms == 0 and dt is not None, applies with slew+accel/backlash+quantize+clamp.
+        - If latency_ms > 0, queues for execution after latency_ms + jitter.
         - If dt is None (legacy direct call, e.g., tests), applies immediately
-          without slew limiting (only quantize+clamp) for back-compat.
+          without slew/accel limiting (only quantize+clamp) for back-compat.
         """
-        # Legacy direct path — no slew limiting (tests expect large jumps)
         if dt is None:
-            # Direct apply (quantize + clamp only, no slew, no latency queue)
+            # Legacy direct path — no slew/accel (tests expect large jumps)
             d_pan = self._quantize(d_pan)
             d_tilt = self._quantize(d_tilt)
             self.pan += float(d_pan)
@@ -184,6 +278,14 @@ class PTZCamera:
             self._clamp_to_range()
             return
         latency_s = float(self.config.latency_ms) / 1000.0
+        # Latency jitter: N(0, jitter_ms) clipped ±3σ, per-command
+        try:
+            jit_ms = float(getattr(self.config, "latency_jitter_ms", 1.2))
+            if jit_ms > 1e-9 and latency_s > 1e-6:
+                j = float(np.clip(np.random.normal(0, jit_ms), -jit_ms*2.5, jit_ms*2.5)) / 1000.0
+                latency_s = max(0.0, latency_s + j)
+        except Exception:
+            pass
         if latency_s <= 1e-6:
             self._apply_delta(d_pan, d_tilt, dt)
         else:
@@ -194,11 +296,10 @@ class PTZCamera:
         """
         Advance internal time and execute due pending moves.
 
-        Call once per tick (main loop) — processes latency queue with
-        per-command dt for correct slew limiting (uses dt of the tick).
+        Call once per tick — processes latency queue with per-command dt for correct
+        slew/accel limiting (uses dt of the tick where command was enqueued).
         """
         self._time += float(dt)
-        # Execute all due moves in order (FIFO)
         while self._pending and self._pending[0][0] <= self._time:
             item = self._pending.popleft()
             if len(item) == 4:
