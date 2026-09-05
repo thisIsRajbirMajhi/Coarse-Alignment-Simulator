@@ -78,8 +78,12 @@ class MainWindow(
         self._last_estimate: tuple[float,float] | None = None
         self._last_all_detections: list[dict] = []
         self._last_lock_state: str = "searching"
-        # Beacon/Target — simplified: only count and target index, fixed defaults
-        self.beacon_config = MultiBeaconConfig(beacon_count=1, target_index=0).validate()
+        # Beacon/Target — per PDF Sr11 Random default location within world
+        import random as _rnd_mw
+        _ws, _hs = SCENE_SIZE
+        _rx = _rnd_mw.randint(200, max(201, _ws - 200))
+        _ry = _rnd_mw.randint(200, max(201, _hs - 200))
+        self.beacon_config = MultiBeaconConfig(beacon_count=1, target_index=0, x=_rx, y=_ry).validate()
         self._beacon_count = int(self.beacon_config.beacon_count)
         self._hitbox_radius = 14
         self._center_radius = 2

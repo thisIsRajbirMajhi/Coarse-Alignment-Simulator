@@ -3,7 +3,7 @@
 from environment.constants import MAX_RES
 
 CAMERA_LIMITS: dict[str, tuple[float, float]] = {
-    # Sensor Resolution — 640x640 default, user defined
+    # Sensor Resolution — 640x480 suggested, user-defined (generic engine 100..5000 for headless)
     "fov_width": (100, MAX_RES),
     "fov_height": (100, MAX_RES),
     # FOV in degrees — 4 x 3 default, user defined

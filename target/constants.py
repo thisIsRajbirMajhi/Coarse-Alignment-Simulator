@@ -11,7 +11,7 @@ BEACON_LIMITS: dict[str, tuple[float, float]] = {
     "y": (0, 5000),
     "heading": (0, 360),
     "size_w": (5, 20),
-    "size_h": (2, 20),
+    "size_h": (5, 20),
 }
 
 BEACON_DEFAULTS: dict = {

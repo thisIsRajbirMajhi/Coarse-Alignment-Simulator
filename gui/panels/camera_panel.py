@@ -55,18 +55,16 @@ class CameraPanel(BaseConfigPanel):
         type_lbl.setStyleSheet("color:#374151; font-size:10px; font-weight:600; background:#f9fafb; border:1px solid #e5e7eb; border-radius:4px; padding:4px 8px;")
         layout.addWidget(type_lbl)
 
-        # ---- A: Sensor & FOV ----
+        # ---- A: Sensor & FOV ---- per PDF Sr3 640x480 default, user-defined min 320x240 (engine allows 100 for headless tests)
         fov_box, fov_grid = self._make_group("A — Sensor Resolution & FOV")
-        # FOV width slider (int 100-2000)
-        lo, hi = CAMERA_LIMITS["fov_width"]
-        self.fov_w_slider, self.fov_w_label = self._make_int_slider(int(lo), int(hi), 640, tooltip="Sensor resolution width")
+        # FOV width slider — UI limited to 320 per spec suggested, engine allows 100 for tests via direct config
+        self.fov_w_slider, self.fov_w_label = self._make_int_slider(320, 5000, 640, tooltip="Sensor resolution width — default 640 per spec Sr3, min 320 user-defined")
         self.fov_w_spin = self.fov_w_slider  # alias for compat (QSlider has value()/setValue())
         fov_grid.addWidget(self._label("Res W"), 0, 0)
         fov_grid.addWidget(self.fov_w_slider, 0, 1)
         fov_grid.addWidget(self.fov_w_label, 0, 2)
         fov_grid.addWidget(self._label("H"), 0, 3)
-        lo2, hi2 = CAMERA_LIMITS["fov_height"]
-        self.fov_h_slider, self.fov_h_label = self._make_int_slider(int(lo2), int(hi2), 480, tooltip="Sensor resolution height")
+        self.fov_h_slider, self.fov_h_label = self._make_int_slider(240, 5000, 480, tooltip="Sensor resolution height — default 480 per spec Sr3")
         self.fov_h_spin = self.fov_h_slider
         fov_grid.addWidget(self.fov_h_slider, 0, 4)
         fov_grid.addWidget(self.fov_h_label, 0, 5)

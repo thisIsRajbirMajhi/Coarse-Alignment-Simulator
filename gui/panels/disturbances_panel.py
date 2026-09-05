@@ -131,9 +131,9 @@ class DisturbancesPanel(BaseConfigPanel):
         self.label_gaussian_sigma = self._label("Gaussian σ")
         img_grid.addWidget(self.label_gaussian_sigma, 2, 0)
         self.slider_gaussian_sigma = QSlider(Qt.Horizontal)
-        self.slider_gaussian_sigma.setRange(0, 500)  # 0.0 to 50.0 step 0.1
+        self.slider_gaussian_sigma.setRange(0, 200)  # 0.0 to 20.0 per spec Sr21.2 step 0.1
         self.slider_gaussian_sigma.setValue(80)
-        self.slider_gaussian_sigma.setToolTip("Gaussian σ 0..50 px")
+        self.slider_gaussian_sigma.setToolTip("Gaussian σ 0..20 px per spec")
         self.label_gaussian_sigma_val = QLabel("8.0 px")
         self.label_gaussian_sigma_val.setMinimumHeight(26)
         self.label_gaussian_sigma_val.setStyleSheet("color:#374151; font-size:11px;")
@@ -143,9 +143,9 @@ class DisturbancesPanel(BaseConfigPanel):
         self.label_gaussian_max = self._label("Max σ (User)")
         img_grid.addWidget(self.label_gaussian_max, 2, 3)
         self.slider_gaussian_max = QSlider(Qt.Horizontal)
-        self.slider_gaussian_max.setRange(10, 500)  # 1.0 to 50.0 step 0.1
+        self.slider_gaussian_max.setRange(10, 200)  # 1.0 to 20.0 per spec Sr21.2 step 0.1
         self.slider_gaussian_max.setValue(200)
-        self.slider_gaussian_max.setToolTip("Gaussian max σ 1..50 px")
+        self.slider_gaussian_max.setToolTip("Gaussian max σ 1..20 px per spec")
         self.label_gaussian_max_val = QLabel("20.0 px")
         self.label_gaussian_max_val.setMinimumHeight(26)
         self.label_gaussian_max_val.setStyleSheet("color:#374151; font-size:11px;")
@@ -192,9 +192,9 @@ class DisturbancesPanel(BaseConfigPanel):
         jitter_grid.setColumnStretch(1, 1)
         jitter_grid.addWidget(self._label("Jitter"), 0, 0)
         self.slider_jitter = QSlider(Qt.Horizontal)
-        self.slider_jitter.setRange(0, 500)  # 0.0 to 50.0 step 0.1
+        self.slider_jitter.setRange(0, 200)  # 0.0 to 20.0 per spec Sr21.3 step 0.1
         self.slider_jitter.setValue(0)
-        self.slider_jitter.setToolTip("Jitter ±0..50 px/frame")
+        self.slider_jitter.setToolTip("Jitter ±0..20 px/frame per spec")
         self.label_jitter_val = QLabel("0.0 px")
         self.label_jitter_val.setMinimumHeight(26)
         self.label_jitter_val.setStyleSheet("color:#374151; font-size:11px;")
@@ -256,9 +256,9 @@ class DisturbancesPanel(BaseConfigPanel):
         plat_grid.addWidget(self.combo_platform, 0, 1)
         plat_grid.addWidget(self._label("Speed"), 0, 2)
         self.slider_platform_speed = QSlider(Qt.Horizontal)
-        self.slider_platform_speed.setRange(0, 500)  # 0.0 to 50.0 step 0.1
+        self.slider_platform_speed.setRange(0, 200)  # 0.0 to 20.0 per spec Sr21.5 step 0.1
         self.slider_platform_speed.setValue(0)
-        self.slider_platform_speed.setToolTip("Platform speed 0..50 px/f")
+        self.slider_platform_speed.setToolTip("Platform speed 0..20 px/f per spec")
         self.label_platform_speed_val = QLabel("0.0 px/f")
         self.label_platform_speed_val.setMinimumHeight(26)
         self.label_platform_speed_val.setStyleSheet("color:#374151; font-size:11px;")

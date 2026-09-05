@@ -35,7 +35,13 @@ class MultiBeaconPanel(BaseConfigPanel):
     def __init__(self, initial: MultiBeaconConfig | None = None, world_bounds: tuple[int, int] = (5000, 5000), parent=None):
         super().__init__(parent)
         self._world_bounds = world_bounds
-        self._config = (initial or MultiBeaconConfig(beacon_count=1, target_index=0)).validate()
+        if initial is None:
+            import random as _rnd
+            w, h = world_bounds
+            rx = _rnd.randint(200, max(201, w - 200))
+            ry = _rnd.randint(200, max(201, h - 200))
+            initial = MultiBeaconConfig(beacon_count=1, target_index=0, x=rx, y=ry)
+        self._config = initial.validate()
         self._build_ui()
         self.set_config(self._config, emit=False)
 
@@ -80,20 +86,24 @@ class MultiBeaconPanel(BaseConfigPanel):
         grid.addWidget(self._label("Size W"), 2, 0)
         grid.addWidget(self.slider_size_w, 2, 1)
         grid.addWidget(self.label_size_w_val, 2, 2)
-        self.slider_size_h, self.label_size_h_val = self._make_int_slider(2, 20, 10, tooltip="Target height 2-20 px")
-        self.spin_size_h = QSpinBox(); self.spin_size_h.setRange(2, 20); self.spin_size_h.setValue(10); self.spin_size_h.hide()
+        self.slider_size_h, self.label_size_h_val = self._make_int_slider(5, 20, 10, tooltip="Target height 5-20 px per spec Sr10")
+        self.spin_size_h = QSpinBox(); self.spin_size_h.setRange(5, 20); self.spin_size_h.setValue(10); self.spin_size_h.hide()
         grid.addWidget(self._label("H"), 2, 3)
         grid.addWidget(self.slider_size_h, 2, 4)
         grid.addWidget(self.label_size_h_val, 2, 5)
 
-        # X/Y sliders 0-5000
-        self.slider_x, self.label_x_val = self._make_int_slider(0, 5000, 2500, tooltip="Initial X")
-        self.spin_x = QSpinBox(); self.spin_x.setRange(0, 5000); self.spin_x.setValue(2500); self.spin_x.hide()
+        # X/Y sliders 0-5000 — default Random per PDF Sr11 within world bounds
+        import random as _rnd_init
+        _w, _h = self._world_bounds
+        _rx = _rnd_init.randint(200, max(201, _w - 200))
+        _ry = _rnd_init.randint(200, max(201, _h - 200))
+        self.slider_x, self.label_x_val = self._make_int_slider(0, 5000, _rx, tooltip="Initial X — default Random per spec")
+        self.spin_x = QSpinBox(); self.spin_x.setRange(0, 5000); self.spin_x.setValue(_rx); self.spin_x.hide()
         grid.addWidget(self._label("Init X"), 3, 0)
         grid.addWidget(self.slider_x, 3, 1)
         grid.addWidget(self.label_x_val, 3, 2)
-        self.slider_y, self.label_y_val = self._make_int_slider(0, 5000, 2500, tooltip="Initial Y")
-        self.spin_y = QSpinBox(); self.spin_y.setRange(0, 5000); self.spin_y.setValue(2500); self.spin_y.hide()
+        self.slider_y, self.label_y_val = self._make_int_slider(0, 5000, _ry, tooltip="Initial Y — default Random per spec")
+        self.spin_y = QSpinBox(); self.spin_y.setRange(0, 5000); self.spin_y.setValue(_ry); self.spin_y.hide()
         grid.addWidget(self._label("Y"), 3, 3)
         grid.addWidget(self.slider_y, 3, 4)
         grid.addWidget(self.label_y_val, 3, 5)
@@ -234,7 +244,11 @@ class MultiBeaconPanel(BaseConfigPanel):
         self._sync_int(self.slider_y.value(), self.spin_y)
 
     def _on_reset(self):
-        self.set_config(MultiBeaconConfig(beacon_count=1, target_index=0, shape="square", size_w=10, size_h=10, x=2500, y=2500, profile="curved", speed=60, blinking=False, speed_random=False).validate(), emit=True)
+        import random as _rnd
+        w, h = self._world_bounds
+        rx = _rnd.randint(200, max(201, w - 200))
+        ry = _rnd.randint(200, max(201, h - 200))
+        self.set_config(MultiBeaconConfig(beacon_count=1, target_index=0, shape="square", size_w=10, size_h=10, x=rx, y=ry, profile="curved", speed=60, blinking=False, speed_random=False).validate(), emit=True)
 
     def _update_status(self) -> None:
         try:

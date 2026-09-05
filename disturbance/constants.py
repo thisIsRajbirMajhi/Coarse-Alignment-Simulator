@@ -48,11 +48,11 @@ SALT_PEPPER_DEFAULT_DENSITY: float = 0.10
 SALT_PEPPER_LIMITS: tuple[float, float] = (0.0, 0.20)
 SALT_PEPPER_RATIO_DEFAULT: float = 0.50
 SALT_PEPPER_RATIO_LIMITS: tuple[float, float] = (0.0, 1.0)
-# Gaussian noise — Max StdDev 20px default, user-definable up to 50
+# Gaussian noise — Max StdDev 20px per spec Sr21.2, user-defined up to 20
 GAUSSIAN_SIGMA_DEFAULT: float = 8.0
 GAUSSIAN_SIGMA_LIMITS: tuple[float, float] = (0.0, 20.0)
-GAUSSIAN_SIGMA_MAX_USER: float = 50.0  # user-defined extended cap
-GAUSSIAN_SIGMA_USER_LIMITS: tuple[float, float] = (0.0, 50.0)
+GAUSSIAN_SIGMA_MAX_USER: float = 20.0  # per spec max 20
+GAUSSIAN_SIGMA_USER_LIMITS: tuple[float, float] = (0.0, 20.0)
 # Poisson scale (lambda multiplier) 0..10 controls shot strength
 POISSON_LIMITS: tuple[float, float] = (0.0, 10.0)
 POISSON_DEFAULT: float = 0.0
@@ -62,8 +62,8 @@ POISSON_PEAK_LIMITS: tuple[float, float] = (30.0, 255.0)
 POISSON_PEAK_DEFAULT: float = 100.0
 
 # Legacy sensor noise std alias for GUI
-MAX_NOISE_STD: float = 20.0  # px/DN
-MAX_NOISE_STD_USER_LIMITS: tuple[float, float] = (0.0, 50.0)
+MAX_NOISE_STD: float = 20.0  # px/DN per spec Sr21.2
+MAX_NOISE_STD_USER_LIMITS: tuple[float, float] = (0.0, 20.0)
 
 # ── Camera Jitter — per-frame uniform ±20 px ────────────────────────────
 CAMERA_JITTER_LIMITS: tuple[float, float] = (0.0, 20.0)

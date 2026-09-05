@@ -47,10 +47,17 @@ class LifecycleMixin:
             if hasattr(self, "camera_panel"):
                 self.camera_panel.set_config(_CC().validate(self._scene_size), emit=False)
                 self.camera_config = _CC().validate(self._scene_size)
-            # Beacons to defaults (1, square 10x10, Circular, 60, threshold 200, no blink, no random, centre 2500)
+            # Beacons to defaults per PDF Sr11 Random location default (10x10 square, Circular, 60) within world
             if hasattr(self, "beacon_manager"):
-                self.beacon_manager.set_config(_MBC(beacon_count=1, target_index=0, shape="square", size_w=10, size_h=10, x=2500, y=2500, profile="curved", speed=60, blinking=False, speed_random=False).validate(), emit=False)
-                self.beacon_config = _MBC(beacon_count=1, target_index=0, shape="square", size_w=10, size_h=10, x=2500, y=2500, profile="curved", speed=60, blinking=False, speed_random=False).validate()
+                import random as _rnd
+                try:
+                    _ws, _hs = self._scene_size
+                except Exception:
+                    _ws, _hs = (2000, 2000)
+                rx = _rnd.randint(200, max(201, _ws - 200))
+                ry = _rnd.randint(200, max(201, _hs - 200))
+                self.beacon_manager.set_config(_MBC(beacon_count=1, target_index=0, shape="square", size_w=10, size_h=10, x=rx, y=ry, profile="curved", speed=60, blinking=False, speed_random=False).validate(), emit=False)
+                self.beacon_config = _MBC(beacon_count=1, target_index=0, shape="square", size_w=10, size_h=10, x=rx, y=ry, profile="curved", speed=60, blinking=False, speed_random=False).validate()
                 self._beacon_count = 1; self._target_beacon_id = 0
                 try:
                     self.beacon_manager.spin_thresh.setValue(200)

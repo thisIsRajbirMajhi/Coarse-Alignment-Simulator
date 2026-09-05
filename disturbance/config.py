@@ -28,31 +28,30 @@ from disturbance.constants import (
 )
 
 
-# Unified limits for validated config
-# For user-defined max beyond spec default 20, we allow up to 50 for sigma/jitter/platform
+# Unified limits per PDF spec Sr21.2-21.5 — max 20
 DISTURBANCE_LIMITS: dict[str, tuple[float, float]] = {
     # legacy 0..10
     "turbulence": (SLIDER_MIN, SLIDER_MAX),
     "vibration": (SLIDER_MIN, SLIDER_MAX),
     "camera_motion": (SLIDER_MIN, SLIDER_MAX),
     "noise": (SLIDER_MIN, SLIDER_MAX),
-    # image noise — sigma user-extensible 0..50 (spec max 20 + user)
+    # image noise — sigma max 20 per spec Sr21.2
     "salt_pepper_density": SALT_PEPPER_LIMITS,
     "salt_pepper_ratio": SALT_PEPPER_RATIO_LIMITS,
-    "gaussian_sigma": GAUSSIAN_SIGMA_USER_LIMITS,  # allow up to 50, clipped later to gaussian_sigma_max
+    "gaussian_sigma": GAUSSIAN_SIGMA_USER_LIMITS,  # 0..20 per spec
     "gaussian_sigma_max": GAUSSIAN_SIGMA_USER_LIMITS,
     "poisson_scale": POISSON_SCALE_LIMITS,
     "poisson_peak": POISSON_PEAK_LIMITS,
-    "max_noise_std": (0.0, 50.0),
-    # camera jitter px/frame 0..50 (spec 20 + user)
-    "camera_jitter": (0.0, 50.0),
-    "camera_jitter_max_user": (0.0, 50.0),
+    "max_noise_std": (0.0, 20.0),
+    # camera jitter px/frame 0..20 per spec Sr21.3
+    "camera_jitter": (0.0, 20.0),
+    "camera_jitter_max_user": (0.0, 20.0),
     # atmospheric
     "atmospheric_contrast": ATMOSPHERIC_CONTRAST_LIMITS,
     "atmospheric_brightness": ATMOSPHERIC_BRIGHTNESS_LIMITS,
-    # platform motion 0..50 (spec 20 + user)
-    "platform_speed": (0.0, 50.0),
-    "platform_speed_max_user": (0.0, 50.0),
+    # platform motion 0..20 per spec Sr21.5
+    "platform_speed": (0.0, 20.0),
+    "platform_speed_max_user": (0.0, 20.0),
 }
 
 DISTURBANCE_DEFAULTS: dict = {
@@ -152,7 +151,7 @@ class DisturbanceConfig(BaseValidatedConfig):
         self.gaussian_sigma = float(clip_field(self.gaussian_sigma, 0.0, float(self.gaussian_sigma_max)))
         self.poisson_scale = float(clip_field(self.poisson_scale, *POISSON_SCALE_LIMITS))
         self.poisson_peak = float(clip_field(self.poisson_peak, *POISSON_PEAK_LIMITS))
-        self.max_noise_std = float(clip_field(self.max_noise_std, 0.0, 50.0))
+        self.max_noise_std = float(clip_field(self.max_noise_std, 0.0, 20.0))
         # Alias sync — gaussian_sigma_max is authoritative; max_noise_std mirrors it
         # If caller explicitly set max_noise_std != default and different from current max, honour max_noise_std as new max
         # Heuristic: if max_noise_std was explicitly set to non-default and gaussian_sigma_max is default (20), use max_noise_std
@@ -166,8 +165,7 @@ class DisturbanceConfig(BaseValidatedConfig):
         else:
             self.max_noise_std = float(self.gaussian_sigma_max)
 
-        self.camera_jitter = float(clip_field(self.camera_jitter, 0.0, 50.0))
-        # spec default max 20 but user extensible to 50 — already allowed 0..50
+        self.camera_jitter = float(clip_field(self.camera_jitter, 0.0, 20.0))
 
         # Atmospheric preset normalize
         preset = str(self.atmospheric_preset).strip()
@@ -231,7 +229,7 @@ class DisturbanceConfig(BaseValidatedConfig):
                         found_prof = k
                         break
         self.platform_profile = found_prof if found_prof is not None else PLATFORM_DEFAULT_PROFILE
-        self.platform_speed = float(clip_field(self.platform_speed, 0.0, 50.0))
+        self.platform_speed = float(clip_field(self.platform_speed, 0.0, 20.0))
         return self
 
     def to_dict(self) -> dict:
