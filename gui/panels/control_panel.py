@@ -1,13 +1,12 @@
-# gui/panels/control_panel.py - Controller controls — type, gains, update rate, dead zone, output clamp
+# gui/panels/control_panel.py - Controller controls — intuitive slider UI, light theme, reset per panel
 
 import numpy as np
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QGridLayout,
     QGroupBox,
-    QHBoxLayout,
     QLabel,
     QVBoxLayout,
 )
@@ -16,15 +15,13 @@ from control.config import ControllerConfig
 from control.constants import CONTROL_LIMITS, CONTROLLER_TYPES
 from gui.panels.base import BaseConfigPanel
 
+
 class ControlPanel(BaseConfigPanel):
     """
-    Control tab — PID tuning for pan-tilt.
-
-    Exposed for MainWindow:
-      type_combo, kp_spin, ki_spin, kd_spin, rate_spin, dead_spin, clamp_spin
-      + gain_slider/spin aliases for backward compat (kp)
-    Signal:
-      configChanged(ControllerConfig) — on any param change (HOT)
+    Control tab — slider-based intuitive UI.
+    Every numeric field is a slider + live value (highlighted on drag).
+    Reset button restores defaults.
+    Keeps spinbox aliases hidden for backward compat.
     """
 
     configChanged = pyqtSignal(object)
@@ -35,255 +32,243 @@ class ControlPanel(BaseConfigPanel):
         self._build_ui()
         self.set_config(self._initial, emit=False)
 
-    # Build UI — 3 groups
-
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(10)
 
-        type_box = QGroupBox("A — Controller Type")
-        type_layout = QGridLayout(type_box)
-        type_layout.setContentsMargins(12, 18, 12, 12)
-        type_layout.setHorizontalSpacing(8)
-        type_layout.setVerticalSpacing(8)
-        type_layout.setColumnStretch(1, 1)
-
-        type_layout.addWidget(self._label("Type"), 0, 0)
+        # Type
+        type_box, type_grid = self._make_group("A — Controller Type")
+        type_grid.addWidget(self._label("Type"), 0, 0)
         self.type_combo = QComboBox()
         self.type_combo.addItems(CONTROLLER_TYPES)
-        self.type_combo.setToolTip("Controller type — P (proportional), PI (+integral), PID (+derivative). PID matters when camera has slew/latency (overshoot). P suffices for brief.")
+        self.type_combo.setToolTip("P, PI, PID")
         self.type_combo.setMinimumHeight(26)
-        type_layout.addWidget(self.type_combo, 0, 1)
-
-        hint = QLabel("P: simple, no windup. PI: fixes steady offset. PID: damps overshoot with slew/latency.")
+        type_grid.addWidget(self.type_combo, 0, 1)
+        hint = QLabel("P: simple. PI: fixes steady offset. PID: damps overshoot with slew/latency.")
         hint.setWordWrap(True)
         hint.setStyleSheet("color:#64748b; font-size:10px; font-style:italic;")
-        type_layout.addWidget(hint, 1, 0, 1, 2)
-
+        type_grid.addWidget(hint, 1, 0, 1, 2)
         layout.addWidget(type_box)
 
-        gains_box = QGroupBox("B — Gains / Kp / Ki / Kd")
-        gains_grid = QGridLayout(gains_box)
-        gains_grid.setContentsMargins(12, 18, 12, 12)
-        gains_grid.setHorizontalSpacing(8)
-        gains_grid.setVerticalSpacing(8)
-        gains_grid.setColumnStretch(1, 1)
-        gains_grid.setColumnStretch(3, 1)
-
-        # Kp — how strongly current error drives correction
-        gains_grid.addWidget(self._label("Kp (P)"), 0, 0)
-        self.kp_spin = QDoubleSpinBox()
+        # Gains
+        gains_box, gains_grid = self._make_group("B — Gains (slider + highlighted value)")
+        # Kp
         lo, hi = CONTROL_LIMITS["kp"]
-        self.kp_spin.setRange(lo, hi); self.kp_spin.setSingleStep(0.01); self.kp_spin.setDecimals(3)
-        self.kp_spin.setToolTip("Proportional gain — how strongly current error drives correction (px error → px correction).")
-        self.kp_spin.setMinimumHeight(26)
-        gains_grid.addWidget(self.kp_spin, 0, 1)
-
-        # Ki — corrects persistent steady-state offset (accumulated error)
-        gains_grid.addWidget(self._label("Ki (I)"), 0, 2)
-        self.ki_spin = QDoubleSpinBox()
+        self.kp_slider, self.kp_label, self.kp_factor = self._make_float_slider(lo, hi, 0.15, decimals=3, tooltip="Proportional gain")
+        self.kp_spin = QDoubleSpinBox(); self.kp_spin.setRange(lo, hi); self.kp_spin.setValue(0.15); self.kp_spin.hide()
+        gains_grid.addWidget(self._label("Kp (P)"), 0, 0)
+        gains_grid.addWidget(self.kp_slider, 0, 1)
+        gains_grid.addWidget(self.kp_label, 0, 2)
+        # Ki
         lo, hi = CONTROL_LIMITS["ki"]
-        self.ki_spin.setRange(lo, hi); self.ki_spin.setSingleStep(0.005); self.ki_spin.setDecimals(3)
-        self.ki_spin.setToolTip("Integral gain — corrects persistent steady-state offset (∫e·dt).")
-        self.ki_spin.setMinimumHeight(26)
-        gains_grid.addWidget(self.ki_spin, 0, 3)
+        self.ki_slider, self.ki_label, self.ki_factor = self._make_float_slider(lo, hi, 0.0, decimals=3, tooltip="Integral gain")
+        self.ki_spin = QDoubleSpinBox(); self.ki_spin.setRange(lo, hi); self.ki_spin.setValue(0.0); self.ki_spin.hide()
+        gains_grid.addWidget(self._label("Ki (I)"), 0, 3)
+        gains_grid.addWidget(self.ki_slider, 0, 4)
+        gains_grid.addWidget(self.ki_label, 0, 5)
 
-        # Kd — dampens oscillation by reacting to rate-of-change
-        gains_grid.addWidget(self._label("Kd (D)"), 1, 0)
-        self.kd_spin = QDoubleSpinBox()
         lo, hi = CONTROL_LIMITS["kd"]
-        self.kd_spin.setRange(lo, hi); self.kd_spin.setSingleStep(0.005); self.kd_spin.setDecimals(3)
-        self.kd_spin.setToolTip("Derivative gain — dampens oscillation/overshoot by reacting to de/dt.")
-        self.kd_spin.setMinimumHeight(26)
-        gains_grid.addWidget(self.kd_spin, 1, 1)
-
-        # Legacy aliases for MainWindow: gain_slider/spin → kp
-        # Provide dummy slider/spin that mirror kp for backward compat
-        # (Old code did gain_slider 2..50 → 0.02..0.50)
-        gains_grid.addWidget(self._label("Gain alias"), 1, 2)
-        self.gain_spin = QDoubleSpinBox()
-        self.gain_spin.setRange(0.02, 0.50); self.gain_spin.setSingleStep(0.01); self.gain_spin.setDecimals(2)
-        self.gain_spin.setToolTip("Legacy alias for Kp (0.02..0.50) — kept for code that reads gain_spin/gain_slider.")
-        self.gain_spin.setMinimumHeight(26)
-        gains_grid.addWidget(self.gain_spin, 1, 3)
-
+        self.kd_slider, self.kd_label, self.kd_factor = self._make_float_slider(lo, hi, 0.0, decimals=3, tooltip="Derivative gain")
+        self.kd_spin = QDoubleSpinBox(); self.kd_spin.setRange(lo, hi); self.kd_spin.setValue(0.0); self.kd_spin.hide()
+        gains_grid.addWidget(self._label("Kd (D)"), 1, 0)
+        gains_grid.addWidget(self.kd_slider, 1, 1)
+        gains_grid.addWidget(self.kd_label, 1, 2)
+        # Gain alias hidden
+        self.gain_spin = QDoubleSpinBox(); self.gain_spin.setRange(0.02, 0.50); self.gain_spin.setValue(0.15); self.gain_spin.hide()
+        # Hidden gain label to keep grid
+        gains_grid.addWidget(self._label("Gain alias"), 1, 3)
+        # dummy slider for gain alias? just show kd is enough, keep hidden
+        self._gain_alias_slider = self.kp_slider  # alias
+        gains_grid.addWidget(QLabel(""), 1, 4, 1, 2)
         layout.addWidget(gains_box)
 
-        limits_box = QGroupBox("C — Timing and Limits")
-        limits_grid = QGridLayout(limits_box)
-        limits_grid.setContentsMargins(12, 18, 12, 12)
-        limits_grid.setHorizontalSpacing(8)
-        limits_grid.setVerticalSpacing(8)
-        limits_grid.setColumnStretch(1, 1)
-        limits_grid.setColumnStretch(3, 1)
-
-        limits_grid.addWidget(self._label("Update Rate"), 0, 0)
-        self.rate_spin = QDoubleSpinBox()
+        # Timing and limits
+        limits_box, limits_grid = self._make_group("C — Timing and Limits")
         lo, hi = CONTROL_LIMITS["update_rate_hz"]
-        self.rate_spin.setRange(lo, hi); self.rate_spin.setSingleStep(1.0); self.rate_spin.setDecimals(1)
-        self.rate_spin.setSuffix(" Hz")
-        self.rate_spin.setValue(30.0)
-        self.rate_spin.setToolTip("Update rate >=20 Hz — default 30 Hz.")
-        self.rate_spin.setMinimumHeight(26)
-        limits_grid.addWidget(self.rate_spin, 0, 1)
-
-        limits_grid.addWidget(self._label("Dead Zone"), 0, 2)
-        self.dead_spin = QDoubleSpinBox()
+        self.rate_slider, self.rate_label, self.rate_factor = self._make_float_slider(lo, hi, 30.0, decimals=1, suffix=" Hz", tooltip="Update rate")
+        self.rate_spin = QDoubleSpinBox(); self.rate_spin.setRange(lo, hi); self.rate_spin.setValue(30.0); self.rate_spin.hide()
+        limits_grid.addWidget(self._label("Update Rate"), 0, 0)
+        limits_grid.addWidget(self.rate_slider, 0, 1)
+        limits_grid.addWidget(self.rate_label, 0, 2)
         lo, hi = CONTROL_LIMITS["dead_zone"]
-        self.dead_spin.setRange(lo, hi); self.dead_spin.setSingleStep(0.5); self.dead_spin.setDecimals(1)
-        self.dead_spin.setSuffix(" px")
-        self.dead_spin.setToolTip("Dead zone — minimum error (px) before camera moves; avoids micro-jitter when centered.")
-        self.dead_spin.setMinimumHeight(26)
-        limits_grid.addWidget(self.dead_spin, 0, 3)
+        self.dead_slider, self.dead_label, self.dead_factor = self._make_float_slider(lo, hi, 0.0, decimals=1, suffix=" px", tooltip="Dead zone")
+        self.dead_spin = QDoubleSpinBox(); self.dead_spin.setRange(lo, hi); self.dead_spin.setValue(0.0); self.dead_spin.hide()
+        limits_grid.addWidget(self._label("Dead Zone"), 0, 3)
+        limits_grid.addWidget(self.dead_slider, 0, 4)
+        limits_grid.addWidget(self.dead_label, 0, 5)
 
-        limits_grid.addWidget(self._label("Output Clamp"), 1, 0)
-        self.clamp_spin = QDoubleSpinBox()
         lo, hi = CONTROL_LIMITS["output_clamp"]
-        self.clamp_spin.setRange(lo, hi); self.clamp_spin.setSingleStep(5.0); self.clamp_spin.setDecimals(1)
-        self.clamp_spin.setSuffix(" px")
-        self.clamp_spin.setToolTip("Max correction per tick — should respect camera max_slew_rate*dt, not double-define it. Clamped to camera limit if tighter.")
-        self.clamp_spin.setMinimumHeight(26)
-        limits_grid.addWidget(self.clamp_spin, 1, 1)
-
-        clamp_hint = QLabel("Output clamp is capped by camera max_slew*dt if tighter — no double define.")
+        self.clamp_slider, self.clamp_label, self.clamp_factor = self._make_float_slider(lo, hi, 100.0, decimals=1, suffix=" px", tooltip="Output clamp")
+        self.clamp_spin = QDoubleSpinBox(); self.clamp_spin.setRange(lo, hi); self.clamp_spin.setValue(100.0); self.clamp_spin.hide()
+        limits_grid.addWidget(self._label("Output Clamp"), 1, 0)
+        limits_grid.addWidget(self.clamp_slider, 1, 1)
+        limits_grid.addWidget(self.clamp_label, 1, 2)
+        clamp_hint = QLabel("Clamp capped by camera max_slew*dt if tighter.")
         clamp_hint.setWordWrap(True)
         clamp_hint.setStyleSheet("color:#64748b; font-size:10px; font-style:italic;")
-        limits_grid.addWidget(clamp_hint, 1, 2, 1, 2)
-
+        limits_grid.addWidget(clamp_hint, 1, 3, 1, 3)
         layout.addWidget(limits_box)
 
-        # D — Feedforward & Adaptive (AI-ready predictive control)
-        adv_box = QGroupBox("D — Feedforward & Adaptive (AI-Ready)")
-        adv_grid = QGridLayout(adv_box)
-        adv_grid.setContentsMargins(12, 18, 12, 12)
-        adv_grid.setHorizontalSpacing(8)
-        adv_grid.setVerticalSpacing(8)
-        adv_grid.setColumnStretch(1, 1)
-        adv_grid.setColumnStretch(3, 1)
-
-        adv_grid.addWidget(self._label("Feedforward"), 0, 0)
-        self.ff_spin = QDoubleSpinBox()
+        # Advanced
+        adv_box, adv_grid = self._make_group("D — Feedforward & Adaptive (slider)")
         lo, hi = CONTROL_LIMITS["feedforward_gain"]
-        self.ff_spin.setRange(lo, hi); self.ff_spin.setSingleStep(0.05); self.ff_spin.setDecimals(2)
-        self.ff_spin.setToolTip("Velocity feedforward 0..1.2 — predicts target velocity (vx*dt) to cut lag 10→3px. 0=off, 0.45 recommended for 80 px/s.")
-        self.ff_spin.setMinimumHeight(26)
-        adv_grid.addWidget(self.ff_spin, 0, 1)
-
-        adv_grid.addWidget(self._label("Adaptive"), 0, 2)
-        self.adaptive_spin = QDoubleSpinBox()
+        self.ff_slider, self.ff_label, self.ff_factor = self._make_float_slider(lo, hi, 0.0, decimals=2, tooltip="Feedforward 0..1.2")
+        self.ff_spin = QDoubleSpinBox(); self.ff_spin.setRange(lo, hi); self.ff_spin.setValue(0.0); self.ff_spin.hide()
+        adv_grid.addWidget(self._label("Feedforward"), 0, 0)
+        adv_grid.addWidget(self.ff_slider, 0, 1)
+        adv_grid.addWidget(self.ff_label, 0, 2)
         lo, hi = CONTROL_LIMITS["adaptive_gain"]
-        self.adaptive_spin.setRange(lo, hi); self.adaptive_spin.setSingleStep(0.05); self.adaptive_spin.setDecimals(2)
-        self.adaptive_spin.setToolTip("Adaptive kp boost 0..0.5 — kp_eff = kp*(1+adaptive*|err|/20). Aggressive far, gentle near.")
-        self.adaptive_spin.setMinimumHeight(26)
-        adv_grid.addWidget(self.adaptive_spin, 0, 3)
+        self.adaptive_slider, self.adaptive_label, self.adaptive_factor = self._make_float_slider(lo, hi, 0.0, decimals=2, tooltip="Adaptive gain")
+        self.adaptive_spin = QDoubleSpinBox(); self.adaptive_spin.setRange(lo, hi); self.adaptive_spin.setValue(0.0); self.adaptive_spin.hide()
+        adv_grid.addWidget(self._label("Adaptive"), 0, 3)
+        adv_grid.addWidget(self.adaptive_slider, 0, 4)
+        adv_grid.addWidget(self.adaptive_label, 0, 5)
 
-        adv_grid.addWidget(self._label("D Filter"), 1, 0)
-        self.dfilter_spin = QDoubleSpinBox()
         lo, hi = CONTROL_LIMITS["derivative_filter"]
-        self.dfilter_spin.setRange(lo, hi); self.dfilter_spin.setSingleStep(0.05); self.dfilter_spin.setDecimals(2)
-        self.dfilter_spin.setToolTip("Derivative filter 0..0.99 — alpha for filtered derivative. 0.80 = 0.2*raw+0.8*prev.")
-        self.dfilter_spin.setMinimumHeight(26)
-        adv_grid.addWidget(self.dfilter_spin, 1, 1)
-
-        adv_grid.addWidget(self._label("Smith (ms)"), 1, 2)
-        self.smith_spin = QDoubleSpinBox()
+        self.dfilter_slider, self.dfilter_label, self.dfilter_factor = self._make_float_slider(lo, hi, 0.80, decimals=2, tooltip="Derivative filter")
+        self.dfilter_spin = QDoubleSpinBox(); self.dfilter_spin.setRange(lo, hi); self.dfilter_spin.setValue(0.80); self.dfilter_spin.hide()
+        adv_grid.addWidget(self._label("D Filter"), 1, 0)
+        adv_grid.addWidget(self.dfilter_slider, 1, 1)
+        adv_grid.addWidget(self.dfilter_label, 1, 2)
         lo, hi = CONTROL_LIMITS["smith_latency_ms"]
-        self.smith_spin.setRange(lo, hi); self.smith_spin.setSingleStep(1.0); self.smith_spin.setDecimals(0)
-        self.smith_spin.setSuffix(" ms")
-        self.smith_spin.setToolTip("Smith predictor for camera latency 0..50ms — predicts error ahead by velocity*latency. Set to camera latency (12ms) if feedforward on.")
-        self.smith_spin.setMinimumHeight(26)
-        adv_grid.addWidget(self.smith_spin, 1, 3)
+        self.smith_slider, self.smith_label = self._make_int_slider(int(lo), int(hi), 0, tooltip="Smith predictor ms")
+        self.smith_spin = QDoubleSpinBox(); self.smith_spin.setRange(lo, hi); self.smith_spin.setValue(0); self.smith_spin.hide()
+        adv_grid.addWidget(self._label("Smith (ms)"), 1, 3)
+        adv_grid.addWidget(self.smith_slider, 1, 4)
+        adv_grid.addWidget(self.smith_label, 1, 5)
 
-        adv_grid.addWidget(self._label("Setpoint W"), 2, 0)
-        self.setpoint_spin = QDoubleSpinBox()
         lo, hi = CONTROL_LIMITS["setpoint_weight"]
-        self.setpoint_spin.setRange(lo, hi); self.setpoint_spin.setSingleStep(0.05); self.setpoint_spin.setDecimals(2)
-        self.setpoint_spin.setToolTip("Setpoint weighting b 0..1 — scales proportional kick on acquisition. 1.0 = full proportional on error, 0.7 reduces overshoot on lock re-acquire. Derivative always weighted.")
-        self.setpoint_spin.setMinimumHeight(26)
-        adv_grid.addWidget(self.setpoint_spin, 2, 1)
-
-        ff_hint = QLabel("Feedforward needs tracker velocity; Smith needs latency. Use 0.45/12ms for 80 px/s curved. Setpoint 0.7-1.0.")
+        self.setpoint_slider, self.setpoint_label, self.setpoint_factor = self._make_float_slider(lo, hi, 1.0, decimals=2, tooltip="Setpoint weight 0..1")
+        self.setpoint_spin = QDoubleSpinBox(); self.setpoint_spin.setRange(lo, hi); self.setpoint_spin.setValue(1.0); self.setpoint_spin.hide()
+        adv_grid.addWidget(self._label("Setpoint W"), 2, 0)
+        adv_grid.addWidget(self.setpoint_slider, 2, 1)
+        adv_grid.addWidget(self.setpoint_label, 2, 2)
+        ff_hint = QLabel("Use 0.45/12ms for 80 px/s curved. Setpoint 0.7-1.0 reduces overshoot.")
         ff_hint.setWordWrap(True)
         ff_hint.setStyleSheet("color:#64748b; font-size:10px; font-style:italic;")
-        adv_grid.addWidget(ff_hint, 3, 0, 1, 4)
-
+        adv_grid.addWidget(ff_hint, 3, 0, 1, 6)
         layout.addWidget(adv_box)
+
+        # Reset button
+        self.btn_reset = self._make_reset_button("Reset Control")
+        layout.addWidget(self.btn_reset)
         layout.addStretch()
 
-        # Wire — all emit configChanged, with Ki/Kd enable per type
+        # Wiring
         self.type_combo.currentTextChanged.connect(self._on_type_changed)
-        for w in [self.kp_spin, self.ki_spin, self.kd_spin, self.rate_spin, self.dead_spin, self.clamp_spin, self.gain_spin,
-                  self.ff_spin, self.adaptive_spin, self.dfilter_spin, self.smith_spin, self.setpoint_spin]:
-            w.valueChanged.connect(self._emit_config)
-        # Gain alias syncs to Kp
-        self.gain_spin.valueChanged.connect(self._on_gain_alias)
-        self.kp_spin.valueChanged.connect(self._on_kp_sync_gain)
+        for sld, spin, factor in [
+            (self.kp_slider, self.kp_spin, self.kp_factor),
+            (self.ki_slider, self.ki_spin, self.ki_factor),
+            (self.kd_slider, self.kd_spin, self.kd_factor),
+            (self.rate_slider, self.rate_spin, self.rate_factor),
+            (self.dead_slider, self.dead_spin, self.dead_factor),
+            (self.clamp_slider, self.clamp_spin, self.clamp_factor),
+            (self.ff_slider, self.ff_spin, self.ff_factor),
+            (self.adaptive_slider, self.adaptive_spin, self.adaptive_factor),
+            (self.dfilter_slider, self.dfilter_spin, self.dfilter_factor),
+            (self.setpoint_slider, self.setpoint_spin, self.setpoint_factor),
+        ]:
+            sld.valueChanged.connect(lambda v, sp=spin, f=factor: self._sync_float(v, sp, f))
+        self.smith_slider.valueChanged.connect(lambda v: self._sync_int(v, self.smith_spin))
+        self.btn_reset.clicked.connect(self._on_reset)
 
-    # Helpers — _label now from BaseConfigPanel
+    def _sync_float(self, int_val: int, spin: QDoubleSpinBox, factor: int):
+        val = int_val / factor
+        spin.blockSignals(True)
+        spin.setValue(float(val))
+        spin.blockSignals(False)
+        # Gain alias sync
+        if spin is self.kp_spin:
+            self.gain_spin.blockSignals(True)
+            self.gain_spin.setValue(float(np.clip(val, 0.02, 0.50)))
+            self.gain_spin.blockSignals(False)
+        self._emit_config()
+
+    def _sync_int(self, int_val: int, spin: QDoubleSpinBox):
+        spin.blockSignals(True)
+        spin.setValue(float(int_val))
+        spin.blockSignals(False)
+        self._emit_config()
 
     def _on_type_changed(self, txt: str) -> None:
-        # Enable Ki/Kd per type
         txt = str(txt)
+        self.ki_slider.setEnabled(txt in ("PI", "PID"))
         self.ki_spin.setEnabled(txt in ("PI", "PID"))
+        self.ki_label.setEnabled(txt in ("PI", "PID"))
+        self.kd_slider.setEnabled(txt == "PID")
         self.kd_spin.setEnabled(txt == "PID")
+        self.kd_label.setEnabled(txt == "PID")
+        # Highlight disabled as deactivated
         self._emit_config()
 
     def _on_gain_alias(self, v: float) -> None:
-        # Gain alias → Kp, avoid loop
         if abs(self.kp_spin.value() - float(v)) > 1e-9:
+            self.kp_slider.blockSignals(True)
+            self.kp_slider.setValue(int(round(float(v) * self.kp_factor)))
+            self.kp_slider.blockSignals(False)
             self.kp_spin.blockSignals(True)
             self.kp_spin.setValue(float(v))
             self.kp_spin.blockSignals(False)
-        self._emit_config()
 
     def _on_kp_sync_gain(self, v: float) -> None:
         if abs(self.gain_spin.value() - float(v)) > 1e-9:
-            # Clamp gain alias to 0.02..0.50 range
             gv = float(np.clip(float(v), 0.02, 0.50))
             self.gain_spin.blockSignals(True)
             self.gain_spin.setValue(gv)
             self.gain_spin.blockSignals(False)
 
-    # Config ↔ UI
+    def _on_reset(self):
+        self.set_config(ControllerConfig().validate(), emit=True)
 
     def collect_config(self) -> ControllerConfig:
         return ControllerConfig(
             controller_type=str(self.type_combo.currentText()),
-            kp=float(self.kp_spin.value()),
-            ki=float(self.ki_spin.value()),
-            kd=float(self.kd_spin.value()),
-            update_rate_hz=float(self.rate_spin.value()),
-            dead_zone=float(self.dead_spin.value()),
-            output_clamp=float(self.clamp_spin.value()),
-            feedforward_gain=float(self.ff_spin.value()),
-            adaptive_gain=float(self.adaptive_spin.value()),
-            derivative_filter=float(self.dfilter_spin.value()),
-            smith_latency_ms=float(self.smith_spin.value()),
-            setpoint_weight=float(self.setpoint_spin.value()),
+            kp=float(self.kp_slider.value() / self.kp_factor),
+            ki=float(self.ki_slider.value() / self.ki_factor),
+            kd=float(self.kd_slider.value() / self.kd_factor),
+            update_rate_hz=float(self.rate_slider.value() / self.rate_factor),
+            dead_zone=float(self.dead_slider.value() / self.dead_factor),
+            output_clamp=float(self.clamp_slider.value() / self.clamp_factor),
+            feedforward_gain=float(self.ff_slider.value() / self.ff_factor),
+            adaptive_gain=float(self.adaptive_slider.value() / self.adaptive_factor),
+            derivative_filter=float(self.dfilter_slider.value() / self.dfilter_factor),
+            smith_latency_ms=float(self.smith_slider.value()),
+            setpoint_weight=float(self.setpoint_slider.value() / self.setpoint_factor),
         ).validate()
 
     def set_config(self, cfg: ControllerConfig, emit: bool = False) -> None:
         cfg = cfg.validate()
-        widgets = [self.type_combo, self.kp_spin, self.ki_spin, self.kd_spin, self.rate_spin, self.dead_spin, self.clamp_spin, self.gain_spin,
-                   self.ff_spin, self.adaptive_spin, self.dfilter_spin, self.smith_spin, self.setpoint_spin]
-        with self._blocked(widgets):
+        widgets = [self.type_combo, self.kp_slider, self.ki_slider, self.kd_slider, self.rate_slider, self.dead_slider, self.clamp_slider,
+                   self.ff_slider, self.adaptive_slider, self.dfilter_slider, self.smith_slider, self.setpoint_slider]
+        for w in widgets:
+            w.blockSignals(True)
+        spins = [self.kp_spin, self.ki_spin, self.kd_spin, self.rate_spin, self.dead_spin, self.clamp_spin, self.gain_spin,
+                 self.ff_spin, self.adaptive_spin, self.dfilter_spin, self.smith_spin, self.setpoint_spin]
+        for s in spins:
+            s.blockSignals(True)
+        try:
             idx = self.type_combo.findText(cfg.controller_type)
             if idx >= 0:
                 self.type_combo.setCurrentIndex(idx)
-            self.kp_spin.setValue(float(cfg.kp))
-            self.ki_spin.setValue(float(cfg.ki))
-            self.kd_spin.setValue(float(cfg.kd))
-            self.rate_spin.setValue(float(cfg.update_rate_hz))
-            self.dead_spin.setValue(float(cfg.dead_zone))
-            self.clamp_spin.setValue(float(cfg.output_clamp))
-            self.ff_spin.setValue(float(getattr(cfg, "feedforward_gain", 0.0)))
-            self.adaptive_spin.setValue(float(getattr(cfg, "adaptive_gain", 0.0)))
-            self.dfilter_spin.setValue(float(getattr(cfg, "derivative_filter", 0.80)))
-            self.smith_spin.setValue(float(getattr(cfg, "smith_latency_ms", 0.0)))
-            self.setpoint_spin.setValue(float(getattr(cfg, "setpoint_weight", 1.0)))
+            self.kp_slider.setValue(int(round(float(cfg.kp) * self.kp_factor))); self.kp_spin.setValue(float(cfg.kp)); self.kp_label.setText(f"{float(cfg.kp):.3f}")
+            self.ki_slider.setValue(int(round(float(cfg.ki) * self.ki_factor))); self.ki_spin.setValue(float(cfg.ki)); self.ki_label.setText(f"{float(cfg.ki):.3f}")
+            self.kd_slider.setValue(int(round(float(cfg.kd) * self.kd_factor))); self.kd_spin.setValue(float(cfg.kd)); self.kd_label.setText(f"{float(cfg.kd):.3f}")
+            self.rate_slider.setValue(int(round(float(cfg.update_rate_hz) * self.rate_factor))); self.rate_spin.setValue(float(cfg.update_rate_hz)); self.rate_label.setText(f"{float(cfg.update_rate_hz):.1f} Hz")
+            self.dead_slider.setValue(int(round(float(cfg.dead_zone) * self.dead_factor))); self.dead_spin.setValue(float(cfg.dead_zone)); self.dead_label.setText(f"{float(cfg.dead_zone):.1f} px")
+            self.clamp_slider.setValue(int(round(float(cfg.output_clamp) * self.clamp_factor))); self.clamp_spin.setValue(float(cfg.output_clamp)); self.clamp_label.setText(f"{float(cfg.output_clamp):.1f} px")
+            self.ff_slider.setValue(int(round(float(getattr(cfg, "feedforward_gain", 0.0)) * self.ff_factor))); self.ff_spin.setValue(float(getattr(cfg, "feedforward_gain", 0.0))); self.ff_label.setText(f"{float(getattr(cfg, 'feedforward_gain', 0.0)):.2f}")
+            self.adaptive_slider.setValue(int(round(float(getattr(cfg, "adaptive_gain", 0.0)) * self.adaptive_factor))); self.adaptive_spin.setValue(float(getattr(cfg, "adaptive_gain", 0.0))); self.adaptive_label.setText(f"{float(getattr(cfg, 'adaptive_gain', 0.0)):.2f}")
+            self.dfilter_slider.setValue(int(round(float(getattr(cfg, "derivative_filter", 0.80)) * self.dfilter_factor))); self.dfilter_spin.setValue(float(getattr(cfg, "derivative_filter", 0.80))); self.dfilter_label.setText(f"{float(getattr(cfg, 'derivative_filter', 0.80)):.2f}")
+            self.smith_slider.setValue(int(getattr(cfg, "smith_latency_ms", 0.0))); self.smith_spin.setValue(float(getattr(cfg, "smith_latency_ms", 0.0))); self.smith_label.setText(f"{int(getattr(cfg, 'smith_latency_ms', 0.0))} ms")
+            self.setpoint_slider.setValue(int(round(float(getattr(cfg, "setpoint_weight", 1.0)) * self.setpoint_factor))); self.setpoint_spin.setValue(float(getattr(cfg, "setpoint_weight", 1.0))); self.setpoint_label.setText(f"{float(getattr(cfg, 'setpoint_weight', 1.0)):.2f}")
             self.gain_spin.setValue(float(np.clip(cfg.kp, 0.02, 0.50)))
             self._on_type_changed(cfg.controller_type)
+        finally:
+            for w in widgets:
+                w.blockSignals(False)
+            for s in spins:
+                s.blockSignals(False)
         if emit:
             self._emit_config()
 
@@ -291,4 +276,5 @@ class ControlPanel(BaseConfigPanel):
         try:
             cfg = self.collect_config()
             self.configChanged.emit(cfg)
-        except Exception: pass
+        except Exception:
+            pass

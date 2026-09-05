@@ -338,8 +338,16 @@ class UIMixin:
         self.control_kd_spin = getattr(self.control_panel, 'kd_spin', None)
         # wiring — controller tuning
         self.control_panel.configChanged.connect(self._on_control_config_changed)
-        # Keep camera gain in sync with control Kp (bidirectional)
-        self.control_panel.kp_spin.valueChanged.connect(lambda v: self._sync_control_gain_to_camera(v))
+        # Keep camera gain in sync with control Kp (bidirectional) — support both slider and hidden spin
+        try:
+            self.control_panel.kp_spin.valueChanged.connect(lambda v: self._sync_control_gain_to_camera(v))
+        except Exception:
+            pass
+        try:
+            if hasattr(self.control_panel, "kp_slider"):
+                self.control_panel.kp_slider.valueChanged.connect(lambda v: self._sync_control_gain_to_camera(v / getattr(self.control_panel, "kp_factor", 1000)))
+        except Exception:
+            pass
         self.camera_panel.gain_spin.valueChanged.connect(lambda v: self._sync_camera_gain_to_control(v))
         self.camera_panel.gain_slider.valueChanged.connect(lambda v: self._sync_camera_gain_to_control(v/100.0))
 
@@ -376,6 +384,12 @@ class UIMixin:
         for w in [self.scene_w_spin, self.scene_h_spin]:
             try: w.valueChanged.connect(lambda _, s="camera": self._mark_dirty(s))
             except Exception: pass
+        # Sliders also trigger camera dirty (since hidden spins are blocked)
+        try:
+            for w in [self.env_panel.slider_world_w, self.env_panel.slider_world_h]:
+                w.valueChanged.connect(lambda _, s="camera": self._mark_dirty(s))
+        except Exception:
+            pass
         env_layout.addStretch()
         tabs.addTab(env_tab, "Environment")
 

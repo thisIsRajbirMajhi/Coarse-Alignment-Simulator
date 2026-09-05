@@ -270,11 +270,18 @@ class DisturbancesPanel(BaseConfigPanel):
         plat_grid.addWidget(plat_hint, 1, 0, 1, 5)
         layout.addWidget(plat_box)
 
+        # Reset button
+        self.btn_reset = self._make_reset_button("Reset Disturbances")
+        layout.addWidget(self.btn_reset)
+
         layout.addStretch()
         self._wire_signals()
         self._building = False
         self._sync_atmo_enabled()
         self._sync_image_noise_visibility()
+        # Highlight sliders on drag + connect reset
+        self._enhance_slider_highlight()
+        self.btn_reset.clicked.connect(self._on_reset)
 
     def _wire_signals(self) -> None:
         for cb in [self.chk_salt_pepper, self.chk_gaussian, self.chk_poisson]:
@@ -447,6 +454,26 @@ class DisturbancesPanel(BaseConfigPanel):
                 s.blockSignals(False)
         if emit:
             self._emit_config()
+
+    def _enhance_slider_highlight(self):
+        # Add pressed/released highlighting for all sliders (light theme highlight)
+        for slider, label in [
+            (self.slider_salt_density, self.label_salt_density_val),
+            (self.slider_salt_ratio, self.label_salt_ratio_val),
+            (self.slider_gaussian_sigma, self.label_gaussian_sigma_val),
+            (self.slider_gaussian_max, self.label_gaussian_max_val),
+            (self.slider_poisson_scale, self.label_poisson_scale_val),
+            (self.slider_poisson_peak, self.label_poisson_peak_val),
+            (self.slider_jitter, self.label_jitter_val),
+            (self.slider_atmo_contrast, self.label_atmo_contrast_val),
+            (self.slider_atmo_brightness, self.label_atmo_brightness_val),
+            (self.slider_platform_speed, self.label_platform_speed_val),
+        ]:
+            slider.sliderPressed.connect(lambda lbl=label: lbl.setStyleSheet("color:#1e40af; font-weight:700; background:#dbeafe; border:2px solid #3b82f6; border-radius:4px; padding:2px 4px; font-size:11px;"))
+            slider.sliderReleased.connect(lambda lbl=label: lbl.setStyleSheet("color:#374151; font-size:11px;"))
+
+    def _on_reset(self):
+        self.set_config(DisturbanceConfig().validate(), emit=True)
 
     def _emit_config(self) -> None:
         if getattr(self, "_building", False):

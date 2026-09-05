@@ -43,9 +43,9 @@ CAMERA_DEFAULTS: dict = {
     "tilt_max": None,
     "home_pan": None,
     "home_tilt": None,
-    "max_pan_speed_deg": 8.0,
-    "max_tilt_speed_deg": 8.0,
-    "max_slew_rate": 1280.0,  # legacy derived — overwritten by deg/s derive in validate()
+    "max_pan_speed_deg": 5.0,  # per PDF Sr.13 default 5°/s
+    "max_tilt_speed_deg": 5.0,  # per PDF Sr.14 default 5°/s
+    "max_slew_rate": 800.0,  # legacy derived — overwritten by deg/s derive (5°/s ≈ 800 px/s at 0.109 mrad/px)
     "resolution": 0.1,
     "latency_ms": 12,
     "max_accel_deg": 120.0,  # ~2040 px/s² at 0.109 scale
@@ -53,9 +53,9 @@ CAMERA_DEFAULTS: dict = {
     "encoder_sigma_px": 0.04,
     "latency_jitter_ms": 1.2,
     "pixel_scale_mrad": 0.109,
-    "scene_width": 5000,
-    "scene_height": 5000,
-    "update_rate_hz": 30,
+    "scene_width": 2000,  # per PDF Sr.1 min 2000
+    "scene_height": 2000,
+    "update_rate_hz": 30,  # per PDF Sr.5 30 Hz min
 }
 
 DISPLAY_LIMITS: dict[str, tuple[int, int]] = {
