@@ -58,7 +58,3 @@ class BaseConfigPanel(QWidget):
                     w.blockSignals(False)
                 except Exception:
                     pass
-
-    def _all_widgets(self) -> list[Any]:
-        # Subclasses override to return list of widgets for blocking
-        return []

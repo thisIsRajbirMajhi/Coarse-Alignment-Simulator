@@ -3,9 +3,8 @@
 # Installed globally via QApplication eventFilter, so every button in control deck and main window animates
 # without needing to subclass each QPushButton.
 
-from PyQt5.QtCore import QObject, QEvent, QPropertyAnimation, QEasingCurve, QTimer, QRect, QVariantAnimation
+from PyQt5.QtCore import QObject, QEvent, QPropertyAnimation, QEasingCurve, QTimer, QRect
 from PyQt5.QtWidgets import QPushButton, QGraphicsOpacityEffect
-from PyQt5.QtGui import QColor
 
 
 class ButtonClickAnimator(QObject):
@@ -109,13 +108,8 @@ class ButtonClickAnimator(QObject):
             btn.setFixedSize(btn.sizeHint())
             # Force layout update
             btn.updateGeometry()
-            # After next layout pass, clear fixed again
-            QTimer.singleShot(0, lambda: btn.setFixedSize(btn.sizeHint()) if False else None)  # no-op, keep flexible
-            # Actually just clear fixed by setting to QWIDGETSIZE_MAX via setFixedSize not needed; we set min/max
-            # Ensure we don't leave fixed: set no fixed
+            # After next layout pass, ensure layout flexible (no fixed constraint retained)
             try:
-                btn.setFixedSize(btn.sizeHint().width(), btn.sizeHint().height())
-                # Then clear: set to not fixed by resetting
                 btn.setMinimumSize(0, 0)
                 btn.setMaximumSize(16777215, 16777215)
             except Exception:

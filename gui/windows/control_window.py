@@ -22,7 +22,7 @@ class ControlDashboardWindow(QMainWindow):
         super().__init__(main_window)
         self.main_window = main_window
         self._control_widget = control_widget
-        self.setWindowTitle("FSOC — Control Deck")
+        self.setWindowTitle("Control Deck")
         self.setMinimumSize(500, 820)
         self.resize(560, 980)
         self.setStyleSheet(APP_STYLE)

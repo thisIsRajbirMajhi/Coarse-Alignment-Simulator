@@ -1,7 +1,5 @@
 # gui/core/renderer.py - Viewport and God-view rendering with standard crosshair only
 
-import math
-
 import cv2
 import numpy as np
 from PyQt5.QtCore import Qt

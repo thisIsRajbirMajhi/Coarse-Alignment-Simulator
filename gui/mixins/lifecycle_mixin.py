@@ -1,18 +1,10 @@
 # gui/mixins/lifecycle_mixin.py - Start/Pause/Reset/Export/close
 # Extracted from gui/main_window.py lifecycle (200 lines).
 
-import os
-import random
 import time
-from datetime import datetime  # noqa
-import numpy as np  # noqa
-from PyQt5.QtWidgets import QFileDialog, QMessageBox  # noqa
-from disturbance import disturbances as dist  # noqa
-from environment.config import EnvironmentConfig  # noqa
-from camera.config import CameraConfig  # noqa
-from target.config import MultiBeaconConfig  # noqa
-from control.config import ControllerConfig  # noqa
-from gui.styles import TICK_MS  # noqa
+from PyQt5.QtWidgets import QMessageBox
+from disturbance import disturbances as dist
+from gui.styles import TICK_MS
 
 
 class LifecycleMixin:

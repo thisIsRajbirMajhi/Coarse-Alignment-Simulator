@@ -3,12 +3,8 @@
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
-    QCheckBox, QComboBox, QFileDialog, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
-    QMainWindow, QMessageBox, QPushButton, QSlider, QVBoxLayout, QWidget, QTabWidget,
-    QSpinBox, QDoubleSpinBox, QScrollArea, QSplitter, QFrame, QSizePolicy, QStatusBar
+    QHBoxLayout, QLabel, QVBoxLayout, QWidget, QTabWidget, QScrollArea, QSplitter, QFrame
 )
-from gui.styles import APP_STYLE, FOV_SIZE, SCENE_SIZE, TICK_MS  # noqa
-from gui.core.renderer import Renderer  # noqa
 from gui.panels.environment_panel import EnvironmentPanel  # canonical (shim at gui/environment_panel.py for compat)
 from gui.panels.multi_beacon_panel import MultiBeaconPanel  # canonical (shim at gui/multi_beacon_panel.py for compat)
 from gui.panels.camera_panel import CameraPanel
@@ -17,7 +13,6 @@ from gui.panels.dashboard_panel import DashboardPanel
 from gui.panels.disturbances_panel import DisturbancesPanel
 from gui.panels.global_panel import GlobalPanel
 from gui.windows.control_window import ControlDashboardWindow
-from gui.windows.dashboard_window import DashboardWindow
 from gui.widgets.camera_card import create_camera_card
 
 
@@ -497,35 +492,4 @@ class UIMixin:
         except Exception:
             pass
 
-    def _add_slider_row(self, layout, label, vmin, vmax, vinit, callback, key):
-        # Deprecated — GlobalPanel now owns slider rows (modular). Kept for backward compat.
-        lab = QLabel(label)
-        lab.setStyleSheet("color:#334155; font-weight:500;")
-        layout.addWidget(lab)
-        h = QHBoxLayout()
-        h.setSpacing(8)
-        slider = QSlider(Qt.Horizontal); slider.setRange(vmin, vmax); slider.setValue(vinit)
-        slider.setTickPosition(QSlider.TicksBelow); slider.setTickInterval(max(1, (vmax-vmin)//5))
-        slider.setMinimumHeight(18)
-        val = QLabel(str(vinit)); val.setFixedWidth(36); val.setAlignment(Qt.AlignCenter)
-        val.setStyleSheet("color:#111827; font-weight:600; background:#f9fafb; border:1px solid #e5e7eb; border-radius:4px; padding:2px;")
-        slider.valueChanged.connect(lambda v, l=val: l.setText(str(v)))
-        slider.valueChanged.connect(callback)
-        h.addWidget(slider, 1); h.addWidget(val)
-        layout.addLayout(h)
-        if key == "Speed": self.speed_slider = slider
-        elif key == "Threshold": self.thresh_slider = slider
 
-    def _add_gain_row(self, layout):
-        # Deprecated — CameraPanel now owns gain row. Kept for backward compat.
-        lab = QLabel("Controller gain")
-        lab.setStyleSheet("color:#334155; font-weight:500;")
-        layout.addWidget(lab)
-        row = QHBoxLayout()
-        row.setSpacing(8)
-        self.gain_slider = QSlider(Qt.Horizontal); self.gain_slider.setRange(2, 50); self.gain_slider.setValue(15); self.gain_slider.valueChanged.connect(self._on_gain_change_slider)
-        self.gain_slider.setMinimumHeight(18)
-        self.gain_spin = QDoubleSpinBox(); self.gain_spin.setRange(0.02, 0.50); self.gain_spin.setSingleStep(0.01); self.gain_spin.setValue(0.15); self.gain_spin.setDecimals(2); self.gain_spin.setMinimumHeight(26); self.gain_spin.setFixedWidth(78)
-        self.gain_spin.valueChanged.connect(self._on_gain_change_spin)
-        row.addWidget(self.gain_slider, 1); row.addWidget(self.gain_spin)
-        layout.addLayout(row)

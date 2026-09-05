@@ -71,22 +71,12 @@ def _color_for_target_loss(pct: float) -> str:
 def _status_color(s: str) -> str:
     return STATUS_COLOR.get(s.lower(), "#64748b")
 
-def _progress_style(color: str) -> str:
-    return ""
 
 def _value_style(color: str = "#0f172a", bg: str = "#ffffff") -> str:
     return (
         f"font-weight:600; color:{color}; background:{bg}; border:1px solid #e2e8f0;"
         " border-radius:6px; padding:3px 6px; font-size:11px;"
     )
-
-def _error_pct_from_px(px: float) -> float:
-    """Convert px error to intuitive % where 15px = 100% (per dashboard thresholds). Capped 0-100."""
-    try:
-        return max(0.0, min(100.0, float(px) / 15.0 * 100.0))
-    except Exception:
-        return 0.0
-
 
 class DashboardPanel(QWidget):
     """
@@ -151,10 +141,6 @@ class DashboardPanel(QWidget):
         self._build_ui()
         # Expose graph shortcuts for legacy tests (dummy)
         self.graph = self._graph_dummy if hasattr(self, '_graph_dummy') else None
-
-    # Backward-compat helpers
-    def _progress_style(self, color: str) -> str:
-        return ""
 
     def _color_for_rate(self, pct: float) -> str:
         return _color_for_rate(pct)
@@ -324,46 +310,6 @@ class DashboardPanel(QWidget):
         self.center_hit_curve = self._graph_dummy
         self.detection_curve = self._graph_dummy
         self.searching_curve = self._graph_dummy
-
-    def _build_health_header(self) -> QFrame:
-        card = QFrame()
-        card.setStyleSheet("QFrame { background: #ffffff; border:1px solid #e5e7eb; border-radius:6px; }")
-        grid = QGridLayout(card)
-        grid.setContentsMargins(10, 10, 10, 10)
-        grid.setHorizontalSpacing(10)
-        grid.setVerticalSpacing(6)
-        title = QLabel("System Health — Live")
-        title.setStyleSheet("color:#111827; font-weight:600; font-size:10px; background:transparent; border:none;")
-        grid.addWidget(title, 0, 0, 1, 4)
-        self.health_lock_dot = QLabel("")
-        self.health_lock_dot.setStyleSheet("color:#6b7280; font-size:12px; background:#9ca3af; border-radius:6px;")
-        self.health_lock_dot.setAlignment(Qt.AlignCenter)
-        grid.addWidget(self.health_lock_dot, 1, 0)
-        self.health_lock_text = QLabel("SEARCHING")
-        self.health_lock_text.setStyleSheet("color:#6b7280; font-weight:600; font-size:11px; background:transparent; border:none;")
-        grid.addWidget(self.health_lock_text, 1, 1)
-        self.health_retention_val = QLabel("—%")
-        self.health_retention_val.setStyleSheet("color:#111827; font-weight:600; font-size:11px; background:#ffffff; border:1px solid #e5e7eb; border-radius:4px; padding:3px 6px;")
-        self.health_retention_val.setAlignment(Qt.AlignCenter)
-        grid.addWidget(self.health_retention_val, 1, 2, 1, 2)
-        self.health_retention_bar = self.health_retention_val
-        try:
-            self.health_retention_bar.setValue = lambda v: None  # type: ignore
-            self.health_retention_bar.setRange = lambda a, b: None  # type: ignore
-            self.health_retention_bar.setTextVisible = lambda v: None  # type: ignore
-            self.health_retention_bar.setFormat = lambda s: None  # type: ignore
-            self.health_retention_bar.setFixedHeight = lambda h: None  # type: ignore
-        except Exception:
-            pass
-        self.health_fps = QLabel("FPS —")
-        self.health_fps.setStyleSheet("color:#374151; font-size:11px; font-weight:500; background:#ffffff; border:1px solid #e5e7eb; border-radius:4px; padding:3px 6px;")
-        self.health_fps.setAlignment(Qt.AlignCenter)
-        grid.addWidget(self.health_fps, 2, 0, 1, 2)
-        self.health_error = QLabel("Err —")
-        self.health_error.setStyleSheet("color:#374151; font-size:11px; font-weight:500; background:#ffffff; border:1px solid #e5e7eb; border-radius:4px; padding:3px 6px;")
-        self.health_error.setAlignment(Qt.AlignCenter)
-        grid.addWidget(self.health_error, 2, 2, 1, 2)
-        return card
 
     def _make_section(self, layout: QVBoxLayout, title: str, rows: list[tuple[str, str, str, str, bool, str | None]]) -> None:
         box = QGroupBox(title)

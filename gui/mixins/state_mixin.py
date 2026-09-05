@@ -207,31 +207,6 @@ class StateMixin:
         except Exception as e:
             QMessageBox.warning(self, f"Discard {section}", f"Failed: {e}")
 
-    def _master_apply_all(self):
-        if self._dirty_tabs:
-            ret = QMessageBox.question(self, "Apply All Sections",
-                f"Apply all dirty sections? ({', '.join(sorted(self._dirty_tabs))}) — (next tick).",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
-            if ret != QMessageBox.Yes:
-                return
-        for sec in ["global", "beacons", "camera", "control", "environment", "disturbances"]:
-            self._apply_section(sec, hot=True)
-        self._dirty_tabs.clear()
-        self.statusBar().showMessage("All sections applied — ", 3000)
-
-    def _master_discard_all(self):
-        if not self._dirty_tabs:
-            self.statusBar().showMessage("Nothing dirty to discard", 2000)
-            return
-        ret = QMessageBox.question(self, "Discard All",
-            f"Discard changes in: {', '.join(sorted(self._dirty_tabs))}?",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-        if ret != QMessageBox.Yes:
-            return
-        for sec in list(self._dirty_tabs):
-            self._discard_section(sec)
-        self._dirty_tabs.clear()
-
     # Snapss — for discard
 
     def _snapshot_section(self, section: str):

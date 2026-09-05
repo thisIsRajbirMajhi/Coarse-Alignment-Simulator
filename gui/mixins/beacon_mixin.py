@@ -3,9 +3,7 @@
 
 import time
 import numpy as np
-from PyQt5.QtWidgets import QGroupBox
-from target.motion import MotionProfile, create_beacons  # noqa
-from target.config import MultiBeaconConfig  # noqa
+from target.motion import MotionProfile, create_beacons
 
 
 class BeaconMixin:
@@ -18,9 +16,6 @@ class BeaconMixin:
         except Exception:
             try: self.beacon_count_label.setText(f"{v} beacon{'s' if v!=1 else ''}")
             except Exception: pass
-
-    def _on_hitbox_change(self, _v=None):
-        pass
 
     def _on_beacon_count_changed(self, v: int):
         try:
@@ -85,12 +80,6 @@ class BeaconMixin:
                 if hasattr(self.speed_slider, "_value_label"):
                     self.speed_slider._value_label.setText(str(int(getattr(cfg, "speed", 60))))
                 self.speed_slider.blockSignals(False)
-        except Exception: pass
-
-    def _apply_beacon_configs_hot(self):
-        try:
-            self._clear_dirty("beacons")
-            self._snapshot_section("beacons")
         except Exception: pass
 
     def _apply_beacons(self):
@@ -209,21 +198,6 @@ class BeaconMixin:
                 self.beacon_manager._update_status()
         except Exception: pass
 
-    def _create_single_beacon_panel(self, idx, beacon):
-        return QGroupBox(f"Beacon #{idx}")
-
-    def _on_per_beacon_enabled(self, idx, checked): pass
-    def _on_per_beacon_profile(self, idx, txt): pass
-    def _on_per_beacon_speed(self, idx, v): pass
-    def _on_per_beacon_brightness(self, idx, v): pass
-    def _on_per_beacon_radius(self, idx, v): pass
-    def _on_per_beacon_hitbox(self, idx, v): pass
-    def _on_per_beacon_center(self, idx, v): pass
-    def _on_per_beacon_x(self, idx, v): pass
-    def _on_per_beacon_y(self, idx, v): pass
-    def _on_per_beacon_heading(self, idx, deg): pass
-    def _randomize_single_beacon_pos(self, idx): pass
-
     def _randomize_all_beacons(self):
         try:
             import random
@@ -288,5 +262,3 @@ class BeaconMixin:
                 except Exception: pass
             self.statusBar().showMessage(f"Randomized motion for {len(self.beacons)} beacons", 2500)
         except Exception: pass
-
-    def _on_per_beacon_apply(self, idx): pass

@@ -16,8 +16,8 @@ import numpy as np
 # Re-export limits for back-compat (gui/app.py imports these)
 from environment.constants import MAX_RES, MIN_RES, DEFAULTS
 from environment.gradient import build_gradient
-from environment.haze import build_haze_field, get_haze_advect_offset, haze_modulation
-from environment.stars import draw_static_stars, draw_twinkling_stars, generate_starfield
+from environment.haze import build_haze_field
+from environment.stars import draw_static_stars, generate_starfield
 
 # Optional typed config (avoid hard import cycle at runtime)
 try:

@@ -1,10 +1,8 @@
 # gui/mixins/control_mixin.py - Global / Control handlers (beacon_tracker removed)
 
-import math  # noqa
 import numpy as np
-from PyQt5.QtWidgets import QMessageBox  # noqa
-from target.motion import MotionProfile  # noqa
-from control.config import ControllerConfig  # noqa
+from PyQt5.QtWidgets import QMessageBox
+from target.motion import MotionProfile
 
 
 class ControlMixin:
@@ -24,28 +22,6 @@ class ControlMixin:
                 b.speed = float(value)
             else:
                 b.speed = float(np.clip(float(value) * (0.85 + 0.30*(b.beacon_id % 3)/2), 12, 180))
-
-    # Legacy beacon_tracker handlers kept as no-ops for compat
-    def _on_thresh_change(self, value): pass
-    def _on_detector_min_area_change(self, value): pass
-    def _on_detector_tuning_changed(self, cfg): pass
-    def _on_tracker_smoothing_change(self, value): pass
-    def _on_tracker_miss_change(self, value): pass
-    def _on_tracker_tuning_changed(self, cfg): pass
-
-    def _on_sim_speed_change(self, value: float):
-        self._sim_speed = float(value)
-
-    def _on_global_brightness_change(self, value: int):
-        self._global_brightness = int(value)
-        for b in getattr(self, "beacons", []):
-            b.brightness = int(value)
-            b.current_brightness = float(value)
-
-    def _on_global_radius_change(self, value: int):
-        self._global_radius = int(value)
-        for b in getattr(self, "beacons", []):
-            b.radius = int(value)
 
     def _apply_global_tuning(self):
         # No detector tuning (beacon_tracker removed) — only global beacon/cam params

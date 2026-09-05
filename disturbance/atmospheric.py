@@ -3,12 +3,8 @@
 
 from __future__ import annotations
 
-import math
-
 import cv2
 import numpy as np
-
-from common.rng import get_rng
 
 from disturbance.constants import ATMOSPHERIC_PRESET_MAP, ATMOSPHERIC_PRESETS
 

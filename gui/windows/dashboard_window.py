@@ -1,6 +1,3 @@
-import os
-from datetime import datetime
-
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QMainWindow,
@@ -9,7 +6,6 @@ from PyQt5.QtWidgets import (
     QAction,
     QLabel,
     QStatusBar,
-    QFileDialog,
     QMessageBox,
 )
 

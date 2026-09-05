@@ -9,7 +9,6 @@ import numpy as np
 from common.rng import get_rng
 
 from disturbance.constants import (
-    GAUSSIAN_SIGMA_LIMITS,
     GAUSSIAN_SIGMA_MAX_USER,
     SALT_PEPPER_LIMITS,
 )

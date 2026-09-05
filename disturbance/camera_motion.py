@@ -1,7 +1,6 @@
 # disturbance/camera_motion.py - Camera drift — Ornstein-Uhlenbeck thermal/mount, well-commented
 
 import math
-import time
 
 import numpy as np
 
