@@ -72,53 +72,10 @@ class GlobalPanel(BaseConfigPanel):
             if w and isinstance(w, QLabel) and w.text() in ("Target speed (px/s)", "Detector threshold"):
                 w.hide()
 
-        # — NEW: Global Tuning (Sim Speed + Beacon global overrides) — previously hidden ghost params
-        tuning_box = QGroupBox("Simulation & Global Tuning")
-        tuning_grid = QGridLayout(tuning_box)
-        tuning_grid.setContentsMargins(12, 18, 12, 12)
-        tuning_grid.setHorizontalSpacing(8)
-        tuning_grid.setVerticalSpacing(8)
-        tuning_grid.setColumnStretch(1, 1)
-        tuning_grid.setColumnStretch(3, 1)
-
-        tuning_grid.addWidget(self._label("Sim Speed"), 0, 0)
-        self.sim_speed_spin = QDoubleSpinBox()
-        self.sim_speed_spin.setRange(0.2, 3.0)
-        self.sim_speed_spin.setSingleStep(0.1)
-        self.sim_speed_spin.setDecimals(1)
-        self.sim_speed_spin.setSuffix(" ×")
-        self.sim_speed_spin.setValue(1.0)
-        self.sim_speed_spin.setToolTip("Simulation speed multiplier — scales physics dt (beacon motion + scene). 1.0 = real-time, 0.5 = half, 3.0 = fast stress.")
-        self.sim_speed_spin.setMinimumHeight(26)
-        tuning_grid.addWidget(self.sim_speed_spin, 0, 1)
-
-        tuning_grid.addWidget(self._label("Brightness"), 0, 2)
-        self.global_brightness_spin = QSpinBox()
-        self.global_brightness_spin.setRange(100, 255)
-        self.global_brightness_spin.setValue(255)
-        self.global_brightness_spin.setToolTip("Global beacon brightness override — sets brightness for all beacons (visual + detector). 255 = max.")
-        self.global_brightness_spin.setMinimumHeight(26)
-        tuning_grid.addWidget(self.global_brightness_spin, 0, 3)
-
-        tuning_grid.addWidget(self._label("Radius"), 1, 0)
-        self.global_radius_spin = QSpinBox()
-        self.global_radius_spin.setRange(2, 20)
-        self.global_radius_spin.setValue(5)
-        self.global_radius_spin.setSuffix(" px")
-        self.global_radius_spin.setToolTip("Global beacon radius — photometric size for all beacons. Affects detection and detection gating.")
-        self.global_radius_spin.setMinimumHeight(26)
-        tuning_grid.addWidget(self.global_radius_spin, 1, 1)
-
-        tuning_hint = QLabel("Speed scales dt; Brightness/Radius globally override per-beacon photometry (live). Use 1.0× for nominal 30 Hz.")
-        tuning_hint.setWordWrap(True)
-        tuning_hint.setStyleSheet("color:#64748b; font-size:10px; font-style:italic;")
-        tuning_grid.addWidget(tuning_hint, 2, 0, 1, 4)
-        layout.addWidget(tuning_box)
-
-        # Wire tuning spins to emit signals (MainWindow handlers — no debounce, immediate)
-        self.sim_speed_spin.valueChanged.connect(self.simSpeedChanged.emit)
-        self.global_brightness_spin.valueChanged.connect(self.globalBrightnessChanged.emit)
-        self.global_radius_spin.valueChanged.connect(self.globalRadiusChanged.emit)
+        # Simulation & Global Tuning removed entirely per user request
+        self.sim_speed_spin = None
+        self.global_brightness_spin = None
+        self.global_radius_spin = None
 
         transport_card = QFrame()
         transport_card.setStyleSheet("QFrame { background:#ffffff; border:1px solid #e5e7eb; border-radius:8px; }")

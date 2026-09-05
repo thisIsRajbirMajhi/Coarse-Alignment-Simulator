@@ -16,7 +16,6 @@ Current modular structure (post-refactor, MainWindow 2578→~140 lines):
     - gui.panels.disturbances_panel    : DisturbancesPanel (Image Noise, Jitter, Atmosphere, Platform)
     - gui.panels.environment_panel     : EnvironmentPanel (World, Seed, Atmosphere, Starfield)  [canonical, shim at gui/environment_panel.py]
     - gui.panels.multi_beacon_panel    : MultiBeaconPanel (Count, Target, Shape, Motion, etc.) [canonical, shim at gui/multi_beacon_panel.py]
-    - gui.panels.tuning_panel          : TuningPanel (Detection & Tracking)
   Windows:
     - gui.windows.control_window       : ControlDashboardWindow (detached control deck)
     - gui.windows.dashboard_window     : DashboardWindow (legacy, dummy after consolidation)

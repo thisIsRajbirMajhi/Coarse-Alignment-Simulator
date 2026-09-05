@@ -12,7 +12,6 @@ from environment.config import EnvironmentConfig  # noqa
 from camera.config import CameraConfig  # noqa
 from target.config import MultiBeaconConfig  # noqa
 from control.config import ControllerConfig  # noqa
-from perf_log.metrics import PerformanceLogger  # noqa
 from gui.styles import TICK_MS  # noqa
 
 
@@ -21,45 +20,13 @@ class LifecycleMixin:
 
     def _start(self):
         if not self._running:
-            # FIX: use monotonic pause offset via logger.adjust_for_pause; start fresh if never started
-            if self.perf.start_time is None and getattr(self.perf, "_start_mono", None) is None:
-                # capture config snapshot for reproducibility
-                try:
-                    cfg_snap = {}
-                    if hasattr(self, "env_config"):
-                        cfg_snap.update({f"env_{k}": v for k, v in self.env_config.to_dict().items()})
-                    if hasattr(self, "camera_config"):
-                        cfg_snap.update({f"cam_{k}": v for k, v in self.camera_config.to_dict().items()})
-                    if hasattr(self, "controller_config"):
-                        cfg_snap.update({f"ctrl_{k}": v for k, v in self.controller_config.to_dict().items()})
-                    if hasattr(self, "disturbance_config"):
-                        try:
-                            cfg_snap.update({f"dist_{k}": v for k, v in self.disturbance_config.to_dict().items()})
-                        except Exception: pass
-                    cfg_snap["world_size"] = getattr(self, "_scene_size", None)
-                    cfg_snap["fov_size"] = getattr(self, "_fov_size", None)
-                    self.perf.start(prefix="simulation", config=cfg_snap)
-                except Exception:
-                    self.perf.start()
             self._last_tick_time = time.time()
             if getattr(self, "_pause_time", None) is not None:
-                # adjust logger elapsed to exclude paused wall time (monotonic)
-                try:
-                    pause_dur = time.time() - self._pause_time
-                    if hasattr(self.perf, "adjust_for_pause"):
-                        self.perf.adjust_for_pause(pause_dur)
-                    else:
-                        # fallback wall adjustment
-                        self.perf.start_time += pause_dur
-                        if hasattr(self.perf, "_start_mono") and self.perf._start_mono is not None:
-                            self.perf._start_mono += pause_dur
-                except Exception:
-                    pass
                 self._pause_time = None
             self.timer.start(TICK_MS); self._running = True
             try: self._update_live_indicators()
             except Exception: pass
-            self.statusBar().showMessage("Running — tracking…", 2000)
+            self.statusBar().showMessage("Running", 2000)
 
     def _pause(self):
         if self._running:
@@ -72,10 +39,6 @@ class LifecycleMixin:
     def _reset(self):
         self.timer.stop(); self._running=False; self._pause_time=None
         try: self._update_live_indicators()
-        except Exception: pass
-        try:
-            if hasattr(self, "perf") and hasattr(self.perf, "close"):
-                self.perf.close()
         except Exception: pass
         # Reset all panels to defaults
         try:
@@ -143,7 +106,8 @@ class LifecycleMixin:
                 try: self.thresh_slider._value_label.setText("200")
                 except Exception: pass
             self._target_speed = 60; self._det_thresh = 200; self._ctrl_gain = 0.15
-            self._tracker_smoothing = 0.25; self._tracker_miss_limit = 5; self._detector_min_area = 2; self._sim_speed = 1.0; self._global_brightness = 255; self._global_radius = 5
+            self._detector_min_area = 2; self._sim_speed = 1.0; self._global_brightness = 255; self._global_radius = 5
+            self._last_detection = None; self._last_estimate = None; self._last_lock_state = "searching"
             self._hitbox_radius = 14; self._center_radius = 2
             # Clear dirty
             try:
@@ -159,41 +123,19 @@ class LifecycleMixin:
             self._rebuild_per_beacon_panels()
             self._sync_per_beacon_xy_ranges()
         except Exception: pass
-        self.perf=PerformanceLogger(); self._camera_drift_state={}; self._platform_motion_state={}; self._jitter_state={}; self._last_tick_time=None
-        # FIX: reset dashboard history immediately so graph clears on reset (not lazy on next tick)
+        self._camera_drift_state={}; self._platform_motion_state={}; self._jitter_state={}; self._last_tick_time=None; self._last_detection=None; self._last_estimate=None; self._last_lock_state="searching"
         try:
-            if hasattr(self, "dashboard_panel") and hasattr(self.dashboard_panel, "reset_history"):
-                self.dashboard_panel.reset_history()
-        except Exception:
-            pass
-        # Reset disturbance global state — fixes stale phase/velocity on fresh run (reproducibility)
+            if hasattr(self, "_reset_stats"):
+                self._reset_stats()
+        except Exception: pass
+        # Reset disturbance global state
         try:
             dist.reset_disturbance_state()
-            # Also clear per-instance drift / platform / jitter dicts (already {}) and any module globals
             self._camera_drift_state.clear()
             if hasattr(self, "_platform_motion_state"): self._platform_motion_state.clear()
             if hasattr(self, "_jitter_state"): self._jitter_state.clear()
         except Exception:
             pass
-        # Proper reset: show initial 0 values with correct units (not "-") so no field appears empty
-        try:
-            if hasattr(self, "dashboard_panel") and hasattr(self.dashboard_panel, "update_from_summary"):
-                # tracker is newly created via _build_simulation, use its status
-                init_status = getattr(getattr(self, "tracker", None), "status", None)
-                init_status = init_status.value if hasattr(init_status, "value") else "searching"
-                cam_scale = 0.035
-                try:
-                    if hasattr(self, "camera") and hasattr(self.camera, "config") and getattr(self.camera.config, "pixel_scale_mrad", None) is not None:
-                        cam_scale = float(self.camera.config.pixel_scale_mrad)
-                except Exception:
-                    pass
-                self.dashboard_panel.update_from_summary(self.perf.summary(), init_status, None, camera_scale_mrad=cam_scale)
-        except Exception:
-            # Fallback: set labels to 0 with units
-            for lbl in self.stat_labels.values():
-                try:
-                    lbl.setText("0.0")
-                except Exception: pass
         self.footer_lock.setText("SEARCHING"); self.lock_dot.setStyleSheet("color:#64748b; font-size:14px;")
         self.viewport_label.clear(); self.minimap_label.clear()
         # Force repaint for immediate visibility
@@ -209,23 +151,9 @@ class LifecycleMixin:
         self.statusBar().showMessage("Reset — ready", 2000)
 
     def _export_log(self):
-        log_dir = getattr(self.perf, "log_dir", "log")
-        default_name = os.path.join(log_dir, f"simulation_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
-        path, _ = QFileDialog.getSaveFileName(self, "Export performance log", default_name, "CSV (*.csv);;JSON (*.json)")
-        if path:
-            try:
-                self.perf.export_report(path)
-                QMessageBox.information(self, "Export", f"Saved to:\n{path}")
-            except Exception as e:
-                QMessageBox.critical(self, "Export failed", str(e))
+        QMessageBox.information(self, "Export", "Logging has been removed — no data to export.")
 
     def closeEvent(self, event):
-        # FIX: ensure logger file closed on app exit (prevents leak / data loss)
-        try:
-            if hasattr(self, "perf") and hasattr(self.perf, "close"):
-                self.perf.close()
-        except Exception:
-            pass
         try:
             if hasattr(self, "timer"):
                 self.timer.stop()

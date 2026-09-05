@@ -70,8 +70,8 @@ CAMERA_JITTER_LIMITS: tuple[float, float] = (0.0, 20.0)
 CAMERA_JITTER_DEFAULT: float = 0.0
 CAMERA_JITTER_MAX: float = 20.0
 
-# ── Atmospheric Disturbance — Clear/Haze/Fog/Rain/Low Light + User ───────
-ATMOSPHERIC_PRESETS: tuple[str, ...] = ("Clear", "Haze", "Fog", "Rain", "Low Light", "User Defined")
+# ── Atmospheric Disturbance — Clear/Haze/Fog + User ───────
+ATMOSPHERIC_PRESETS: tuple[str, ...] = ("Clear", "Haze", "Fog", "User Defined")
 ATMOSPHERIC_DEFAULT_PRESET: str = "Clear"
 # Contrast/brightness reduction 0..100 % (maps to 0..1 fraction)
 ATMOSPHERIC_CONTRAST_LIMITS: tuple[float, float] = (0.0, 100.0)
@@ -81,8 +81,6 @@ ATMOSPHERIC_PRESET_MAP: dict[str, dict] = {
     "Clear":      {"contrast": 0,  "brightness": 0,  "blur": 0.0, "haze": 0.0},
     "Haze":       {"contrast": 15, "brightness": 10, "blur": 0.6, "haze": 0.18},
     "Fog":        {"contrast": 38, "brightness": 22, "blur": 1.4, "haze": 0.42},
-    "Rain":       {"contrast": 24, "brightness": 18, "blur": 0.4, "haze": 0.12},
-    "Low Light":  {"contrast": 18, "brightness": 48, "blur": 0.2, "haze": 0.08},
     "User Defined": {"contrast": 0, "brightness": 0, "blur": 0.0, "haze": 0.0},
 }
 

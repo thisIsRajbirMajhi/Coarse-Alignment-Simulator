@@ -15,12 +15,10 @@ DEFAULTS: dict = {
     "bg_top": 12,                 # int 0..60  — zenith (top) gradient color
     "bg_bottom": 22,              # int 0..80  — horizon (bottom) gradient color
     "vignetting_pct": 0,           # int 0..92  — edge darkening % (APPLIED at camera image stage,
-                                  #              NOT world; follows camera FOV)
+                                   #              NOT world; follows camera FOV)
     "haze_pct": 35,               # int 0..100 — overall fog/haze level % (static field + scalar shimmer)
     "star_count": 60,             # int 0..4000 — star/clutter count
     "star_brightness": 1.0,       # float 0.5..1.8 — global brightness scale
-    "dynamic": False,             # bool — whether background animates
-    "dynamic_speed": 1.0,         # float 0.1..5.0 — animation time multiplier
 }
 
 # World configurable 2000..5000 per PDF (min 2000), God View shows full world at chosen size.
@@ -35,7 +33,6 @@ LIMITS: dict[str, tuple[float, float]] = {
     "haze_pct": (0, 100),
     "star_count": (0, 4000),
     "star_brightness": (0.5, 1.8),
-    "dynamic_speed": (0.1, 5.0),
 }
 
 # Internal conversion helpers (kept here to avoid duplication)

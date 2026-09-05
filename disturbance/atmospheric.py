@@ -1,6 +1,5 @@
-# disturbance/atmospheric.py - Physical atmospheric optics — depth-aware fog, rain, low-light
-# Robust-simple refactor: Beer-Lambert extinction, horizon-weighted fog, motion-blurred rain,
-# and low-light desaturation + Poisson boost — all via single apply_atmospheric_disturbance.
+# disturbance/atmospheric.py - Physical atmospheric optics — depth-aware fog
+# Robust-simple refactor: Beer-Lambert extinction, horizon-weighted fog — all via single apply_atmospheric_disturbance.
 
 from __future__ import annotations
 
@@ -26,9 +25,7 @@ def _resolve_preset(
 ) -> dict:
     """Map preset name to params, honouring User Defined overrides."""
     key = str(preset).strip()
-    if key.lower() in ("low_light", "low light", "low-light"):
-        key = "Low Light"
-    elif key.lower() in ("user_defined", "user defined", "user-defined"):
+    if key.lower() in ("user_defined", "user defined", "user-defined"):
         key = "User Defined"
     elif key.lower() == "clear":
         key = "Clear"
@@ -36,8 +33,6 @@ def _resolve_preset(
         key = "Haze"
     elif key.lower() == "fog":
         key = "Fog"
-    elif key.lower() == "rain":
-        key = "Rain"
     if key not in ATMOSPHERIC_PRESET_MAP:
         for k in ATMOSPHERIC_PRESET_MAP:
             if k.lower() == key.lower():
@@ -103,63 +98,8 @@ def _apply_contrast_brightness(frame: np.ndarray, contrast_pct: float, brightnes
     return np.clip(f, 0, 255).astype(np.uint8)
 
 
-def _add_rain_streaks(frame: np.ndarray, intensity: float = 0.3, motion_blur: float = 0.0, rng: np.random.Generator | None = None) -> np.ndarray:
-    """
-    Physically-blurred rain streaks with wind angle variance + occlusion.
-
-    Args:
-      intensity: 0..1 rain density
-      motion_blur: extra length from platform motion (px)
-    """
-    if frame.size == 0 or intensity <= 0:
-        return frame
-    _rng = get_rng(rng)
-    h, w = frame.shape[:2]
-    n = int(160 * intensity * (w * h / (640 * 480)) ** 0.5)
-    # Rain density scales non-linearly: light drizzle vs downpour
-    n = int(np.clip(n + int(intensity * 420), 18, 1400))
-    line_mask = np.zeros_like(frame, dtype=np.uint8)
-    blur_extra = int(np.clip(motion_blur, 0, 12))
-    for _ in range(n):
-        x = int(_rng.integers(-10, w + 10))
-        y = int(_rng.integers(-20, h + 20))
-        # Length varies with intensity: drizzle 7-14, heavy 14-28 + motion blur
-        if intensity < 0.35:
-            length = int(_rng.integers(7, 15)) + blur_extra
-        else:
-            length = int(_rng.integers(13, 27)) + blur_extra
-        thickness = 1 if _rng.random() < 0.78 else 2
-        # Wind shear: 68-76 deg baseline + ±6 deg gust
-        base_angle = _rng.uniform(68, 76)
-        gust = _rng.normal(0, 2.2)
-        angle = math.radians(np.clip(base_angle + gust, 58, 82))
-        x2 = int(x + length * math.cos(angle))
-        y2 = int(y + length * math.sin(angle))
-        # Streak brightness 175-225, slightly desaturated with fog
-        val = int(np.clip(_rng.normal(202, 12), 172, 230))
-        color = (val, val, val) if frame.ndim == 3 else val
-        cv2.line(line_mask, (x, y), (x2, y2), color, thickness, cv2.LINE_AA)  # type: ignore
-    # Occlusion dimming: where multiple streaks overlap looks brighter — use 0.16-0.22 alpha
-    alpha = 0.17 + 0.04 * float(np.clip(intensity, 0, 1))
-    overlay = frame.astype(np.float32)
-    nz = line_mask > 0
-    if np.any(nz):
-        # Soften streak edges with tiny blur for realism
-        if intensity > 0.4:
-            line_mask = cv2.GaussianBlur(line_mask, (0, 0), sigmaX=0.6)
-            nz = line_mask > 12
-        overlay[nz] = overlay[nz] * (1 - alpha) + line_mask[nz].astype(np.float32) * alpha
-        overlay = np.clip(overlay, 0, 255)
-        # Micro-occlusion: 2% of streaks create a bright highlight that can hide beacon
-        # (adds challenge for AI — beacon behind streak dims 12%)
-        highlight_mask = (line_mask > 90) & (_rng.random(frame.shape[:2]) < 0.02) if frame.ndim == 2 else (line_mask[:, :, 0] > 90) & (_rng.random(frame.shape[:2]) < 0.02)
-        if np.any(highlight_mask):
-            overlay[highlight_mask] = np.clip(overlay[highlight_mask] * 0.88, 0, 255)
-    return overlay.astype(np.uint8)
-
-
 def _apply_blooming(frame: np.ndarray, strength: float = 0.12) -> np.ndarray:
-    """Subtle blooming for bright beacons in fog/low-light — spreads highlights."""
+    """Subtle blooming for bright beacons in fog — spreads highlights."""
     if strength <= 1e-3 or frame.size == 0:
         return frame
     # Bloom only bright pixels >185
@@ -184,7 +124,7 @@ def apply_atmospheric_disturbance(
     rng: np.random.Generator | None = None,
 ) -> np.ndarray:
     """
-    Atmospheric disturbance — Clear/Haze/Fog/Rain/Low Light + User Defined.
+    Atmospheric disturbance — Clear/Haze/Fog + User Defined.
 
     Spec notes for user-defined: reduction in contrast and brightness is user-configurable.
     Each preset maps to contrast%, brightness%, blur sigma, haze overlay.
@@ -251,22 +191,5 @@ def apply_atmospheric_disturbance(
             alpha_row = np.linspace(alpha * 0.75, alpha * 1.25, h, dtype=np.float32)[:, None]
             out_f = out_f * (1 - alpha_row) + haze_col * alpha_row
         out = np.clip(out_f, 0, 255).astype(np.uint8)
-
-    # Rain streaks — physics rain with motion blur
-    if str(preset).lower() == "rain" or preset == "Rain":
-        _rng = get_rng(rng)
-        rain_intensity = 0.22 + float(params.get("haze", 0.12)) * 0.6 + contrast / 400.0
-        rain_intensity = float(np.clip(rain_intensity, 0.18, 0.62))
-        # Motion blur from platform would be passed via blur param in future; approx 0 here
-        out = _add_rain_streaks(out, intensity=rain_intensity, motion_blur=blur_sigma * 1.2, rng=_rng)
-
-    # Low Light — desaturate + add slight bloom for beacon halo challenge
-    if str(preset).lower() in ("low light", "low_light"):
-        if out.ndim == 3:
-            grey = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
-            grey3 = cv2.cvtColor(grey, cv2.COLOR_GRAY2BGR)
-            out = cv2.addWeighted(out, 0.62, grey3, 0.38, 0)
-            # Low-light bloom makes beacon bleed — AI must handle halo
-            out = _apply_blooming(out, strength=0.11)
 
     return out.astype(frame.dtype, copy=False)

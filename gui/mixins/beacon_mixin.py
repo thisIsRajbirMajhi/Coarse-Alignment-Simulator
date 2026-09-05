@@ -1,12 +1,11 @@
 # gui/mixins/beacon_mixin.py - Beacon/target handling
-# Extracted from gui/main_window.py beacon section (200+ lines).
+# Tracking removed: no tracker recreation on beacon change.
 
 import time
 import numpy as np
 from PyQt5.QtWidgets import QGroupBox
 from target.motion import MotionProfile, create_beacons  # noqa
 from target.config import MultiBeaconConfig  # noqa
-from tracking.tracker import Tracker  # noqa
 
 
 class BeaconMixin:
@@ -45,8 +44,6 @@ class BeaconMixin:
                 pass
             if hasattr(self, "beacons") and 0 <= idx < len(self.beacons):
                 self.target = self.beacons[idx]
-                try: self.tracker = Tracker(smoothing=0.25, miss_limit=5)
-                except Exception: pass
                 self.statusBar().showMessage(f"Target -> Beacon #{idx}", 2500)
                 try:
                     if hasattr(self, "beacon_manager"):
@@ -71,9 +68,7 @@ class BeaconMixin:
 
     def _sync_beacon_to_global(self, cfg):
         try:
-            # Keep hidden global motion/speed in sync with beacon panel (single source)
             cfg = cfg.validate() if hasattr(cfg, "validate") else cfg
-            # Map beacon profile to global MotionProfile string
             rev = {"linear": "linear", "curved": "curved", "figure_eight": "figure_eight", "spiral": "spiral", "sinusoidal": "sinusoidal", "zigzag": "zigzag", "random": "curved"}
             prof = rev.get(str(getattr(cfg, "profile", "curved")).lower(), "curved")
             if hasattr(self, "motion_combo"):
@@ -122,8 +117,6 @@ class BeaconMixin:
                 self._target_beacon_id = tid; self._beacon_count = int(multi_cfg.beacon_count)
                 self.target = self.beacons[tid] if self.beacons else self.beacons[0]
                 self.statusBar().showMessage(f"Beacons: {self._beacon_count} Target #{tid} {shape} {size_w}x{size_h}", 3000)
-                try: self.tracker = Tracker(smoothing=0.25, miss_limit=5)
-                except Exception: pass
                 self._rebuild_per_beacon_panels()
                 try: self._on_target_beacon_change(tid)
                 except Exception: pass
@@ -143,7 +136,6 @@ class BeaconMixin:
         seed = int(self.seed_spin.value()) + int(time.time()) % 1000
         self.beacons = create_beacons(self._beacon_count, (scene_w, scene_h), profile, speed,
                                        seed=seed, hitbox_radius=self._hitbox_radius, center_radius=self._center_radius)
-        # respect selected target id
         try:
             tid = int(self.target_beacon_spin.value())
         except Exception:
@@ -152,10 +144,7 @@ class BeaconMixin:
         self._target_beacon_id = tid
         self.target = self.beacons[tid] if self.beacons else self.beacons[0]
         self.statusBar().showMessage(f"Beacons: {self._beacon_count}  Target #{tid}  hitbox {self._hitbox_radius}px  center {self._center_radius}px", 3000)
-        try: self.tracker = Tracker(smoothing=0.25, miss_limit=5)
-        except Exception: pass
         self._rebuild_per_beacon_panels()
-        # highlight target
         try: self._on_target_beacon_change(tid)
         except Exception: pass
         if was_running: self._start()
@@ -183,8 +172,6 @@ class BeaconMixin:
                 tid = int(np.clip(int(tid), 0, max(0, len(self.beacons)-1)))
                 self._target_beacon_id = tid
                 self.target = self.beacons[tid] if self.beacons else self.beacons[0]
-                try: self.tracker = Tracker(smoothing=0.25, miss_limit=5)
-                except Exception: pass
                 self._rebuild_per_beacon_panels()
                 try: self._on_target_beacon_change(tid)
                 except Exception: pass
@@ -209,8 +196,6 @@ class BeaconMixin:
         tid = int(np.clip(tid, 0, max(0, len(self.beacons)-1)))
         self._target_beacon_id = tid
         self.target = self.beacons[tid] if self.beacons else self.beacons[0]
-        try: self.tracker = Tracker(smoothing=0.25, miss_limit=5)
-        except Exception: pass
         self._rebuild_per_beacon_panels()
         try: self._on_target_beacon_change(tid)
         except Exception: pass
@@ -219,7 +204,6 @@ class BeaconMixin:
         except Exception: pass
 
     def _rebuild_per_beacon_panels(self):
-        # Single panel — no per-beacon rebuild needed, keep current beacon config
         try:
             if hasattr(self, "beacon_manager"):
                 self.beacon_manager._update_status()
@@ -229,34 +213,22 @@ class BeaconMixin:
         return QGroupBox(f"Beacon #{idx}")
 
     def _on_per_beacon_enabled(self, idx, checked): pass
-
     def _on_per_beacon_profile(self, idx, txt): pass
-
     def _on_per_beacon_speed(self, idx, v): pass
-
     def _on_per_beacon_brightness(self, idx, v): pass
-
     def _on_per_beacon_radius(self, idx, v): pass
-
     def _on_per_beacon_hitbox(self, idx, v): pass
-
     def _on_per_beacon_center(self, idx, v): pass
-
     def _on_per_beacon_x(self, idx, v): pass
-
     def _on_per_beacon_y(self, idx, v): pass
-
     def _on_per_beacon_heading(self, idx, deg): pass
-
     def _randomize_single_beacon_pos(self, idx): pass
 
     def _randomize_all_beacons(self):
         try:
             import random
-            # Randomize all beacon parameters via panel
             if hasattr(self, "beacon_manager"):
                 bm = self.beacon_manager
-                # Random shape
                 try:
                     bm.combo_shape.setCurrentIndex(random.randint(0, bm.combo_shape.count()-1))
                 except Exception: pass
@@ -280,7 +252,6 @@ class BeaconMixin:
                 except Exception: pass
                 self.statusBar().showMessage(f"Randomized parameters for {len(getattr(self,'beacons',[]))} beacons", 2500)
                 return
-            # Fallback: randomize live beacons directly
             import random as _rnd
             for b in getattr(self, "beacons", []):
                 try:

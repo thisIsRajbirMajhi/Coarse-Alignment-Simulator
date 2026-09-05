@@ -10,7 +10,6 @@ from gui.mixins.lifecycle_mixin import LifecycleMixin  # noqa: F401
 from gui.mixins.tick_mixin import TickMixin  # noqa: F401
 from gui.mixins.rendering_mixin import RenderingMixin  # noqa: F401
 from gui.mixins.stats_mixin import StatsMixin  # noqa: F401
-from gui.mixins.presets_mixin import PresetsMixin  # noqa: F401
 
 __all__ = [
     "StateMixin",
@@ -19,7 +18,6 @@ __all__ = [
     "BeaconMixin",
     "SceneMixin",
     "ControlMixin",
-    "PresetsMixin",
     "LifecycleMixin",
     "TickMixin",
     "RenderingMixin",

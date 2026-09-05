@@ -1,5 +1,5 @@
 # gui/mixins/rendering_mixin.py - Viewport/minimap rendering helpers
-# Extracted from gui/main_window.py rendering section (300 lines).
+# Tracking/Search removed: viewport uses direct detection estimate.
 
 import numpy as np
 import cv2
@@ -21,7 +21,6 @@ class RenderingMixin:
         """Draw beacon photometry onto a 640×640 FOV frame — realistic optics (Airy/Gaussian + streak + bloom)."""
         beacons = getattr(self, "beacons", [self.target]) if hasattr(self, "beacons") else [self.target]
         h, w = fov_frame.shape[:2]
-        # Fog factor for optics: combine environment haze and atmospheric preset for size/bloom
         fog_factor = 0.0
         bloom_base = 0.0
         try:
@@ -32,10 +31,6 @@ class RenderingMixin:
                 bloom_base = 0.10
             elif preset == "haze":
                 fog_factor = max(fog_factor, 0.18)
-            elif "low light" in preset:
-                bloom_base = 0.12
-            elif preset == "rain":
-                fog_factor = max(fog_factor, 0.12)
         except Exception:
             pass
         fog_factor = float(np.clip(fog_factor, 0.0, 0.85))
@@ -57,11 +52,10 @@ class RenderingMixin:
             except Exception:
                 brightness, radius = float(getattr(beacon, "brightness", 200)), float(getattr(beacon, "radius", 5))
             if brightness < 8:
-                continue  # eclipsed / deeply faded — invisible
+                continue
             shape = str(getattr(beacon, "shape", "square"))
             size_w = int(getattr(beacon, "size_w", 10))
             size_h = int(getattr(beacon, "size_h", 10))
-            # Optics params: motion streak, per-beacon bloom, AoA jitter
             motion_vector = (0.0, 0.0)
             bloom_strength = float(bloom_base)
             jitter_px = 0.0
@@ -78,13 +72,11 @@ class RenderingMixin:
                         color_bgr = get_beacon_color_bgr(bid, float(brightness))
                     except Exception:
                         color_bgr = None
-                # Scintillation-driven bloom: deeply scintillated bright beacons bloom more
                 if float(brightness) > 210 and fog_factor > 0.2:
                     bloom_strength += 0.06
             except Exception:
                 pass
 
-            # Try realistic optics rendering — fallback to simple rectangle on failure
             rendered = False
             try:
                 from target.optics import render_beacon_patch
@@ -96,29 +88,20 @@ class RenderingMixin:
                     color_bgr=color_bgr,
                 )
                 ph, pw = patch.shape[:2]
-                # Center patch at (px, py) — handle clipping at FOV edges (partial visibility)
                 x0 = int(round(px - pw // 2))
                 y0 = int(round(py - ph // 2))
                 x1 = x0 + pw
                 y1 = y0 + ph
-                # Intersection with FOV
                 sx0 = max(0, x0); sy0 = max(0, y0)
                 sx1 = min(w, x1); sy1 = min(h, y1)
                 if sx1 > sx0 and sy1 > sy0:
-                    # Source region in patch
                     px0 = sx0 - x0; py0 = sy0 - y0
                     px1 = px0 + (sx1 - sx0); py1 = py0 + (sy1 - sy0)
                     patch_crop = patch[py0:py1, px0:px1]
                     roi = fov_frame[sy0:sy1, sx0:sx1]
-                    # Blend: max (additive light) — beacon is emissive
-                    # Use lighten: result = max(roi, patch) with slight screen blend for halo
-                    # For realistic optics, patch already includes background level (0..255), so
-                    # we use alpha blend where patch brightens
                     alpha = (patch_crop.astype(np.float32) / 255.0 * 0.88 + 0.12)
                     alpha = np.clip(alpha, 0, 1)
-                    # Emissive additive
                     blended = roi.astype(np.float32) * (1 - alpha * 0.72) + patch_crop.astype(np.float32) * alpha
-                    # Keep at least patch where patch is very bright
                     bright_mask = patch_crop.max(axis=2) > 165 if patch_crop.ndim == 3 else patch_crop > 165
                     if np.any(bright_mask):
                         if roi.ndim == 3:
@@ -131,7 +114,6 @@ class RenderingMixin:
                 rendered = False
 
             if not rendered:
-                # Fallback — prior simple rectangle/circle
                 ix, iy = int(round(px)), int(round(py))
                 try:
                     vib = Renderer.beacon_vibrant_color(int(getattr(beacon, "beacon_id", 0)), float(brightness))
@@ -162,21 +144,22 @@ class RenderingMixin:
         return Renderer.draw_corner_brackets(img, margin, length, color, thickness)
 
     def _render_viewport(self, fov_frame: np.ndarray, estimate, all_dets: list[dict] | None = None):
-        # Standard crosshair only — no overlay configuration
         pixel_scale = 0.035
         try:
             pixel_scale = float(getattr(getattr(self, "camera", None).config, "pixel_scale_mrad", 0.035))
         except Exception: pass
+        # Use direct estimate, no tracker
         try:
-            display = Renderer.render_viewport(fov_frame, self.camera, getattr(self, "beacons", [self.target]), self.target, self.tracker, all_dets, pixel_scale_mrad=pixel_scale)
-        except Exception:
-            display = Renderer.render_viewport(fov_frame, self.camera, getattr(self, "beacons", [self.target]), self.target, self.tracker, all_dets)
+            display = Renderer.render_viewport(fov_frame, self.camera, getattr(self, "beacons", [self.target]), self.target, None, all_dets, estimate=estimate, pixel_scale_mrad=pixel_scale)
+        except TypeError:
+            try:
+                display = Renderer.render_viewport(fov_frame, self.camera, getattr(self, "beacons", [self.target]), self.target, None, all_dets)
+            except Exception:
+                display = fov_frame.copy()
         self._last_viewport_frame = display
         self._set_pixmap(self.viewport_label, display)
 
     def _get_minimap_thumb(self, lw: int, lh: int) -> np.ndarray:
-        """Return cached low-res thumb of static background (rebuild only on size/scene change).
-        Saves 11 ms copy + 3 ms resize of 5000×5000 each tick → 0.2 ms copy of 0.16 MP thumb."""
         lw = max(50, int(lw)); lh = max(50, int(lh))
         scene_id = id(getattr(self.scene, '_static_background', None))
         if (self._minimap_thumb is not None and self._minimap_thumb_size == (lw, lh)
@@ -186,7 +169,6 @@ class RenderingMixin:
             base = getattr(self.scene, '_static_background', None)
             if base is None:
                 base = self.scene.get_frame()
-            # For 5000×5000 → 400×300, INTER_AREA is sharper and faster than LINEAR for downscale
             self._minimap_thumb = cv2.resize(base, (lw, lh), interpolation=cv2.INTER_AREA)
         except Exception:
             self._minimap_thumb = np.zeros((lh, lw, 3), dtype=np.uint8)
@@ -202,28 +184,34 @@ class RenderingMixin:
     def _render_minimap(self, scene_frame: np.ndarray | None = None):
         lw = self.minimap_label.width() if self.minimap_label.width()>10 else self._god_display_size[0]
         lh = self.minimap_label.height() if self.minimap_label.height()>10 else self._god_display_size[1]
-        # Optimized path: use cached thumb (no 5000×5000 copy/resize). Fallback to legacy if needed.
         if hasattr(self, '_get_minimap_thumb'):
             try:
                 thumb = self._get_minimap_thumb(lw, lh)
-                display = Renderer.render_minimap_cached(thumb, self.camera, getattr(self, "beacons", [self.target]), self.target, self.tracker, (lw, lh), self._scene_size)
+                # Pass estimate as tracker replacement
+                est = getattr(self, "_last_estimate", None)
+                try:
+                    display = Renderer.render_minimap_cached(thumb, self.camera, getattr(self, "beacons", [self.target]), self.target, None, (lw, lh), self._scene_size, estimate=est)
+                except TypeError:
+                    display = Renderer.render_minimap_cached(thumb, self.camera, getattr(self, "beacons", [self.target]), self.target, None, (lw, lh), self._scene_size)
                 self._last_god_frame = display
                 self._set_pixmap(self.minimap_label, display)
                 return
             except Exception:
                 pass
-        # Legacy fallback (heavy)
         if scene_frame is None:
             try:
                 scene_frame = self.scene._static_background.copy() if hasattr(self.scene, '_static_background') and self.scene._static_background is not None else self.scene.get_frame()
             except Exception:
                 scene_frame = self.scene.get_frame()
-        display = Renderer.render_minimap(scene_frame, self.camera, getattr(self, "beacons", [self.target]), self.target, self.tracker, (lw, lh), self._scene_size)
+        est = getattr(self, "_last_estimate", None)
+        try:
+            display = Renderer.render_minimap(scene_frame, self.camera, getattr(self, "beacons", [self.target]), self.target, None, (lw, lh), self._scene_size, estimate=est)
+        except TypeError:
+            display = Renderer.render_minimap(scene_frame, self.camera, getattr(self, "beacons", [self.target]), self.target, None, (lw, lh), self._scene_size)
         self._last_god_frame = display
         self._set_pixmap(self.minimap_label, display)
 
     def _set_pixmap(self, label, bgr_frame: np.ndarray):
-        # Delegate to Renderer (handles QImage copy + scaling)
         rgb = Renderer.set_pixmap(label, bgr_frame)
         self._last_rgb = rgb
         return rgb

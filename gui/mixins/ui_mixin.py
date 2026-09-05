@@ -248,23 +248,7 @@ class UIMixin:
         tabs.setDocumentMode(False)
         cw_layout.addWidget(tabs, 1)
 
-        # ── Presets Tab — NEW (one-click full-system scenarios) ──
-        try:
-            from gui.panels.presets_panel import PresetsPanel
-            self.presets_panel = PresetsPanel()
-            tabs.addTab(self.presets_panel, "Presets")
-            # Handlers live in PresetsMixin (_apply_preset); wire here (MainWindow will have method via mixin)
-            try:
-                self.presets_panel.presetRequested.connect(self._apply_preset)  # type: ignore
-                self.presets_panel.randomizeRequested.connect(self._randomize_all_presets)  # type: ignore
-            except Exception:
-                pass
-        except Exception as e:
-            import logging
-            logging.getLogger("gui").warning(f"Presets panel failed: {e}")
-            self.presets_panel = None  # type: ignore
-
-        # ── Global Tab — Modular (GlobalPanel) — upgraded with Sim Speed + Brightness/Radius ──
+        # ── Global Tab — Modular (GlobalPanel) ──
         self.global_panel = GlobalPanel()
         # Back-compat aliases — handlers expect these attrs on MainWindow
         self.motion_combo = self.global_panel.motion_combo
@@ -274,29 +258,14 @@ class UIMixin:
         self.pause_btn = self.global_panel.pause_btn
         self.reset_btn = self.global_panel.reset_btn
         self.export_btn = self.global_panel.export_btn
-        # NEW aliases for global tuning (exposed Sim Speed, Brightness, Radius)
-        self.sim_speed_spin = getattr(self.global_panel, "sim_speed_spin", None)
-        self.global_brightness_spin = getattr(self.global_panel, "global_brightness_spin", None)
-        self.global_radius_spin = getattr(self.global_panel, "global_radius_spin", None)
         # Wire global signals —
         self.global_panel.motionChanged.connect(self._on_motion_change)
         self.global_panel.speed_slider.valueChanged.connect(self._on_speed_change)
-        self.global_panel.thresh_slider.valueChanged.connect(self._on_thresh_change)
         self.global_panel.startRequested.connect(self._start)
         self.global_panel.pauseRequested.connect(self._pause)
         self.global_panel.resetRequested.connect(self._reset)
         self.global_panel.exportRequested.connect(self._export_log)
         self.global_panel.dashboardRequested.connect(self._show_dashboard_window)
-        # NEW: wire global tuning spins (immediate handlers in ControlMixin)
-        try:
-            if hasattr(self.global_panel, "simSpeedChanged"):
-                self.global_panel.simSpeedChanged.connect(self._on_sim_speed_change)
-            if hasattr(self.global_panel, "globalBrightnessChanged"):
-                self.global_panel.globalBrightnessChanged.connect(self._on_global_brightness_change)
-            if hasattr(self.global_panel, "globalRadiusChanged"):
-                self.global_panel.globalRadiusChanged.connect(self._on_global_radius_change)
-        except Exception:
-            pass
         tabs.addTab(self.global_panel, "Global")
 
         # ── Beacons Tab — Simplified: only count, target, randomize motion ──
@@ -315,41 +284,18 @@ class UIMixin:
         self.beacon_manager.targetChanged.connect(self._on_target_beacon_change)
         self.beacon_manager.randomizeAllRequested.connect(self._randomize_all_beacons)
         self.beacon_manager.randomizeMotionRequested.connect(self._randomize_beacon_motion)
-        # Tuning: threshold in beacon panel controls detector
         try:
-            self.beacon_manager.threshChanged.connect(self._on_thresh_change)
-            # Keep global hidden thresh in sync for compat
-            self.beacon_manager.threshChanged.connect(lambda v: (self.thresh_slider.blockSignals(True), self.thresh_slider.setValue(int(v)), self.thresh_slider.blockSignals(False)))
-            # Also sync global motion/speed to beacon motion for single-panel consistency
             self.beacon_manager.multiConfigChanged.connect(self._sync_beacon_to_global)
         except Exception: pass
         beacons_layout_outer.addStretch()
         tabs.addTab(beacons_tab, "Beacons")
 
-        # ── Tuning Tab — Detection & Tracking (threshold, smoothing, lock) ──
-        try:
-            from gui.panels.tuning_panel import TuningPanel
-            from beacon_tracker.detection.config import DetectorConfig as _DetCfg
-            from tracking.config import TrackerConfig as _TrkCfg
-            # Initial from current detector/tracker or defaults
-            try:
-                det_init = _DetCfg(brightness_threshold=int(getattr(self, "_det_thresh", 200)), min_area=int(getattr(self, "_detector_min_area", 2))).validate()
-            except Exception: det_init = _DetCfg().validate()
-            try:
-                trk_init = _TrkCfg(smoothing=float(getattr(self, "_tracker_smoothing", 0.25)), miss_limit=int(getattr(self, "_tracker_miss_limit", 5))).validate()
-            except Exception: trk_init = _TrkCfg().validate()
-            self.tuning_panel = TuningPanel(detector=det_init, tracker=trk_init)
-            # Back-compat aliases for MainWindow legacy handlers
-            self.thresh_spin = self.tuning_panel.thresh_spin
-            self.detector_min_area_spin = self.tuning_panel.min_area_spin
-            self.tracker_smoothing_spin = self.tuning_panel.smoothing_spin
-            self.tracker_miss_spin = self.tuning_panel.miss_spin
-            self.tuning_panel.detectorChanged.connect(self._on_detector_tuning_changed)
-            self.tuning_panel.trackerChanged.connect(self._on_tracker_tuning_changed)
-            tabs.addTab(self.tuning_panel, "Tuning")
-        except Exception as e:
-            import logging
-            logging.getLogger("gui").warning(f"Tuning panel failed: {e}")
+        # ── Tuning Tab removed (beacon_tracker removed) ──
+        self.tuning_panel = None
+        self.thresh_spin = None
+        self.detector_min_area_spin = None
+        self.tracker_smoothing_spin = None
+        self.tracker_miss_spin = None
 
         # ── Camera Tab — Modular (CameraPanel, 11 params) ──
         # 4 groups: A FOV/Optics, B Pan-Tilt Mechanics, C Display, D Units, E Gain
@@ -419,14 +365,14 @@ class UIMixin:
         self.scene_h_spin = self.env_panel.scene_h_spin
         self.seed_spin = self.env_panel.seed_spin
         self.random_seed_btn = self.env_panel.random_seed_btn
-        self.dynamic_check = self.env_panel.dynamic_check
+        self.dynamic_check = getattr(self.env_panel, "dynamic_check", None)
         self.haze_spin = self.env_panel.haze_spin
         self.env_star_count_spin = self.env_panel.env_star_count_spin
         self.env_star_brightness_spin = self.env_panel.env_star_brightness_spin
         self.env_bg_top_spin = self.env_panel.env_bg_top_spin
         self.env_bg_bottom_spin = self.env_panel.env_bg_bottom_spin
         self.env_vignetting_spin = self.env_panel.env_vignetting_spin
-        self.env_dynamic_speed_spin = self.env_panel.env_dynamic_speed_spin
+        self.env_dynamic_speed_spin = getattr(self.env_panel, "env_dynamic_speed_spin", None)
         # Wire Randomize button
         self.env_panel.randomizeRequested.connect(self._randomize_seed)
         # Panel's configChanged is throttled — keep dirty tracking + auto-
@@ -439,7 +385,7 @@ class UIMixin:
         tabs.addTab(env_tab, "Environment")
 
         # ── Disturbances Tab — Modular (DisturbancesPanel, full spec) ──
-        # Image Noise (S&P 10%, Gaussian, Poisson multi) + Max StdDev 20+User + Jitter ±20 + Atmosphere 6 presets + Platform 7 profiles
+        # Image Noise (S&P 10%, Gaussian, Poisson multi) + Max StdDev 20+User + Jitter ±20 + Atmosphere 4 presets + Platform 7 profiles
         try:
             from disturbance.config import DisturbanceConfig as _DC2
             init_dc = getattr(self, "disturbance_config", _DC2().validate())
@@ -454,7 +400,7 @@ class UIMixin:
         tabs.addTab(self.disturbances_panel, "Disturbances")
 
         # initial snapshots for dirty tracking — then clear so deck starts clean (no dirty badge)
-        for sec in ["global", "beacons", "camera", "control", "environment", "disturbances", "tuning", "presets"]:
+        for sec in ["global", "beacons", "camera", "control", "environment", "disturbances"]:
             try: self._snapshot_section(sec)
             except Exception: pass
         try:

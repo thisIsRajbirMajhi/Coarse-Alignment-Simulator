@@ -94,7 +94,7 @@ class DisturbanceConfig(BaseValidatedConfig):
       Legacy: turbulence, vibration, camera_motion, noise (0..10 each)
       Image Noise: enable_* + salt_pepper_density (0..0.20) + gaussian_sigma (0..20+user50) + poisson
       Camera Jitter: camera_jitter (0..20 px/frame, user-extensible)
-      Atmospheric: atmospheric_preset (Clear/Haze/Fog/Rain/Low Light/User Defined) + contrast/brightness 0..100
+      Atmospheric: atmospheric_preset (Clear/Haze/Fog/User Defined) + contrast/brightness 0..100
       Platform Motion: platform_profile (Linear default + 6 optional) + platform_speed 0..20 px/frame
 
     Validation: clip_field + normalize preset/profile strings, User Defined honours custom contrast/brightness.
@@ -182,8 +182,6 @@ class DisturbanceConfig(BaseValidatedConfig):
             if preset.lower() in (p.lower().replace(" ", "_"), p.lower().replace(" ", "")):
                 found = p
                 break
-        if found is None and preset.lower() in ("low_light", "low-light"):
-            found = "Low Light"
         if found is None and preset.lower() in ("user_defined", "user-defined", "userdefined"):
             found = "User Defined"
         self.atmospheric_preset = found if found is not None else ATMOSPHERIC_DEFAULT_PRESET
@@ -296,7 +294,7 @@ class DisturbanceConfig(BaseValidatedConfig):
             if self.enable_poisson:
                 self.poisson_scale = float(rng.uniform(0.8, 1.6))
             self.camera_jitter = float(rng.uniform(2, 10))
-            self.atmospheric_preset = str(rng.choice(["Clear", "Haze", "Fog", "Rain"], p=[0.25, 0.35, 0.25, 0.15]))
+            self.atmospheric_preset = str(rng.choice(["Clear", "Haze", "Fog"], p=[0.30, 0.40, 0.30]))
             self.platform_speed = float(rng.uniform(3, 12))
             self.platform_profile = str(rng.choice(["Linear", "Circular", "Random", "Sin"]))
             self.turbulence = int(rng.integers(1, 5))
@@ -312,13 +310,9 @@ class DisturbanceConfig(BaseValidatedConfig):
             self.poisson_scale = float(rng.uniform(1.0, 2.2))
             self.poisson_peak = float(rng.uniform(60, 120))
             self.camera_jitter = float(rng.uniform(10, 18))
-            self.atmospheric_preset = str(rng.choice(["Fog", "Rain", "Low Light"], p=[0.45, 0.30, 0.25]))
-            if self.atmospheric_preset == "Fog":
-                self.atmospheric_contrast = float(rng.uniform(35, 55))
-                self.atmospheric_brightness = float(rng.uniform(18, 32))
-            elif self.atmospheric_preset == "Low Light":
-                self.atmospheric_contrast = float(rng.uniform(15, 30))
-                self.atmospheric_brightness = float(rng.uniform(38, 60))
+            self.atmospheric_preset = "Fog"
+            self.atmospheric_contrast = float(rng.uniform(35, 55))
+            self.atmospheric_brightness = float(rng.uniform(18, 32))
             self.platform_speed = float(rng.uniform(12, 20))
             self.platform_profile = str(rng.choice(["Random", "Spiral", "Figure 8", "Zig-Zag"]))
             self.turbulence = int(rng.integers(4, 9))

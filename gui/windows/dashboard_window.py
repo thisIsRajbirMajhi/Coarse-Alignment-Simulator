@@ -118,21 +118,7 @@ class DashboardWindow(QMainWindow):
         self.statusBar().showMessage("Graph cleared — history reset, metrics continue", 2000)
 
     def _on_export(self):
-        # Delegate to main_window's perf export if available, else snaps from dashboard
-        try:
-            if hasattr(self.main_window, "perf"):
-                log_dir = getattr(self.main_window.perf, "log_dir", "log")
-                default_path = os.path.join(log_dir, f"dashboard_metrics_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
-                path, _ = QFileDialog.getSaveFileName(self, "Export dashboard metrics", default_path, "CSV (*.csv);;JSON (*.json)")
-                if path:
-                    self.main_window.perf.export_report(path)
-                    QMessageBox.information(self, "Export", f"Saved to:\n{path}")
-                    return
-        except Exception as e:
-            QMessageBox.warning(self, "Export", f"Failed: {e}")
-            return
-        # Fallback: inform
-        QMessageBox.information(self, "Export", "No data to export — start simulation first.")
+        QMessageBox.information(self, "Export", "Logging has been removed — no data to export.")
 
     def _on_help(self):
         QMessageBox.information(

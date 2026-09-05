@@ -29,7 +29,7 @@ class DisturbancesPanel(BaseConfigPanel):
     Groups:
       B Image Noise — S&P 10% + Gaussian σ (20px + user 1..50) + Poisson (multi-select, one or more at once)
       C Camera Jitter — ±20 px/frame + user to 50
-      D Atmospheric — Clear/Haze/Fog/Rain/Low Light/User Defined + contrast/brightness (user only when User Defined)
+      D Atmospheric — Clear/Haze/Fog/User Defined + contrast/brightness (user only when User Defined)
       E Platform Motion — Linear (default mandatory) + 6 optionals + speed 0..20 (+user 50)
 
     Removed redundant:
@@ -74,7 +74,7 @@ class DisturbancesPanel(BaseConfigPanel):
         bt.setStyleSheet("color:#111827; font-weight:700; font-size:11px; background: transparent;")
         bt.setAlignment(Qt.AlignCenter)
         bl.addWidget(bt)
-        bs = QLabel("S&P 10% · Gaussian σ 20px+User · Poisson · Jitter ±20px · Atmosphere 6 presets · Platform 7 profiles")
+        bs = QLabel("S&P 10% · Gaussian σ 20px+User · Poisson · Jitter ±20px · Atmosphere 4 presets · Platform 7 profiles")
         bs.setStyleSheet("color:#6b7280; font-size:10px; background: transparent;")
         bs.setWordWrap(True)
         bs.setAlignment(Qt.AlignCenter)
@@ -203,7 +203,7 @@ class DisturbancesPanel(BaseConfigPanel):
         layout.addWidget(jitter_box)
 
         # ── D — Atmospheric ──
-        atmo_box = QGroupBox("Atmospheric — Clear / Haze / Fog / Rain / Low Light / User Defined")
+        atmo_box = QGroupBox("Atmospheric — Clear / Haze / Fog / User Defined")
         atmo_grid = QGridLayout(atmo_box)
         atmo_grid.setContentsMargins(12, 18, 12, 12)
         atmo_grid.setHorizontalSpacing(8)
@@ -235,7 +235,7 @@ class DisturbancesPanel(BaseConfigPanel):
         self.label_atmo_brightness_val.setStyleSheet("color:#374151; font-size:11px;")
         atmo_grid.addWidget(self.slider_atmo_brightness, 1, 1)
         atmo_grid.addWidget(self.label_atmo_brightness_val, 1, 2)
-        self.label_atmo_hint = QLabel("Clear 0/0 · Haze 15/10 · Fog 38/22 · Rain 24/18 · Low Light 18/48")
+        self.label_atmo_hint = QLabel("Clear 0/0 · Haze 15/10 · Fog 38/22")
         self.label_atmo_hint.setStyleSheet("color:#64748b; font-size:10px; font-style:italic;")
         self.label_atmo_hint.setWordWrap(True)
         atmo_grid.addWidget(self.label_atmo_hint, 2, 0, 1, 4)

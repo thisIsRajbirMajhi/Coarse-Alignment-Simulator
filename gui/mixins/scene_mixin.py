@@ -101,7 +101,7 @@ class SceneMixin:
             # Fallback: legacy regenerate with explicit fields
             try:
                 self.scene.regenerate(
-                    width=sw, height=sh, seed=int(cfg.seed), dynamic=bool(cfg.dynamic),
+                    width=sw, height=sh, seed=int(cfg.seed),
                     haze_strength=float(cfg.haze_pct)/100.0,
                     bg_top=int(cfg.bg_top), bg_bottom=int(cfg.bg_bottom),
                     vignetting=float(cfg.vignetting_pct)/100.0,
@@ -273,12 +273,12 @@ class SceneMixin:
             cfg.world_width = sw; cfg.world_height = sh
             self.scene.regenerate_from_config(cfg)
         except Exception:
-            seed = int(self.seed_spin.value()); dynamic = bool(self.dynamic_check.isChecked()); haze = float(self.haze_spin.value())/100.0
+            seed = int(self.seed_spin.value()); haze = float(self.haze_spin.value())/100.0
             try:
-                self.scene.regenerate(width=sw, height=sh, seed=seed, dynamic=dynamic, haze_strength=haze)
+                self.scene.regenerate(width=sw, height=sh, seed=seed, haze_strength=haze)
             except Exception:
                 self._build_simulation()
-                self.scene.regenerate(width=sw, height=sh, seed=seed, dynamic=dynamic, haze_strength=haze)
+                self.scene.regenerate(width=sw, height=sh, seed=seed, haze_strength=haze)
         try:
             self._invalidate_minimap_cache()
         except Exception: pass
@@ -334,7 +334,7 @@ class SceneMixin:
         except Exception: pass
         try:
             scale = float(self.camera_config.pixel_scale_mrad)
-            self.statusBar().showMessage(f"Applied world {sw}x{sh} FOV {self.camera_config.fov_width}x{self.camera_config.fov_height} scale {scale:.3f}mrad/px seed {seed} dynamic={dynamic}", 4000)
+            self.statusBar().showMessage(f"Applied world {sw}x{sh} FOV {self.camera_config.fov_width}x{self.camera_config.fov_height} scale {scale:.3f}mrad/px seed {seed}", 4000)
         except Exception:
-            self.statusBar().showMessage(f"Applied world {sw}x{sh} FOV {fw}x{fh} seed {seed} dynamic={dynamic}", 4000)
+            self.statusBar().showMessage(f"Applied world {sw}x{sh} FOV {fw}x{fh} seed {seed}", 4000)
         if was_running: self._start()

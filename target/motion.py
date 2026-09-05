@@ -438,6 +438,96 @@ class Target:
         except Exception:
             pass
 
+    def _wall_margin(self) -> float:
+        """Universe wall margin so beacon stays fully inside (hitbox/size aware)."""
+        try:
+            m = float(max(
+                int(getattr(self, "hitbox_radius", 14)),
+                float(getattr(self, "size_w", 10)) / 2.0,
+                float(getattr(self, "size_h", 10)) / 2.0,
+                float(getattr(self, "radius", 5)),
+                float(getattr(self, "center_radius", 2)),
+            ) + 1.5)
+        except Exception:
+            m = 15.0
+        # Clamp so margin never exceeds 1/3 of world (for tiny test worlds 50x50)
+        try:
+            w, h = self.bounds
+            m = float(np.clip(m, 0.5, min(float(w), float(h)) * 0.33))
+        except Exception:
+            pass
+        return float(m)
+
+    def _enforce_wall(self) -> None:
+        """Final hard wall — clamp center inside [margin, W-margin] and bounce velocity."""
+        try:
+            w, h = self.bounds
+            m = self._wall_margin()
+            bounced = False
+            if self.x < m:
+                self.x = float(m)
+                if self.vx < -1e-9:
+                    self.vx = abs(float(self.vx)) * 0.88
+                    if hasattr(self, "_vx"):
+                        self._vx = abs(float(getattr(self, "_vx", self.vx))) * 0.88
+                    if hasattr(self, "_rw_vx"):
+                        self._rw_vx = abs(float(self._rw_vx)) * 0.65
+                        self.vx = float(self._rw_vx)
+                    bounced = True
+            elif self.x > w - m:
+                self.x = float(w - m)
+                if self.vx > 1e-9:
+                    self.vx = -abs(float(self.vx)) * 0.88
+                    if hasattr(self, "_vx"):
+                        self._vx = -abs(float(getattr(self, "_vx", self.vx))) * 0.88
+                    if hasattr(self, "_rw_vx"):
+                        self._rw_vx = -abs(float(self._rw_vx)) * 0.65
+                        self.vx = float(self._rw_vx)
+                    bounced = True
+            if self.y < m:
+                self.y = float(m)
+                if self.vy < -1e-9:
+                    self.vy = abs(float(self.vy)) * 0.88
+                    if hasattr(self, "_vy"):
+                        self._vy = abs(float(getattr(self, "_vy", self.vy))) * 0.88
+                    if hasattr(self, "_rw_vy"):
+                        self._rw_vy = abs(float(self._rw_vy)) * 0.65
+                        self.vy = float(self._rw_vy)
+                    bounced = True
+            elif self.y > h - m:
+                self.y = float(h - m)
+                if self.vy > 1e-9:
+                    self.vy = -abs(float(self.vy)) * 0.88
+                    if hasattr(self, "_vy"):
+                        self._vy = -abs(float(getattr(self, "_vy", self.vy))) * 0.88
+                    if hasattr(self, "_rw_vy"):
+                        self._rw_vy = -abs(float(getattr(self, "_rw_vy"))) * 0.65
+                        self.vy = float(self._rw_vy)
+                    bounced = True
+            if bounced:
+                self._heading = math.atan2(float(self.vy), float(self.vx)) if (self.vx or self.vy) else float(self._heading)
+                # Nudge parametric phases so orbit/sine doesn't stick to wall
+                try:
+                    if self.profile == MotionProfile.SINUSOIDAL:
+                        # choose phase reflection based on which wall was hit
+                        if self.x <= m + 1e-6 or self.x >= w - m - 1e-6:
+                            self._sin_phase = math.pi - float(self._sin_phase)
+                        else:
+                            self._sin_phase = -float(self._sin_phase)
+                    elif self.profile in (MotionProfile.CURVED, MotionProfile.SPIRAL):
+                        if self.x <= m + 1e-6 or self.x >= w - m - 1e-6:
+                            self._orbit_phase = math.pi - float(self._orbit_phase)
+                        else:
+                            self._orbit_phase = -float(self._orbit_phase)
+                    elif self.profile == MotionProfile.FIGURE_EIGHT:
+                        self._fe_omega = -float(getattr(self, "_fe_omega", 1.0))
+                except Exception:
+                    pass
+                self.x = float(np.clip(float(self.x), m, w - m))
+                self.y = float(np.clip(float(self.y), m, h - m))
+        except Exception:
+            pass
+
     def update(self, dt: float):
         """
         Advance beacon by dt seconds — dispatches to profile-specific handler.
@@ -593,77 +683,8 @@ class Target:
             self._heading=math.atan2(self.vy,self.vx) if (self.vx or self.vy) else self._heading
             self.x=float(np.clip(self.x,0,w)); self.y=float(np.clip(self.y,0,h))
 
-        # Universal wall rebound for ALL profiles (ensures target never sticks at edge)
-        # Parametric profiles (SINUSOIDAL, CURVED, FIGURE_EIGHT, SPIRAL) previously only clipped,
-        # now reflect velocity/phase so they bounce. Handles world shrink/expand as well.
-        try:
-            bounced = False
-            if self.x <= 0.6:
-                self.x = 0.5
-                if self.vx < -1e-9:
-                    self.vx = abs(self.vx) * 0.88
-                    if hasattr(self, "_vx"):
-                        self._vx = abs(float(getattr(self, "_vx", self.vx))) * 0.88
-                    if hasattr(self, "_rw_vx"):
-                        self._rw_vx = abs(float(self._rw_vx)) * 0.65
-                        self.vx = self._rw_vx
-                    bounced = True
-                    if self.profile == MotionProfile.SINUSOIDAL:
-                        self._sin_phase = math.pi - self._sin_phase
-                    elif self.profile in (MotionProfile.CURVED, MotionProfile.SPIRAL):
-                        self._orbit_phase = math.pi - self._orbit_phase
-                    elif self.profile == MotionProfile.FIGURE_EIGHT:
-                        self._fe_omega = -float(getattr(self, "_fe_omega", 1.0))
-            elif self.x >= w - 0.6:
-                self.x = w - 0.5
-                if self.vx > 1e-9:
-                    self.vx = -abs(self.vx) * 0.88
-                    if hasattr(self, "_vx"):
-                        self._vx = -abs(float(getattr(self, "_vx", self.vx))) * 0.88
-                    if hasattr(self, "_rw_vx"):
-                        self._rw_vx = -abs(float(self._rw_vx)) * 0.65
-                        self.vx = self._rw_vx
-                    bounced = True
-                    if self.profile == MotionProfile.SINUSOIDAL:
-                        self._sin_phase = math.pi - self._sin_phase
-                    elif self.profile in (MotionProfile.CURVED, MotionProfile.SPIRAL):
-                        self._orbit_phase = math.pi - self._orbit_phase
-                    elif self.profile == MotionProfile.FIGURE_EIGHT:
-                        self._fe_omega = -float(getattr(self, "_fe_omega", 1.0))
-            if self.y <= 0.6:
-                self.y = 0.5
-                if self.vy < -1e-9:
-                    self.vy = abs(self.vy) * 0.88
-                    if hasattr(self, "_vy"):
-                        self._vy = abs(float(getattr(self, "_vy", self.vy))) * 0.88
-                    if hasattr(self, "_rw_vy"):
-                        self._rw_vy = abs(float(getattr(self, "_rw_vy")) ) * 0.65
-                        self.vy = self._rw_vy
-                    bounced = True
-                    if self.profile == MotionProfile.SINUSOIDAL:
-                        # y uses cos, reflect via phase shift
-                        self._sin_phase = -self._sin_phase
-                    elif self.profile in (MotionProfile.CURVED, MotionProfile.SPIRAL):
-                        self._orbit_phase = -self._orbit_phase
-            elif self.y >= h - 0.6:
-                self.y = h - 0.5
-                if self.vy > 1e-9:
-                    self.vy = -abs(self.vy) * 0.88
-                    if hasattr(self, "_vy"):
-                        self._vy = -abs(float(getattr(self, "_vy", self.vy))) * 0.88
-                    if hasattr(self, "_rw_vy"):
-                        self._rw_vy = -abs(float(getattr(self, "_rw_vy"))) * 0.65
-                        self.vy = self._rw_vy
-                    bounced = True
-                    if self.profile == MotionProfile.SINUSOIDAL:
-                        self._sin_phase = -self._sin_phase
-                    elif self.profile in (MotionProfile.CURVED, MotionProfile.SPIRAL):
-                        self._orbit_phase = -self._orbit_phase
-            if bounced:
-                self._heading = math.atan2(self.vy, self.vx) if (self.vx or self.vy) else self._heading
-                self.x = float(np.clip(self.x, 0, w)); self.y = float(np.clip(self.y, 0, h))
-        except Exception:
-            pass
+        # Universal wall — margin-aware so beacon stays fully inside universe
+        self._enforce_wall()
 
         # --- Realistic beacon contributions (additive, bounded) ---
         # 1) Wind gust — Dryden-like OU gust added to x/y before photometry (affects apparent position)
@@ -712,6 +733,9 @@ class Target:
             self.x = float(np.clip(self.x, 0, w)); self.y = float(np.clip(self.y, 0, h))
         except Exception:
             pass
+
+        # Final hard wall after all position disturbances — ensures universe bounded
+        self._enforce_wall()
 
         # 4) Photometric scintillation — Gamma-Gamma + harmonic + OU
         try:
@@ -864,9 +888,14 @@ class Target:
         old_w, old_h = self.bounds
         new_w, new_h = int(bounds[0]), int(bounds[1])
         self.bounds = (new_w, new_h)
-        # clamp position immediately
-        self.x = float(np.clip(self.x, 0, new_w))
-        self.y = float(np.clip(self.y, 0, new_h))
+        # clamp position inside wall (margin-aware)
+        try:
+            m = self._wall_margin()
+            self.x = float(np.clip(float(self.x), m, new_w - m))
+            self.y = float(np.clip(float(self.y), m, new_h - m))
+        except Exception:
+            self.x = float(np.clip(float(self.x), 0, new_w))
+            self.y = float(np.clip(float(self.y), 0, new_h))
         # rescale amplitudes that depend on world size
         try:
             scale = min(new_w / max(1, old_w), new_h / max(1, old_h))

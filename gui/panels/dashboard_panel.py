@@ -233,11 +233,11 @@ class DashboardPanel(QWidget):
             ("Lock Losses (count)", "lock_losses", "Losses", "Times TRACKING to LOST — lower is better, 0 ideal", False, None),
         ])
         self._make_section(metrics_layout, "C. Lock and Retention", [
-            ("Lock Status", "lock_status", "Status", "Tracker state: SEARCHING / ACQUIRED / TRACKING / LOST", False, None),
+            ("Lock Status", "lock_status", "Status", "Detection state: SEARCHING / TRACKING", False, None),
             ("Retention Rate (%)", "lock_retention_rate_pct", "Retention", "Frames in TRACKING / total — spec >95%", True, "lock_retention_rate_pct"),
             ("Target Loss (%)", "target_loss_pct", "Loss", "Sr.18 target loss =100-retention — spec <5%", True, "target_loss_pct"),
-            ("State — Acquired (%)", "state_acquired_pct", "Acquired", "Frames in ACQUIRED (probation) — lock precursor", True, "state_acquired_pct"),
-            ("State — Lost (%)", "state_lost_pct", "Lost", "Frames in LOST — after TRACKING lost", True, "state_lost_pct"),
+            ("State — Acquired (%)", "state_acquired_pct", "Acquired", "Frames in ACQUIRED (deprecated — always 0)", True, "state_acquired_pct"),
+            ("State — Lost (%)", "state_lost_pct", "Lost", "Frames in LOST (deprecated — always 0)", True, "state_lost_pct"),
         ])
         self._make_section(metrics_layout, "D. Tracking and Centroiding", [
             ("Average Error (px / mrad)", "avg_tracking_error_px", "Avg Err", "Sr.17 avg tracking error — spec <=10px", True, "avg_tracking_error_px"),
@@ -397,7 +397,7 @@ class DashboardPanel(QWidget):
     # Update — , real-time, informative
 
     def update_from_summary(self, summary: dict, tracker_status: str, tracking_error_px: float | None = None, camera_scale_mrad: float | None = None) -> None:
-        """Update all labels from PerformanceLogger summary. Real-time at ~30 Hz. Graph removed."""
+        """Update all labels from summary dict. Real-time at ~30 Hz. Graph removed."""
         status = str(tracker_status)
         color = _status_color(status)
 
@@ -687,7 +687,4 @@ class DashboardPanel(QWidget):
             pass
 
         # No hidden-label leak: stat_labels only contains visible Section rows.
-        # Previously this loop created a new hidden QLabel per new summary key every 30 Hz tick
-        # → unbounded stat_labels growth. Removed for performance. Summary keys not in dashboard
-        # are accessible via perf.summary() / JSON log, not via hidden labels.
 

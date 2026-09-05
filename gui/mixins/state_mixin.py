@@ -298,7 +298,6 @@ class StateMixin:
                         "env_bg_top_spin": self.env_bg_top_spin.value(),
                         "env_bg_bottom_spin": self.env_bg_bottom_spin.value(),
                         "env_vignetting_spin": self.env_vignetting_spin.value(),
-                        "env_dynamic_speed_spin": self.env_dynamic_speed_spin.value(),
                     }
             elif section == "disturbances":
                 # New: DisturbanceConfig snapshot (full spec) if panel available, fallback legacy sliders

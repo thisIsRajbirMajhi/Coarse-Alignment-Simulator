@@ -97,7 +97,7 @@ class Scene:
             sc = star_count if star_count is not None else num_clutter_points
             self._star_count = int(np.clip(int(sc), 0, 4000))
 
-        # Internal state
+        # Internal state - background animation removed (always static)
         self._time: float = 0.0
         self._rng = np.random.default_rng(self.seed)
         # Buffers populated by _build_background()
@@ -153,10 +153,6 @@ class Scene:
             self.star_brightness_scale = float(np.clip(float(kwargs["star_brightness_scale"]), 0.5, 1.8))
         if "star_brightness" in kwargs:
             self.star_brightness_scale = float(np.clip(float(kwargs["star_brightness"]), 0.5, 1.8))
-        if "dynamic" in kwargs:
-            self.dynamic = bool(kwargs["dynamic"])
-        if "dynamic_speed" in kwargs:
-            self.dynamic_speed = float(np.clip(float(kwargs["dynamic_speed"]), 0.1, 5.0))
         # Legacy clutter compat
         if "num_clutter_points" in kwargs and "star_count" not in kwargs:
             self._star_count = int(np.clip(int(kwargs["num_clutter_points"]), 0, 4000))
@@ -218,75 +214,15 @@ class Scene:
         self._time = 0.0
 
     def update(self, dt: float) -> None:
-        """Advance internal time for dynamic effects. Call once per tick."""
-        if self.dynamic:
-            self._time += dt * self.dynamic_speed
+        """Advance internal time — background animation removed (always static)."""
+        pass
 
     def get_frame(self) -> np.ndarray:
         """
-        Return current full-scene image as uint8 (H, W, 3).
-
-        - Static (dynamic=False): returns fast copy of precomputed background.
-        - Dynamic (dynamic=True): recomposes base + scalar haze shimmer + twinkling stars.
-          NOTE: For production 5000×5000, prefer get_region(x0,y0,x1,y1) to avoid
-          rebuilding a full 5000×5000 float32 RGB buffer every 33 ms just to
-          produce a 640×640 FOV crop. This full-frame path is kept for
-          backward compat (tests, god-view fallback) but is ~60× heavier than
-          the cropped path.
+        Return current full-scene image as uint8 (H, W, 3) — always static (background animation removed).
         Returns a copy so callers can safely draw beacons without mutating cache.
         """
-        if not self.dynamic:
-            return self._static_background.copy()
-
-        # Dynamic path — fractal haze advection + chromatic twinkle
-        if self.haze_strength > 1e-6:
-            mod = haze_modulation(self._time)
-            # Advected haze shift for realism: small scroll of haze base
-            ox, oy = get_haze_advect_offset(self._time, float(self.haze_strength))
-            if abs(mod) > 1e-6 or (ox | oy) != 0:
-                # Use base + scalar shimmer; advection via roll is visually extra but still cheap on full frame
-                tmp = self._base_no_stars.astype(np.int16) + int(round(mod))
-                np.clip(tmp, 0, 255, out=tmp)
-                frame = tmp.astype(np.uint8)
-                # Subtle advected haze overlay: blend 18% of shifted haze difference
-                if (ox | oy) != 0 and self._haze_base is not None:
-                    shifted = np.roll(np.roll(self._haze_base, oy, axis=0), ox, axis=1)
-                    delta = (shifted - self._haze_base) * 0.18
-                    # Apply delta as faint modulation
-                    delta_i = np.clip(np.round(delta), -6, 6).astype(np.int16)
-                    # Add to frame via int16 path on one channel proxy (apply to all channels)
-                    # Cheap: reuse tmp already; apply extra delta via luma shift
-                    tmp2 = frame.astype(np.int16) + delta_i[:, :, None]
-                    np.clip(tmp2, 0, 255, out=tmp2)
-                    frame = tmp2.astype(np.uint8)
-            else:
-                frame = self._base_no_stars.copy()
-        else:
-            frame = self._base_no_stars.copy()
-
-        # Twinkling stars — chromatic ±18% + color shift
-        if self._star_colors is not None and len(self._star_colors) == len(self._stars_xy):
-            draw_twinkling_stars(
-                frame,
-                self._stars_xy,
-                self._star_base_brightness,
-                self._star_sizes,
-                self._star_phases,
-                self._star_freqs,
-                self._time,
-                self._star_colors,
-            )
-        else:
-            draw_twinkling_stars(
-                frame,
-                self._stars_xy,
-                self._star_base_brightness,
-                self._star_sizes,
-                self._star_phases,
-                self._star_freqs,
-                self._time,
-            )
-        return frame
+        return self._static_background.copy()
 
     def get_region(self, x0: int, y0: int, x1: int, y1: int) -> np.ndarray:
         """
@@ -324,54 +260,9 @@ class Scene:
         dx0 = int(np.clip(dx0, 0, w - dw))
         dy0 = int(np.clip(dy0, 0, h - dh))
 
-        if not self.dynamic:
-            # Static: direct crop from precomputed static background (with stars)
-            crop = self._static_background[sy0:sy1, sx0:sx1]
-            out[dy0:dy0+dh, dx0:dx0+dw] = crop
-            return out
-
-        # Dynamic: crop from base_no_stars, add scalar haze shimmer + advection, draw subset twinkle
-        base_crop = self._base_no_stars[sy0:sy1, sx0:sx1]
-        if self.haze_strength > 1e-6:
-            mod = haze_modulation(self._time)
-            if abs(mod) > 1e-6:
-                tmp = base_crop.astype(np.int16) + int(round(mod))
-                np.clip(tmp, 0, 255, out=tmp)
-                base_crop = tmp.astype(np.uint8)
-            else:
-                base_crop = base_crop.copy()
-            # Advected haze delta in cropped view: use rolled haze base delta if available
-            if self._haze_base is not None:
-                ox, oy = get_haze_advect_offset(self._time, float(self.haze_strength))
-                if (ox | oy) != 0:
-                    # Extract shifted vs original delta for cropped region only
-                    # We approximate by rolling the whole haze then cropping
-                    shifted_full = np.roll(np.roll(self._haze_base, oy, axis=0), ox, axis=1)
-                    delta_crop = (shifted_full[sy0:sy1, sx0:sx1] - self._haze_base[sy0:sy1, sx0:sx1]) * 0.18
-                    delta_i = np.clip(np.round(delta_crop), -6, 6).astype(np.int16)
-                    tmp2 = base_crop.astype(np.int16) + delta_i[:, :, None]
-                    np.clip(tmp2, 0, 255, out=tmp2)
-                    base_crop = tmp2.astype(np.uint8)
-        else:
-            base_crop = base_crop.copy()
-        out[dy0:dy0+dh, dx0:dx0+dw] = base_crop
-
-        # Twinkling stars subset — only those visible in FOV (with colors)
-        if self._stars_xy.shape[0] > 0:
-            xs = self._stars_xy[:, 0]; ys = self._stars_xy[:, 1]
-            mask = (xs >= sx0) & (xs < sx1) & (ys >= sy0) & (ys < sy1)
-            if np.any(mask):
-                xy_sub = self._stars_xy[mask]
-                brightness_sub = self._star_base_brightness[mask]
-                sizes_sub = self._star_sizes[mask]
-                phases_sub = self._star_phases[mask]
-                freqs_sub = self._star_freqs[mask]
-                colors_sub = self._star_colors[mask] if self._star_colors is not None and len(self._star_colors) == len(self._stars_xy) else None
-                xy_local = xy_sub - np.array([x0, y0], dtype=int)
-                if colors_sub is not None:
-                    draw_twinkling_stars(out, xy_local, brightness_sub, sizes_sub, phases_sub, freqs_sub, self._time, colors_sub)
-                else:
-                    draw_twinkling_stars(out, xy_local, brightness_sub, sizes_sub, phases_sub, freqs_sub, self._time)
+        # Always static — background animation removed
+        crop = self._static_background[sy0:sy1, sx0:sx1]
+        out[dy0:dy0+dh, dx0:dx0+dw] = crop
         return out
 
     def get_cropped_frame(self, x0: int, y0: int, x1: int, y1: int) -> np.ndarray:
@@ -383,14 +274,12 @@ class Scene:
         seed: int | None = None,
         width: int | None = None,
         height: int | None = None,
-        dynamic: bool | None = None,
         haze_strength: float | None = None,
         bg_top: int | None = None,
         bg_bottom: int | None = None,
         vignetting: float | None = None,
         star_count: int | None = None,
         star_brightness_scale: float | None = None,
-        dynamic_speed: float | None = None,
         config=None,  # EnvironmentConfig support for immediate migration
     ) -> None:
         """
@@ -412,8 +301,6 @@ class Scene:
             self.width = int(np.clip(int(width), MIN_RES, MAX_RES))
         if height is not None:
             self.height = int(np.clip(int(height), MIN_RES, MAX_RES))
-        if dynamic is not None:
-            self.dynamic = bool(dynamic)
         if haze_strength is not None:
             self.haze_strength = float(np.clip(haze_strength, 0.0, 1.0))
         if bg_top is not None:
@@ -427,8 +314,6 @@ class Scene:
             self.num_clutter_points = self._star_count
         if star_brightness_scale is not None:
             self.star_brightness_scale = float(np.clip(star_brightness_scale, 0.5, 1.8))
-        if dynamic_speed is not None:
-            self.dynamic_speed = float(np.clip(dynamic_speed, 0.1, 5.0))
         self._rng = np.random.default_rng(self.seed)
         self._build_background()
 
@@ -449,9 +334,8 @@ class Scene:
         self.regenerate(width=width, height=height)
 
     def set_dynamic(self, enabled: bool, speed: float = 1.0) -> None:
-        """Toggle dynamics without full rebuild."""
-        self.dynamic = bool(enabled)
-        self.dynamic_speed = float(np.clip(speed, 0.1, 5.0))
+        """No-op — background animation removed (always static)."""
+        pass
 
     def get_star_count(self) -> int:
         return int(self._star_count)

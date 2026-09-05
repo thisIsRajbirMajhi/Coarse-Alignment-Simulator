@@ -23,14 +23,13 @@ if TYPE_CHECKING:
 @dataclass
 class EnvironmentConfig(BaseValidatedConfig):
     """
-    Typed configuration for all 10 Environment parameters.
+    Typed configuration for all 8 Environment parameters.
 
     Groups logically per control-panel sections:
       - World: world_width, world_height
       - Seed: seed
       - Atmosphere: bg_top, bg_bottom, vignetting_pct, haze_pct
       - Starfield: star_count, star_brightness
-      - Dynamics: dynamic, dynamic_speed
 
     All fields validated via validate() — clamps to LIMITS and returns self
     for fluent usage. Call validate() before passing to Scene.
@@ -56,10 +55,6 @@ class EnvironmentConfig(BaseValidatedConfig):
     star_count: int = DEFAULTS["star_count"]
     star_brightness: float = DEFAULTS["star_brightness"]
 
-    # Dynamics — time-varying animation
-    dynamic: bool = DEFAULTS["dynamic"]
-    dynamic_speed: float = DEFAULTS["dynamic_speed"]
-
     def validate(self) -> "EnvironmentConfig":
         """
         Clamp all fields to LIMITS in-place and return self — now via clip_field.
@@ -74,8 +69,6 @@ class EnvironmentConfig(BaseValidatedConfig):
         self.haze_pct = int(clip_field(self.haze_pct, *LIMITS["haze_pct"]))
         self.star_count = int(clip_field(self.star_count, *LIMITS["star_count"]))
         self.star_brightness = float(clip_field(self.star_brightness, *LIMITS["star_brightness"]))
-        self.dynamic = bool(self.dynamic)
-        self.dynamic_speed = float(clip_field(self.dynamic_speed, *LIMITS["dynamic_speed"]))
         return self
 
     def to_scene_kwargs(self) -> dict:
@@ -97,8 +90,6 @@ class EnvironmentConfig(BaseValidatedConfig):
             "bg_top": int(self.bg_top),
             "bg_bottom": int(self.bg_bottom),
             "vignetting": vignetting_pct_to_strength(self.vignetting_pct),
-            "dynamic": bool(self.dynamic),
-            "dynamic_speed": float(self.dynamic_speed),
         }
 
     @classmethod
@@ -118,8 +109,6 @@ class EnvironmentConfig(BaseValidatedConfig):
             haze_pct=haze_strength_to_pct(float(scene.haze_strength)),
             star_count=int(scene.get_star_count()),
             star_brightness=float(scene.star_brightness_scale),
-            dynamic=bool(scene.dynamic),
-            dynamic_speed=float(scene.dynamic_speed),
         ).validate()
 
     def to_dict(self) -> dict:
@@ -152,25 +141,21 @@ class EnvironmentConfig(BaseValidatedConfig):
             self.star_count = int(rng.integers(20, 120))
             self.star_brightness = float(rng.uniform(0.7, 1.1))
             self.vignetting_pct = int(rng.integers(0, 15))
-            self.dynamic = bool(rng.random() < 0.2)
         elif diff == "medium":
             self.haze_pct = int(rng.integers(15, 55))
             self.star_count = int(rng.integers(80, 400))
             self.star_brightness = float(rng.uniform(0.9, 1.4))
             self.vignetting_pct = int(rng.integers(5, 35))
-            self.dynamic = bool(rng.random() < 0.5)
         elif diff == "hard":
             self.haze_pct = int(rng.integers(45, 95))
             self.star_count = int(rng.integers(300, 2500))
             self.star_brightness = float(rng.uniform(1.2, 1.8))
             self.vignetting_pct = int(rng.integers(15, 60))
             self.bg_bottom = int(rng.integers(18, 40))
-            self.dynamic = True
         else:  # mixed — 30/40/30
             pick = rng.choice(["easy", "medium", "hard"], p=[0.30, 0.40, 0.30])
             return self.randomize_for_training(rng, pick)
         self.bg_top = int(rng.integers(8, 18))
-        self.dynamic_speed = float(rng.uniform(0.5, 2.2))
         self.seed = int(rng.integers(0, 999999))
         return self.validate()
 

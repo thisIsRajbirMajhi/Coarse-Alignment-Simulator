@@ -1,10 +1,5 @@
-# simulation/headless.py - Headless FSOC simulation for AI training (no Qt, deterministic, gym-compatible)
-# Extracted from gui/mixins/simulation_mixin.py + tick_mixin.py + rendering_mixin.py
-# Single responsibility: run closed-loop tracking without GUI, with seeded RNG thread-through.
-# Fixes:
-#   1) Headless API — step/reset/observe, no QApplication/QTimer/QLabel
-#   2) Global RNG nondeterminism — all disturbances/camera use self.rng (common.rng.get_rng)
-#   3) Privileged velocity — default tracker velocity (non-cheating), flag to enable GT
+# simulation/headless.py - Headless FSOC simulation (no Qt, deterministic, gym-compatible)
+# beacon_tracker removed: no detection — image is produced but not analyzed. Control is open-loop (direct action only).
 
 from __future__ import annotations
 
@@ -21,17 +16,13 @@ from camera.ptz_camera import PTZCamera
 from common.rng import get_rng, seed_global
 from control.config import ControllerConfig
 from control.controller import PIDController
-from beacon_tracker.detection.config import DetectorConfig
-from beacon_tracker.detection.detector import BeaconDetector
 from disturbance import disturbances as dist
 from disturbance.config import DisturbanceConfig
 from environment.config import EnvironmentConfig
 from environment.scene import Scene
-from gui.core.renderer import Renderer  # stateless, no Qt needed for array renders (set_pixmap is Qt, but render_viewport is pure)
-from perf_log.metrics import PerformanceLogger
+from gui.core.renderer import Renderer
 from target.config import MultiBeaconConfig
 from target.motion import MotionProfile, create_beacons
-from tracking.tracker import LockStatus, Tracker
 
 
 @dataclass
@@ -43,12 +34,9 @@ class HeadlessConfig:
     controller: ControllerConfig | None = None
     disturbance: DisturbanceConfig | None = None
     beacon: MultiBeaconConfig | None = None
-    detector: DetectorConfig | None = None
-    # detector is via BeaconDetector, tracker via TrackerConfig if needed
     max_steps: int = 2000
     dt: float = 1/30  # 33ms base
     sim_speed: float = 1.0
-    # Privileged velocity flag is on controller_config (use_privileged_velocity), but also headless override
     use_privileged_velocity: bool | None = None  # None = respect controller_config, else override
 
 
@@ -56,13 +44,13 @@ class HeadlessSimulation:
     """
     Headless FSOC simulator — gym-like, deterministic, no Qt.
 
-    Mirrors MainWindow tick pipeline but without GUI:
-      beacons.update(dt_eff) → scene.update → camera.update → disturbances → capture → detect → gate → tracker → controller → camera.move → perf.log
+     Pipeline (beacon_tracker removed):
+      beacons.update(dt_eff) → scene.update → camera.update → disturbances → capture → (no detection) → controller idle → camera.move (direct action only)
 
     Usage:
         sim = HeadlessSimulation(seed=42)
         obs = sim.reset(seed=42)
-        obs, reward, terminated, truncated, info = sim.step(action=None)  # action None => PID, else np.array([d_pan,d_tilt])
+        obs, reward, terminated, truncated, info = sim.step(action=None)  # action None => hold, else np.array([d_pan,d_tilt])
         obs, reward, ... = sim.step(np.array([2.0, -1.0]))  # direct action
     Determinism: all disturbance/camera RNG via self.rng (seeded); beacons/scene seeded via EnvironmentConfig.seed + self.rng.
     No global np.random leakage after seed_global.
@@ -76,7 +64,6 @@ class HeadlessSimulation:
         controller_config: ControllerConfig | None = None,
         disturbance_config: DisturbanceConfig | None = None,
         beacon_config: MultiBeaconConfig | None = None,
-        detector_config: DetectorConfig | None = None,
         rng: np.random.Generator | None = None,
         max_steps: int = 2000,
         dt: float = 1/30,
@@ -85,27 +72,21 @@ class HeadlessSimulation:
     ):
         self.seed = int(seed)
         self.rng: np.random.Generator = get_rng(rng, self.seed)
-        # Seed global for any legacy np.random fallbacks
         seed_global(self.seed)
 
-        # Store dt and sim_speed
         self.dt = float(dt)
         self.sim_speed = float(sim_speed)
         self.max_steps = int(max_steps)
         self.step_count = 0
         self._use_priv_override = use_privileged_velocity
 
-        # Configs — validated, with scene bounds handling
         self.env_config = (env_config or EnvironmentConfig()).validate()
-        # Override seed from headless seed if not explicitly set
         if env_config is None:
             self.env_config.seed = self.seed
             self.env_config.validate()
         self._scene_size = (int(self.env_config.world_width), int(self.env_config.world_height))
 
-        # Camera config 11 params
         if camera_config is None:
-            # Default viewport/god from _scene_size etc. (single source: DISPLAY_DEFAULTS 2000)
             from gui.styles import FOV_SIZE  # noqa, for default FOV
             fov = FOV_SIZE
             self.camera_config = CameraConfig(
@@ -117,57 +98,46 @@ class HeadlessSimulation:
             self.camera_config = camera_config.validate(self._scene_size)
 
         self.controller_config = (controller_config or ControllerConfig()).validate()
-        # Override privileged flag if headless param given
         if use_privileged_velocity is not None:
             self.controller_config.use_privileged_velocity = bool(use_privileged_velocity)
             self.controller_config.validate()
 
         self.disturbance_config = (disturbance_config or DisturbanceConfig()).validate()
         self.beacon_config = (beacon_config or MultiBeaconConfig(beacon_count=1, target_index=0)).validate()
-        self.detector_config = (detector_config or DetectorConfig()).validate()
 
-        # State dicts for disturbances (isolated per-sim)
         self._camera_drift_state: dict = {}
         self._platform_motion_state: dict = {}
         self._jitter_state: dict = {}
-        self._search_step: int = 0
 
-        # Build simulation objects
+        # No detection state (beacon_tracker removed)
+        self._last_estimate: tuple[float, float] | None = None
+        self._last_all_detections: list[dict] = []
+        self._last_lock_state: str = "searching"
+
         self._build_simulation()
 
-        # Perf logger (no auto_log file + no Qt)
-        self.perf = PerformanceLogger(auto_log=False)
         self._start_time = None
         self._last_tick_time: float | None = None
 
-        # For templated RNG per step, we keep self.rng advancing deterministically
-        # No additional per-step seeding needed; just use self.rng for disturbances
-
     def _build_simulation(self):
-        # Scene
         cfg = self.env_config.validate()
         self._scene_size = (int(cfg.world_width), int(cfg.world_height))
         self.scene = Scene(config=cfg)
 
-        # Camera bounds sync
         sw, sh = self._scene_size
         cam_cfg = self.camera_config.validate((sw, sh))
-        # Clamp FOV to scene
         fov_w = min(int(cam_cfg.fov_width), sw - 10)
         fov_h = min(int(cam_cfg.fov_height), sh - 10)
         cam_cfg.fov_width = max(20, fov_w)
         cam_cfg.fov_height = max(20, fov_h)
         self.camera_config = cam_cfg
         self._fov_size = (int(cam_cfg.fov_width), int(cam_cfg.fov_height))
-        # Camera with rng for encoder/jitter determinism
         self.camera = PTZCamera(config=cam_cfg, scene_bounds=(sw, sh), rng=self.rng)
-        # Vignetting follows env
         try:
             vig = float(cfg.vignetting_pct) / 100.0
             self.camera.set_vignetting(vig)
         except Exception: pass
 
-        # Beacons
         bc = self.beacon_config.validate()
         beacon_count = int(bc.beacon_count)
         tgt_id = int(bc.target_index)
@@ -179,11 +149,10 @@ class HeadlessSimulation:
         tgt_x = float(getattr(bc, "x", sw/2))
         tgt_y = float(getattr(bc, "y", sh/2))
         try:
-            profile = bc.profile  # may be MotionProfile or str
+            profile = bc.profile
         except Exception:
             profile = MotionProfile.CURVED
         speed = float(getattr(bc, "speed", 60))
-        # Deterministic base seed from headless seed + step_count for variety but reproducible
         base_seed = int(self.env_config.seed if self.env_config.seed is not None else self.seed) + int(self.step_count) % 997
         self.beacons = create_beacons(
             beacon_count, (sw, sh), profile, speed,
@@ -197,41 +166,22 @@ class HeadlessSimulation:
         self._target_beacon_id = tgt_id
         self.target = self.beacons[tgt_id] if self.beacons else self.beacons[0]
 
-        # Detector / Tracker / Controller
-        det_cfg = self.detector_config.validate()
-        self.detector = BeaconDetector(brightness_threshold=int(det_cfg.brightness_threshold), min_area=int(det_cfg.min_area))
-        # Also store max_beacons if present
-        try:
-            self.detector.max_beacons = int(det_cfg.max_beacons)
-        except Exception: pass
-        # Tracker from env? Use defaults 0.25/5 if not specified
-        self.tracker = Tracker(smoothing=0.25, miss_limit=5)
-        # If we had TrackerConfig, honor it
-        try:
-            from tracking.config import TrackerConfig
-            # Try to get from controller? Not, use defaults
-            pass
-        except Exception: pass
-
         ctrl_cfg = self.controller_config.validate()
         self.controller = PIDController(config=ctrl_cfg)
 
-        # Reset disturbance states
         self._camera_drift_state.clear()
         self._platform_motion_state.clear()
         self._jitter_state.clear()
-        # Minimap thumb not needed headless, but keep for compat
         self._minimap_thumb = None
-
-    # API
+        self._last_estimate = None
+        self._last_all_detections = []
+        self._last_lock_state = "searching"
 
     def reset(self, seed: int | None = None) -> dict:
-        """Reset simulation to initial state. If seed given, reseed deterministically."""
         if seed is not None:
             self.seed = int(seed)
             self.rng = get_rng(None, self.seed)
             seed_global(self.seed)
-            # Update env seed for new beacons/scene
             self.env_config.seed = self.seed
             self.env_config.validate()
         self.step_count = 0
@@ -243,20 +193,11 @@ class HeadlessSimulation:
             reset_disturbance_state()
         except Exception: pass
         self._build_simulation()
-        self.perf = PerformanceLogger(auto_log=False)
-        self.perf.start()
         self._last_tick_time = None
         return self.get_observation()
 
     def get_observation(self) -> dict:
-        """Return current observation dict without stepping."""
-        # Build obs via current state (no new frame)
-        # For headless we return last computed obs if available, else synthesize
-        # Synthesize minimal obs: estimate, error, pan/tilt, fov
-        try:
-            est = self.tracker.estimated_position
-        except Exception:
-            est = None
+        est = self._last_estimate
         err = None
         if est is not None:
             cx, cy = self.camera.fov_width/2, self.camera.fov_height/2
@@ -264,7 +205,7 @@ class HeadlessSimulation:
         return {
             "estimate": est,
             "tracking_error_px": err,
-            "lock_status": self.tracker.status.value if hasattr(self.tracker, "status") else "searching",
+            "lock_status": self._last_lock_state,
             "pan": float(self.camera.pan),
             "tilt": float(self.camera.tilt),
             "fov_rect": self.camera.get_fov_rect(),
@@ -276,25 +217,14 @@ class HeadlessSimulation:
         }
 
     def step(self, action: np.ndarray | tuple | None = None, dt: float | None = None) -> tuple[dict, float, bool, bool, dict]:
-        """
-        Advance one tick.
-        Args:
-            action: None => use internal PID; else np.array([d_pan,d_tilt]) direct camera delta (headless control)
-            dt: override dt for this step, else self.dt
-        Returns:
-            obs, reward, terminated, truncated, info
-        """
         step_start = time.time()
         dt = float(dt if dt is not None else self.dt)
-        # Apply sim_speed scaling
         dt_eff = float(np.clip(dt * self.sim_speed, 1e-4, 0.1))
         dt_wall = float(np.clip(dt, 0.005, 0.1))
 
-        # Update beacons and scene
         for b in getattr(self, "beacons", [self.target]):
             if getattr(b, "enabled", True):
                 b.update(dt_eff)
-        # Keep target alias correct
         if hasattr(self, "beacons") and self.beacons:
             tid = int(np.clip(int(getattr(self, "_target_beacon_id", 0)), 0, len(self.beacons)-1))
             self.target = self.beacons[tid]
@@ -304,9 +234,7 @@ class HeadlessSimulation:
         try: self.camera.update(dt_wall)
         except Exception: pass
 
-        # Disturbances with seeded rng
         dc = self.disturbance_config.validate() if hasattr(self.disturbance_config, "validate") else self.disturbance_config
-        # Vignetting
         try:
             vig = float(getattr(self.env_config, "vignetting_pct", 0)) / 100.0
             self.camera.set_vignetting(vig)
@@ -331,7 +259,6 @@ class HeadlessSimulation:
                 return full, None
 
         scene_frame = None
-        # Positional disturbances
         pan_a, tilt_a = dist.apply_platform_vibration(self.camera.pan, self.camera.tilt, int(getattr(dc, "vibration", 0)), dt=dt_eff, rng=self.rng)
         if float(getattr(dc, "platform_speed", 0.0)) > 1e-9:
             pan_b, tilt_b = dist.apply_platform_motion(
@@ -351,19 +278,28 @@ class HeadlessSimulation:
             pan_c, tilt_c = pan_b, tilt_b
         pan_dist, tilt_dist = dist.apply_camera_motion_with_state(pan_c, tilt_c, int(getattr(dc, "camera_motion", 0)), self._camera_drift_state, dt=dt_eff, rng=self.rng)
 
+        # Apply disturbed position to camera — respects all camera params and scene bounds
+        try:
+            self.camera.set_position(float(pan_dist), float(tilt_dist))
+        except Exception:
+            self.camera.pan, self.camera.tilt = float(pan_dist), float(tilt_dist)
+            try: self.camera._clamp_to_range()
+            except Exception: pass
         if use_optimized:
-            fov_frame, fov_origin = _get_fov_base(pan_dist, tilt_dist)
-            fov_x0, fov_y0 = int(fov_origin[0]), int(fov_origin[1])
+            fov_x0, fov_y0, _, _ = self.camera.get_fov_rect()
             fov_capture_x0, fov_capture_y0 = fov_x0, fov_y0
+            try:
+                x0, y0, x1, y1 = self.camera.get_fov_rect()
+                fov_frame = self.scene.get_region(int(x0), int(y0), int(x1), int(y1))
+            except Exception:
+                fov_frame, fov_origin = _get_fov_base(pan_dist, tilt_dist)
+                fov_x0, fov_y0 = int(fov_origin[0]), int(fov_origin[1])
             self._draw_targets_fov(fov_frame, fov_x0, fov_y0)
             if vig > 1e-3:
                 from environment.vignetting import apply_vignetting
                 fov_frame = apply_vignetting(fov_frame, vig)
         else:
-            rp, rt = self.camera.pan, self.camera.tilt
-            self.camera.pan, self.camera.tilt = pan_dist, tilt_dist
             fov_frame = self.camera.capture(scene_frame)
-            self.camera.pan, self.camera.tilt = rp, rt
             fov_capture_x0, fov_capture_y0 = None, None
 
         fov_frame = dist.apply_turbulence(fov_frame, int(getattr(dc, "turbulence", 0)), dt=dt_eff, rng=self.rng)
@@ -389,189 +325,55 @@ class HeadlessSimulation:
                 rng=self.rng,
             )
 
-        # Detection gating
-        all_dets = self.detector.detect_all(fov_frame)
+        # No detection (beacon_tracker removed) — all detections empty
+        all_dets: list[dict] = []
         self._last_all_detections = all_dets
         if fov_capture_x0 is not None and fov_capture_y0 is not None:
             fov_x0, fov_y0 = int(fov_capture_x0), int(fov_capture_y0)
         else:
             fov_x0, fov_y0, _, _ = self.camera.get_fov_rect()
-        primary = self.target
+        # No autonomous detection; estimate stays None
+        estimate = None
+        self._last_estimate = estimate
+        tracking_error_px = None
         hitbox_hit = False
         center_hit = False
-        if not getattr(primary, "enabled", True):
-            detection = None
-            target_in_fov = False
-        else:
-            proj_x = primary.x - fov_x0
-            proj_y = primary.y - fov_y0
-            target_in_fov = (-primary.hitbox_radius <= proj_x <= self.camera.fov_width + primary.hitbox_radius and
-                             -primary.hitbox_radius <= proj_y <= self.camera.fov_height + primary.hitbox_radius)
-            if not target_in_fov:
-                detection = None
-            else:
-                gate_x, gate_y = proj_x, proj_y
-                gate_radius = primary.hitbox_radius
-                if self.tracker.estimated_position is not None and self.tracker.status != LockStatus.SEARCHING:
-                    try:
-                        gate_x, gate_y = float(self.tracker.estimated_position[0]), float(self.tracker.estimated_position[1])
-                    except Exception:
-                        gate_x, gate_y = proj_x, proj_y
-                detection = None
-                min_dist = float("inf")
-                for d in all_dets:
-                    dist_c = math.hypot(d["x"] - gate_x, d["y"] - gate_y)
-                    if dist_c <= gate_radius and dist_c < min_dist:
-                        min_dist = dist_c
-                        detection = (d["x"], d["y"])
-                if detection is None and (gate_x != proj_x or gate_y != proj_y):
-                    min_dist = float("inf")
-                    for d in all_dets:
-                        dist_c = math.hypot(d["x"] - proj_x, d["y"] - proj_y)
-                        if dist_c <= primary.hitbox_radius and dist_c < min_dist:
-                            min_dist = dist_c
-                            detection = (d["x"], d["y"])
-                if detection is not None:
-                    hitbox_hit = True
-                    center_hit = min_dist <= primary.center_radius
+        detection = None
 
-        try:
-            estimate = self.tracker.update(detection, dt=float(dt_eff))
-        except TypeError:
-            estimate = self.tracker.update(detection)
-
-        tracking_error_px = None
-        if estimate is not None:
-            cx, cy = self.camera.fov_width/2, self.camera.fov_height/2
-            err_x, err_y = estimate[0]-cx, estimate[1]-cy
-            tracking_error_px = float(np.hypot(err_x, err_y))
-            # Control or direct action
-            if action is not None:
-                # Direct action: interpret as (d_pan, d_tilt) in px
-                try:
-                    arr = np.asarray(action, dtype=float).reshape(-1)
-                    d_pan = float(arr[0]) if len(arr) > 0 else 0.0
-                    d_tilt = float(arr[1]) if len(arr) > 1 else 0.0
-                except Exception:
-                    d_pan, d_tilt = 0.0, 0.0
-                try:
-                    self.camera.move(d_pan, d_tilt, dt_eff)
-                except TypeError:
-                    self.camera.move(d_pan, d_tilt)
-            else:
-                # PID with AI-ready velocity (tracker vs GT)
-                try:
-                    cam_slew = float(self.camera_config.max_slew_rate) if hasattr(self, "camera_config") else None
-                except Exception: cam_slew = None
-                # Velocity selection
-                use_priv = bool(getattr(self.controller_config, "use_privileged_velocity", False))
-                vel = None
-                if not use_priv:
-                    try:
-                        if hasattr(self.tracker, "get_velocity"):
-                            vel = self.tracker.get_velocity()
-                        if vel is None and hasattr(self.tracker, "kalman") and hasattr(self.tracker.kalman, "state"):
-                            st = getattr(self.tracker.kalman, "state", None)
-                            if st is not None and len(st) >= 4:
-                                vel = (float(st[2]), float(st[3]))
-                    except Exception: vel = None
-                else:
-                    try:
-                        if hasattr(self.target, "get_velocity"):
-                            vel = self.target.get_velocity()
-                    except Exception: vel = None
-                try:
-                    d_pan,d_tilt=self.controller.compute_correction(err_x, err_y, dt=dt_eff, camera_max_slew=cam_slew, target_velocity=vel)
-                except TypeError:
-                    try:
-                        d_pan,d_tilt=self.controller.compute_correction(err_x, err_y, dt=dt_eff, camera_max_slew=cam_slew)
-                    except TypeError:
-                        d_pan,d_tilt=self.controller.compute_correction(err_x, err_y)
-                try:
-                    self.camera.move(d_pan, d_tilt, dt_eff)
-                except TypeError:
-                    self.camera.move(d_pan, d_tilt)
-            # Reset search when tracking
+        # No PID from detection — only direct action moves camera
+        if action is not None:
             try:
-                if hasattr(self, "_search_step"):
-                    self._search_step = 0
-            except Exception:
-                pass
-        else:
-            # No estimate: if action provided, still allow direct move (e.g., searching)
-            if action is not None:
-                try:
-                    arr = np.asarray(action, dtype=float).reshape(-1)
-                    d_pan = float(arr[0]) if len(arr) > 0 else 0.0
-                    d_tilt = float(arr[1]) if len(arr) > 1 else 0.0
-                    try: self.camera.move(d_pan, d_tilt, dt_eff)
-                    except Exception: self.camera.move(d_pan, d_tilt)
-                except Exception: pass
-            else:
-                # Active spiral search when SEARCHING and no external action
-                try:
-                    if self.tracker.status == LockStatus.SEARCHING:
-                        if not hasattr(self, "_search_step"):
-                            self._search_step = 0
-                        self._search_step += 1
-                        try:
-                            from beacon_tracker.search.scanner import SearchingStrategy
-                        except Exception:
-                            SearchingStrategy = None
-                        if SearchingStrategy is not None:
-                            cur_dx, cur_dy = SearchingStrategy.spiral_offset(self._search_step, k=6.0)
-                            prev_dx, prev_dy = SearchingStrategy.spiral_offset(self._search_step - 1, k=6.0) if self._search_step > 1 else (0.0, 0.0)
-                            d_pan = float(np.clip((cur_dx - prev_dx) * 0.7, -14, 14))
-                            d_tilt = float(np.clip((cur_dy - prev_dy) * 0.7, -14, 14))
-                            try:
-                                self.camera.move(d_pan, d_tilt, dt_eff)
-                            except TypeError:
-                                self.camera.move(d_pan, d_tilt)
-                    else:
-                        if hasattr(self, "_search_step"):
-                            self._search_step = 0
-                except Exception:
-                    pass
+                arr = np.asarray(action, dtype=float).reshape(-1)
+                d_pan = float(arr[0]) if len(arr) > 0 else 0.0
+                d_tilt = float(arr[1]) if len(arr) > 1 else 0.0
+                try: self.camera.move(d_pan, d_tilt, dt_eff)
+                except Exception: self.camera.move(d_pan, d_tilt)
+            except Exception: pass
 
-        is_locked = self.tracker.status == LockStatus.TRACKING
-        self.perf.log_frame(is_locked, tracking_error_px, time.time()-step_start,
-                            detected=hitbox_hit, hitbox_hit=hitbox_hit, center_hit=center_hit,
-                            lock_state=self.tracker.status.value, dt=dt_wall)
+        is_locked = False
+        lock_state = "searching"
+        self._last_lock_state = lock_state
 
         self.step_count += 1
-        # Reward: negative tracking error plus lock bonus, as example
-        if tracking_error_px is not None:
-            reward = -float(tracking_error_px) / 15.0  # 15px = 100% -> -1
-            if is_locked:
-                reward += 0.5
-            # Center hit bonus
-            if center_hit:
-                reward += 0.3
-        else:
-            reward = -1.0 if not is_locked else -0.5
+        reward = -1.0
 
         terminated = False
         truncated = self.step_count >= self.max_steps
-        # Optional termination on long lost: if lost > 5 seconds
-        # Not enforced by default
 
         obs = self.get_observation()
-        # Enrich obs with frame and detections for AI that wants image
-        obs["frame"] = fov_frame  # uint8 HxWx3
+        obs["frame"] = fov_frame
         obs["all_detections"] = all_dets
         obs["tracking_error_px"] = tracking_error_px
         obs["hitbox_hit"] = hitbox_hit
         obs["center_hit"] = center_hit
         obs["is_locked"] = is_locked
 
-        # Render viewport for debugging (optional, not Qt)
         try:
-            obs["viewport"] = Renderer.render_viewport(fov_frame, self.camera, self.beacons, self.target, self.tracker, all_dets)
+            obs["viewport"] = Renderer.render_viewport(fov_frame, self.camera, self.beacons, self.target, None, all_dets, estimate=estimate)
         except Exception:
             obs["viewport"] = fov_frame
 
         info = {
-            "perf_summary": self.perf.summary(),
             "detection": detection,
             "estimate": estimate,
             "all_detections": all_dets,
@@ -580,7 +382,6 @@ class HeadlessSimulation:
         return obs, float(reward), bool(terminated), bool(truncated), info
 
     def _draw_targets_fov(self, fov_frame: np.ndarray, fov_x0: int, fov_y0: int):
-        """Draw beacons onto FOV frame — same as MainWindow._draw_targets_fov but headless."""
         beacons = getattr(self, "beacons", [self.target]) if hasattr(self, "beacons") else [self.target]
         h, w = fov_frame.shape[:2]
         fog_factor = 0.0
@@ -593,10 +394,6 @@ class HeadlessSimulation:
                 bloom_base = 0.10
             elif preset == "haze":
                 fog_factor = max(fog_factor, 0.18)
-            elif "low light" in preset:
-                bloom_base = 0.12
-            elif preset == "rain":
-                fog_factor = max(fog_factor, 0.12)
         except Exception: pass
         fog_factor = float(np.clip(fog_factor, 0.0, 0.85))
         for beacon in beacons:
@@ -693,16 +490,10 @@ class HeadlessSimulation:
                     cv2.circle(fov_frame, (ix, iy), 1, (255, 255, 255), -1, cv2.LINE_AA)
 
     def close(self):
-        try:
-            if hasattr(self, "perf") and hasattr(self.perf, "close"):
-                self.perf.close()
-        except Exception: pass
+        pass
 
-    # Gym-like helpers
     @property
     def observation_space(self):
-        """Return dict describing observation shapes (for documentation, not gymnasium)."""
-        # Image: FOV size from camera_config
         try:
             h, w = int(self.camera_config.fov_height), int(self.camera_config.fov_width)
         except Exception:
@@ -711,17 +502,15 @@ class HeadlessSimulation:
             "frame": (h, w, 3),
             "estimate": (2,),
             "tracking_error_px": (1,),
-            "lock_status": ["searching","acquired","tracking","lost"],
+            "lock_status": ["searching", "tracking"],
             "pan_tilt": (2,),
             "all_detections": "list[dict]",
         }
 
     @property
     def action_space(self):
-        """Direct pan/tilt delta in px, clipped to [-output_clamp, output_clamp]."""
         try:
             clamp = float(self.controller_config.output_clamp)
         except Exception:
             clamp = 120.0
         return {"d_pan": (-clamp, clamp), "d_tilt": (-clamp, clamp), "shape": (2,)}
-

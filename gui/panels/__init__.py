@@ -8,8 +8,6 @@ from gui.panels.disturbances_panel import DisturbancesPanel  # noqa: F401
 from gui.panels.environment_panel import EnvironmentPanel  # noqa: F401
 from gui.panels.multi_beacon_panel import MultiBeaconPanel  # noqa: F401
 from gui.panels.dashboard_panel import DashboardPanel  # noqa: F401
-from gui.panels.tuning_panel import TuningPanel  # noqa: F401
-from gui.panels.presets_panel import PresetsPanel, PRESETS  # noqa: F401
 
 __all__ = [
     "BaseConfigPanel",
@@ -20,7 +18,4 @@ __all__ = [
     "EnvironmentPanel",
     "MultiBeaconPanel",
     "DashboardPanel",
-    "TuningPanel",
-    "PresetsPanel",
-    "PRESETS",
 ]

@@ -178,33 +178,6 @@ class EnvironmentPanel(BaseConfigPanel):
         stars_grid.addWidget(self.env_star_brightness_spin, 0, 3)
         root.addWidget(stars_box)
 
-        # Dynamics — now visible (advanced, not hidden) — subtle animation for stress-testing
-        dyn_box = QGroupBox("Dynamics — Time-varying Background (Advanced)")
-        dyn_grid = QGridLayout(dyn_box)
-        dyn_grid.setContentsMargins(12, 18, 12, 12)
-        dyn_grid.setHorizontalSpacing(8)
-        dyn_grid.setVerticalSpacing(8)
-        dyn_grid.setColumnStretch(1, 1)
-        self.dynamic_check = QCheckBox("Enable background animation")
-        self.dynamic_check.setChecked(False)
-        self.dynamic_check.setToolTip("Animate haze/stars over time — for stress or realism; off = static scene (default, faster).")
-        dyn_grid.addWidget(self.dynamic_check, 0, 0, 1, 2)
-        dyn_grid.addWidget(self._label("Speed"), 1, 0)
-        self.env_dynamic_speed_spin = QDoubleSpinBox()
-        self.env_dynamic_speed_spin.setRange(*LIMITS["dynamic_speed"])
-        self.env_dynamic_speed_spin.setValue(1.0)
-        self.env_dynamic_speed_spin.setSingleStep(0.1)
-        self.env_dynamic_speed_spin.setDecimals(1)
-        self.env_dynamic_speed_spin.setSuffix(" ×")
-        self.env_dynamic_speed_spin.setToolTip("Animation speed 0.1×–5.0×; only active when Dynamic checked.")
-        self.env_dynamic_speed_spin.setMinimumHeight(26)
-        dyn_grid.addWidget(self.env_dynamic_speed_spin, 1, 1)
-        dyn_hint = QLabel("Off = static (recommended, fastest). On = haze twinkle drifts — useful for occlusion stress.")
-        dyn_hint.setWordWrap(True)
-        dyn_hint.setStyleSheet("color:#64748b; font-size:10px; font-style:italic;")
-        dyn_grid.addWidget(dyn_hint, 2, 0, 1, 2)
-        root.addWidget(dyn_box)
-
         for w in [
             self.scene_w_spin,
             self.scene_h_spin,
@@ -215,23 +188,16 @@ class EnvironmentPanel(BaseConfigPanel):
             self.haze_spin,
             self.env_star_count_spin,
             self.env_star_brightness_spin,
-            self.env_dynamic_speed_spin,
         ]:
             w.valueChanged.connect(self._emit_config)
 
-        self.dynamic_check.toggled.connect(self._on_dynamic_toggled)
         self.random_seed_btn.clicked.connect(self.randomizeRequested.emit)
-        self._sync_dynamic_speed_enabled()
         root.addStretch()
 
     def _label(self, text: str) -> QLabel:
         lbl = QLabel(text)
         lbl.setStyleSheet("color:#374151; font-size:11px;")
         return lbl
-
-    def _on_dynamic_toggled(self, checked: bool) -> None:
-        self._sync_dynamic_speed_enabled()
-        self._emit_config()
 
     def _apply_world_preset(self, size: int) -> None:
         """One-click world size preset (square)."""
@@ -242,10 +208,6 @@ class EnvironmentPanel(BaseConfigPanel):
         for w in [self.scene_w_spin, self.scene_h_spin]:
             w.blockSignals(False)
         self._emit_config()
-
-    def _sync_dynamic_speed_enabled(self) -> None:
-        enabled = self.dynamic_check.isChecked()
-        self.env_dynamic_speed_spin.setEnabled(enabled)
 
     def collect_config(self) -> EnvironmentConfig:
         return EnvironmentConfig(
@@ -258,8 +220,6 @@ class EnvironmentPanel(BaseConfigPanel):
             haze_pct=int(self.haze_spin.value()),
             star_count=int(self.env_star_count_spin.value()),
             star_brightness=float(self.env_star_brightness_spin.value()),
-            dynamic=bool(self.dynamic_check.isChecked()),
-            dynamic_speed=float(self.env_dynamic_speed_spin.value()),
         ).validate()
 
     def set_config(self, cfg: EnvironmentConfig, emit: bool = False) -> None:
@@ -274,8 +234,6 @@ class EnvironmentPanel(BaseConfigPanel):
             self.haze_spin,
             self.env_star_count_spin,
             self.env_star_brightness_spin,
-            self.env_dynamic_speed_spin,
-            self.dynamic_check,
         ]:
             w.blockSignals(True)
         try:
@@ -288,9 +246,6 @@ class EnvironmentPanel(BaseConfigPanel):
             self.haze_spin.setValue(int(cfg.haze_pct))
             self.env_star_count_spin.setValue(int(cfg.star_count))
             self.env_star_brightness_spin.setValue(float(cfg.star_brightness))
-            self.dynamic_check.setChecked(bool(cfg.dynamic))
-            self.env_dynamic_speed_spin.setValue(float(cfg.dynamic_speed))
-            self._sync_dynamic_speed_enabled()
         finally:
             for w in [
                 self.scene_w_spin,
@@ -302,8 +257,6 @@ class EnvironmentPanel(BaseConfigPanel):
                 self.haze_spin,
                 self.env_star_count_spin,
                 self.env_star_brightness_spin,
-                self.env_dynamic_speed_spin,
-                self.dynamic_check,
             ]:
                 w.blockSignals(False)
         if emit:

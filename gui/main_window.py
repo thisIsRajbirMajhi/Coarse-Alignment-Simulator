@@ -1,23 +1,19 @@
 # gui/main_window.py - Refactored orchestrator (thin facade)
 #
-# BEFORE: 2578 lines monolith handling simulation, UI, handlers, tick, rendering, lifecycle.
 # AFTER:  ~150 lines orchestrator delegating to focused mixins:
 #   - mixins.state_mixin        : dirty tracking, snapshots, debounced auto
-#   - mixins.simulation_mixin   : _build_simulation (scene/beacons/camera/detector/tracker/controller)
-#   - mixins.ui_mixin           : _build_ui + video stage + control deck + dashboard host + presets
+#   - mixins.simulation_mixin   : _build_simulation (scene/beacons/camera/controller)
+#   - mixins.ui_mixin           : _build_ui + video stage + control deck + dashboard host
 #   - mixins.beacon_mixin       : beacon count/target, randomization, hot-apply
 #   - mixins.scene_mixin        : environment & camera hot-apply (world/FOV), disturbance hot, seed
-#   - mixins.control_mixin      : global speed/motion, control, tuning, detector/tracker params, gain sync
-#   - mixins.presets_mixin      : _apply_preset / _randomize_all_presets (one-click scenarios)
+#   - mixins.control_mixin      : global speed/motion, control, gain sync
 #   - mixins.lifecycle_mixin    : start/pause/reset/export/closeEvent
-#   - mixins.tick_mixin         : _tick pipeline (dt, disturbances, detection, gating, tracker, controller, perf)
+#   - mixins.tick_mixin         : _tick pipeline (dt, disturbances, direct control, perf)
 #   - mixins.rendering_mixin    : _render_viewport/minimap, photometry, pixmap, minimap thumb cache
 #   - mixins.stats_mixin        : _update_stats (perf summary → dashboard)
 #
-# All original public attributes/methods preserved for backward compat:
-#   MainWindow still exposes .camera, .tracker, .detector, .beacons, .target, .scene, .perf, etc.
-#   External imports `from gui.main_window import MainWindow` unchanged.
-#   Legacy aliases (fov_w_spin, beacon_count_spin, sliders, ...) still wired via panels.
+# Tracking/Search removed: MainWindow no longer exposes .tracker; use _last_detection/_last_estimate instead.
+#   Legacy .tracker kept as dummy for compat but is None.
 
 from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QMainWindow, QStatusBar
@@ -28,7 +24,6 @@ from disturbance.config import DisturbanceConfig
 from environment.config import EnvironmentConfig
 from gui.styles import APP_STYLE, FOV_SIZE, SCENE_SIZE, TICK_MS
 from target.config import MultiBeaconConfig
-from perf_log.metrics import PerformanceLogger
 
 # Mixins — each ~100-400 lines, single responsibility (imported for MRO)
 from gui.mixins.state_mixin import StateMixin
@@ -41,7 +36,6 @@ from gui.mixins.lifecycle_mixin import LifecycleMixin
 from gui.mixins.tick_mixin import TickMixin
 from gui.mixins.rendering_mixin import RenderingMixin
 from gui.mixins.stats_mixin import StatsMixin
-from gui.mixins.presets_mixin import PresetsMixin
 
 
 class MainWindow(
@@ -51,7 +45,6 @@ class MainWindow(
     BeaconMixin,
     SceneMixin,
     ControlMixin,
-    PresetsMixin,
     LifecycleMixin,
     TickMixin,
     RenderingMixin,
@@ -76,21 +69,22 @@ class MainWindow(
         self._camera_drift_state: dict = {}
         self._platform_motion_state: dict = {}
         self._jitter_state: dict = {}
-        self._search_step: int = 0
         self._scene_size = SCENE_SIZE
         self._fov_size = FOV_SIZE
         self._viewport_display_size = (2000, 2000)
         self._god_display_size = (2000, 2000)
+        # Direct detection state (tracking removed)
+        self._last_detection: tuple[float,float] | None = None
+        self._last_estimate: tuple[float,float] | None = None
+        self._last_all_detections: list[dict] = []
+        self._last_lock_state: str = "searching"
         # Beacon/Target — simplified: only count and target index, fixed defaults
         self.beacon_config = MultiBeaconConfig(beacon_count=1, target_index=0).validate()
         self._beacon_count = int(self.beacon_config.beacon_count)
         self._hitbox_radius = 14
         self._center_radius = 2
         self._target_beacon_id = int(self.beacon_config.target_index)
-        # Global tuning defaults — now fully configurable
-        self._tracker_smoothing = 0.25
-        self._tracker_miss_limit = 5
-        self._detector_min_area = 2
+        # Global tuning defaults — beacon_tracker removed
         self._sim_speed = 1.0
         self._global_brightness = 255
         self._global_radius = 5
@@ -150,18 +144,12 @@ class MainWindow(
         sb.showMessage("Ready — configure scene/viewport (up to 5000×5000) then Start")
         self.setStatusBar(sb)
 
-        # Initial dashboard populate so no field appears empty
+        # Dummy tracker for backward compat (exposes status/estimated_position but no filtering)
         try:
-            if hasattr(self, "dashboard_panel"):
-                cam_scale = 0.035
-                try:
-                    if hasattr(self, "camera") and hasattr(self.camera, "config") and getattr(self.camera.config, "pixel_scale_mrad", None) is not None:
-                        cam_scale = float(self.camera.config.pixel_scale_mrad)
-                except Exception:
-                    pass
-                self.dashboard_panel.update_from_summary(self.perf.summary(), self.tracker.status.value, None, camera_scale_mrad=cam_scale)
+            from types import SimpleNamespace
+            self.tracker = SimpleNamespace(status=SimpleNamespace(value=self._last_lock_state), estimated_position=self._last_estimate, get_velocity=lambda: None)
         except Exception:
-            pass
+            self.tracker = None
 
     # ── Single-source sizes: proxy to configs (fixes duplication warnings) ──
     @property

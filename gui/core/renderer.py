@@ -129,8 +129,8 @@ class Renderer:
         Renderer.draw_corner_brackets(img, margin=4, length=max(8, min(w,h)//20), color=(180, 180, 180), thickness=1)
 
     @staticmethod
-    def render_viewport(fov_frame: np.ndarray, camera, beacons, target, tracker, all_dets: list[dict] | None, overlay=None, pulse_progress: float = 0.0, pixel_scale_mrad: float | None = None) -> np.ndarray:
-        """Render FOV viewport with standard crosshair only."""
+    def render_viewport(fov_frame: np.ndarray, camera, beacons, target, tracker=None, all_dets: list[dict] | None = None, overlay=None, pulse_progress: float = 0.0, pixel_scale_mrad: float | None = None, estimate=None, lock_status=None) -> np.ndarray:
+        """Render FOV viewport with standard crosshair only. Tracker is optional (removed); use estimate/lock_status directly."""
         display = fov_frame.copy()
         h, w = display.shape[:2]
         cx, cy = w // 2, h // 2
@@ -147,8 +147,20 @@ class Renderer:
         Renderer.draw_reticle(display, (cx, cy), gap=gap, arm=arm, color=(230, 230, 230), thickness=1)
         Renderer.draw_corner_brackets(display, margin=4, length=max(8, min(w,h)//20), color=(180, 180, 180), thickness=1)
 
-        status = tracker.status
-        base_color = lock_color_bgr(status.value, default=(170, 170, 170))
+        # Resolve estimate and lock_status from tracker if not provided explicitly
+        if estimate is None and tracker is not None:
+            try:
+                estimate = getattr(tracker, "estimated_position", None)
+            except Exception:
+                estimate = None
+        if lock_status is None and tracker is not None:
+            try:
+                lock_status = getattr(getattr(tracker, "status", None), "value", None)
+            except Exception:
+                lock_status = None
+        if lock_status is None:
+            lock_status = "tracking" if estimate is not None else "searching"
+        base_color = lock_color_bgr(lock_status, default=(170, 170, 170))
 
         fov_x0, fov_y0, _, _ = camera.get_fov_rect()
         for beacon in beacons:
@@ -191,17 +203,20 @@ class Renderer:
                 pts = np.array([[x, y-3],[x+3, y],[x, y+3],[x-3, y]], np.int32)
                 cv2.polylines(display, [pts], True, (130, 130, 255), 1, cv2.LINE_AA)
 
-        estimate = tracker.estimated_position
+        # Use resolved estimate (from tracker or direct)
         if estimate is not None:
-            ex, ey = int(estimate[0]), int(estimate[1])
-            cv2.rectangle(display, (ex-6, ey-6), (ex+6, ey+6), base_color, 1, cv2.LINE_AA)
-            cv2.drawMarker(display, (ex, ey), base_color, cv2.MARKER_CROSS, 10, 1, cv2.LINE_AA)
+            try:
+                ex, ey = int(estimate[0]), int(estimate[1])
+                cv2.rectangle(display, (ex-6, ey-6), (ex+6, ey+6), base_color, 1, cv2.LINE_AA)
+                cv2.drawMarker(display, (ex, ey), base_color, cv2.MARKER_CROSS, 10, 1, cv2.LINE_AA)
+            except Exception:
+                pass
             # No in-screen text overlays — resolution/pan-tilt hidden per spec
         # No resolution or pan-tilt text inside screen
         return display
 
     @staticmethod
-    def render_minimap_cached(minimap_thumb: np.ndarray, camera, beacons, target, tracker, label_size: tuple[int, int], scene_size: tuple[int,int]) -> np.ndarray:
+    def render_minimap_cached(minimap_thumb: np.ndarray, camera, beacons, target, tracker=None, label_size: tuple[int, int] = (400,300), scene_size: tuple[int,int] = (2000,2000), estimate=None, lock_status=None) -> np.ndarray:
         """Fast path — minimap_thumb already resized to label_size (cached, ~0.16M px).
         No 5000×5000 resize or copy. Just overlay FOV/beacons."""
         lw, lh = label_size; sw, sh = scene_size
@@ -267,16 +282,26 @@ class Renderer:
             if len(beacons) > 1:
                 cv2.putText(display, f"#{beacon.beacon_id}", (mx+hr_s+2, my-2),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.28, col_hit, 1, cv2.LINE_AA)
-        if tracker.estimated_position is not None:
-            ex, ey = tracker.estimated_position
-            fx0, fy0, _, _ = camera.get_fov_rect()
-            mx, my = int((fx0+ex)*scale_x), int((fy0+ey)*scale_y)
-            cv2.drawMarker(display, (mx, my), (0, 255, 255), cv2.MARKER_CROSS, 7, 1, cv2.LINE_AA)
-            cv2.circle(display, (mx, my), 1, (0, 255, 255), -1, cv2.LINE_AA)
+        # Estimate crosshair (from tracker or direct estimate)
+        est = estimate
+        if est is None and tracker is not None:
+            try:
+                est = getattr(tracker, "estimated_position", None)
+            except Exception:
+                est = None
+        if est is not None:
+            try:
+                ex, ey = est
+                fx0, fy0, _, _ = camera.get_fov_rect()
+                mx, my = int((fx0+ex)*scale_x), int((fy0+ey)*scale_y)
+                cv2.drawMarker(display, (mx, my), (0, 255, 255), cv2.MARKER_CROSS, 7, 1, cv2.LINE_AA)
+                cv2.circle(display, (mx, my), 1, (0, 255, 255), -1, cv2.LINE_AA)
+            except Exception:
+                pass
         return display
 
     @staticmethod
-    def render_minimap(scene_frame: np.ndarray, camera, beacons, target, tracker, label_size: tuple[int, int], scene_size: tuple[int,int]) -> np.ndarray:
+    def render_minimap(scene_frame: np.ndarray, camera, beacons, target, tracker=None, label_size: tuple[int, int]=(400,300), scene_size: tuple[int,int]=(2000,2000), estimate=None, lock_status=None) -> np.ndarray:
         lw, lh = label_size; sw, sh = scene_size
         display = cv2.resize(scene_frame, (max(50, lw), max(50, lh)), interpolation=cv2.INTER_LINEAR)
         scale_x, scale_y = display.shape[1] / sw, display.shape[0] / sh
@@ -335,12 +360,21 @@ class Renderer:
             if len(beacons) > 1:
                 cv2.putText(display, f"#{beacon.beacon_id}", (mx+hr_s+2, my-2),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.28, col_hit, 1, cv2.LINE_AA)
-        if tracker.estimated_position is not None:
-            ex, ey = tracker.estimated_position
-            fx0, fy0, _, _ = camera.get_fov_rect()
-            mx, my = int((fx0+ex)*scale_x), int((fy0+ey)*scale_y)
-            cv2.drawMarker(display, (mx, my), (0, 255, 255), cv2.MARKER_CROSS, 7, 1, cv2.LINE_AA)
-            cv2.circle(display, (mx, my), 1, (0, 255, 255), -1, cv2.LINE_AA)
+        est = estimate
+        if est is None and tracker is not None:
+            try:
+                est = getattr(tracker, "estimated_position", None)
+            except Exception:
+                est = None
+        if est is not None:
+            try:
+                ex, ey = est
+                fx0, fy0, _, _ = camera.get_fov_rect()
+                mx, my = int((fx0+ex)*scale_x), int((fy0+ey)*scale_y)
+                cv2.drawMarker(display, (mx, my), (0, 255, 255), cv2.MARKER_CROSS, 7, 1, cv2.LINE_AA)
+                cv2.circle(display, (mx, my), 1, (0, 255, 255), -1, cv2.LINE_AA)
+            except Exception:
+                pass
         return display
 
     @staticmethod

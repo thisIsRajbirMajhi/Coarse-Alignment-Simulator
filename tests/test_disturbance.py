@@ -97,22 +97,12 @@ def test_gaussian_sigma_capped():
 
 def test_atmospheric_presets():
     frame = np.full((100, 100, 3), 180, dtype=np.uint8)
-    for preset in ["Clear", "Haze", "Fog", "Rain", "Low Light", "User Defined"]:
+    for preset in ["Clear", "Haze", "Fog", "User Defined"]:
         out = apply_atmospheric_disturbance(frame, preset=preset)
         assert out.shape == frame.shape
         assert out.dtype == np.uint8
         if preset == "Clear":
             assert np.array_equal(frame, out)
-
-
-def test_atmospheric_rain_no_alloc_blowup():
-    frame = np.full((480, 640, 3), 150, dtype=np.uint8)
-    # should not allocate per-streak 200MB, should complete quickly
-    import time
-    t0 = time.time()
-    out = apply_atmospheric_disturbance(frame, preset="Rain")
-    assert time.time() - t0 < 1.0
-    assert out.shape == frame.shape
 
 
 def test_disturbance_config_preset_overwrite_warning(caplog):
