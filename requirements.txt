@@ -1,4 +1,11 @@
+# Core simulator (GUI + synthesis)
 numpy==2.5.2
 opencv-python==5.0.0.93
 PyQt5==5.15.11
 
+# Dataset inspection / training (scripts/train.py, scripts/visualize_labels.py)
+pyyaml>=6.0
+ultralytics>=8.3.0
+torch>=2.2
+onnx>=1.15
+onnxruntime>=1.17

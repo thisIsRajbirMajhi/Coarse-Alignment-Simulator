@@ -1,0 +1,55 @@
+{
+  "split": "test",
+  "fov": "640x480",
+  "requested_total": 10000,
+  "starting_images": 0,
+  "requested_new": 10000,
+  "saved_new": 10000,
+  "labeled_new": 10000,
+  "background_new": 0,
+  "failed_images": 0,
+  "retries": 4018,
+  "errors": 0,
+  "seed": 200042,
+  "difficulty_requested": "mixed",
+  "counts_by_difficulty": {
+    "easy": 2965,
+    "medium": 4040,
+    "hard": 2995
+  },
+  "shapes": {
+    "square": 3306,
+    "circle": 3379,
+    "random": 3315
+  },
+  "motions": {
+    "figure_eight": 1440,
+    "spiral": 1451,
+    "sinusoidal": 1420,
+    "random": 1453,
+    "curved": 1413,
+    "linear": 1376,
+    "zigzag": 1447
+  },
+  "presets": {
+    "Haze": 2553,
+    "Fog": 4207,
+    "Clear": 3240
+  },
+  "beacon_counts": {
+    "1": 3323,
+    "2": 3356,
+    "3": 3321
+  },
+  "elapsed_sec": 6573.685,
+  "total_images": 10000,
+  "validation": {
+    "split": "test",
+    "images": 10000,
+    "labeled_images": 10000,
+    "background_images": 0,
+    "boxes": 14090,
+    "invalid_pairs": 0,
+    "image_size": "640x480"
+  }
+}

@@ -31,6 +31,7 @@ dist/
 !dataset/stats_*.json
 dataset/images/
 dataset/labels/
+dataset/visualized/
 runs/
 *.onnx
 *.pt

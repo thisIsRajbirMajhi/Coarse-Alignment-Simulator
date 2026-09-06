@@ -1,58 +1,22 @@
+"""FSOC beacon YOLO dataset builder.
+
+Generates independent train/val/test splits in Ultralytics YOLO format.
+The generator is deterministic per split seed, resumable, validates image/label
+pairs, clips boxes to the image boundary, writes accurate statistics, and never
+uses the test split during dataset generation for the other splits.
 """
-FSOC Dataset Builder — Robust, Reliable, Any N, 640x480 Only
-
-Best-in-class dataset generator for beacon detection.
-Fully randomized per PDF spec, 70% centered + 30% search, fallback re-center,
-resume support, validation, balancing, stats.
-
-Features:
-- Any N: 1 to 100k+, streaming, low memory
-- 640x480 enforced (per request), YOLO format normalized, class 0 = beacon
-- Fully randomized per PDF: world 2000, beacon 1-3 square/circle/random 5-20 default 10, motion 7 profiles, all disturbances S&P 10% + Gaussian 20 + Poisson, jitter ±20, Clear/Haze/Fog/Rain/Low light, platform Linear+6
-- 70% center camera on target (±60px) for tracking, 30% offset (±220/160) for searching, fallback re-center if no beacon visible (retry up to 3)
-- Difficulties: easy (light) / medium / hard / mixed (30/40/30) / clear (no disturbances, guaranteed bright beacon)
-- Resume: if dataset/images/split already has files, continue from max index, skip existing, no overwrite unless --overwrite
-- Validation: every image checked (readable, 640x480, >0 bytes), every label checked (parseable, 0-1 normalized), empty label retry logic
-- Stats: per difficulty/shape/motion/preset/beacon count, labeled ratio, time per image, ETA
-- Dataset.yaml auto-created, YOLO ready
-- Graceful handling: KeyboardInterrupt saves progress, disk full check, per-image try/except with 3 retries
-
-Usage:
-  python scripts/dataset_builder.py --num 20 --split test                    # 20 test, mixed
-  python scripts/dataset_builder.py --num 5000 --split train --difficulty clear   # 5000 clear beacon vision various beacon params
-  python scripts/dataset_builder.py --num 3000 --split train --difficulty medium --seed 8000
-  python scripts/dataset_builder.py --num 5000 --split train --difficulty hard   # 5000 hard
-  python scripts/dataset_builder.py --num 10000 --split train --difficulty mixed  # 10k mixed
-  python scripts/dataset_builder.py --full  # 8000 train / 2000 val / 1000 test mixed
-
-For the current user requests:
-  # 5000 clear beacon vision various params (easy)
-  python scripts/dataset_builder.py --num 5000 --split train --difficulty clear
-  # 3000 medium/hard fully randomized
-  python scripts/dataset_builder.py --num 3000 --split train --difficulty mixed --seed 5000 --resume
-
-Output:
-  dataset/
-    images/train/*.jpg 640x480
-    images/val/*.jpg
-    images/test/*.jpg
-    labels/train/*.txt YOLO 0 x_center y_center w h
-    labels/val/*.txt
-    labels/test/*.txt
-    dataset.yaml
-    stats.json (per run)
-"""
-
 from __future__ import annotations
 
 import argparse
 import json
 import random
+import shutil
+import signal
 import sys
 import time
 from collections import Counter
 from pathlib import Path
-import signal
+from typing import Iterable
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -66,140 +30,248 @@ from environment.config import EnvironmentConfig
 from simulation.headless import HeadlessSimulation
 from target.config import MultiBeaconConfig
 
-# Graceful interrupt
+FOV = (640, 480)
+WORLD = (2000, 2000)
+CLASS_ID = 0
+CLASS_NAME = "beacon"
+# Minimum clipped box size in pixels. int()+clamp projection (as in
+# scripts/visualize_labels.py) can lose up to ~1px per edge, so a 2px
+# threshold guarantees the surviving box still has x2>x1 and y2>y1.
+MIN_BOX_PX = 2.0
+SHAPES = ("square", "circle", "random")
+MOTIONS = ("linear", "curved", "figure_eight", "random", "spiral", "sinusoidal", "zigzag")
+DIFFICULTIES = ("easy", "medium", "hard")
+MIXED_WEIGHTS = (0.30, 0.40, 0.30)
+
 _interrupted = False
+
+
 def _handle_sigint(signum, frame):
     global _interrupted
     _interrupted = True
-    print("\nInterrupted — saving progress, please wait...")
+    print("\nInterrupt received. Finishing the current file and saving stats...")
+
+
 try:
     signal.signal(signal.SIGINT, _handle_sigint)
 except Exception:
     pass
 
 
-def _get_resume_start(img_dir: Path, prefix: str = "") -> int:
-    """Find max index in existing dataset for resume, else 0."""
-    if not img_dir.exists():
-        return 0
-    max_idx = -1
-    for p in img_dir.glob(f"{prefix}*.jpg"):
-        try:
-            # Expect train_000000.jpg or test_000000.jpg
-            stem = p.stem
-            # Extract numeric part after _
-            num_part = stem.split("_")[-1]
-            idx = int(num_part)
-            if idx > max_idx:
-                max_idx = idx
-        except Exception:
-            continue
-    return max_idx + 1
+def write_dataset_yaml(root: Path) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / "dataset.yaml"
+    content = """# FSOC beacon detection dataset - YOLO format\npath: .\ntrain: images/train\nval: images/val\ntest: images/test\nnc: 1\nnames: ['beacon']\n"""
+    path.write_text(content, encoding="utf-8")
+    return path
 
 
-def _validate_image_label(img_path: Path, lbl_path: Path, fov_size: tuple[int, int]) -> tuple[bool, str]:
-    """Validate image and label pair."""
+def _extract_index(path: Path) -> int | None:
     try:
-        if not img_path.exists() or img_path.stat().st_size == 0:
-            return False, "missing or empty image"
-        img = cv2.imread(str(img_path))
-        if img is None:
-            return False, "unreadable image"
-        if img.shape[1] != fov_size[0] or img.shape[0] != fov_size[1]:
-            return False, f"wrong size {img.shape[1]}x{img.shape[0]} != {fov_size[0]}x{fov_size[1]}"
-        if not lbl_path.exists():
-            return False, "missing label"
-        # Check label parseable and normalized
-        text = lbl_path.read_text().strip()
-        if text == "":
-            # Empty label is valid background, but for training we prefer at least one beacon
-            # Allow empty but note it
-            return True, "empty (background)"
-        for line in text.splitlines():
-            parts = line.strip().split()
-            if len(parts) != 5:
-                return False, f"bad label line {line}"
-            cls, xc, yc, w, h = parts
-            xc_f, yc_f, w_f, h_f = float(xc), float(yc), float(w), float(h)
-            if not (0 <= xc_f <= 1 and 0 <= yc_f <= 1 and 0 <= w_f <= 1 and 0 <= h_f <= 1):
-                return False, f"out of range {line}"
-            if int(cls) != 0:
-                return False, f"wrong class {cls}"
-        return True, "ok"
-    except Exception as e:
-        return False, f"exception {e}"
+        return int(path.stem.rsplit("_", 1)[1])
+    except (ValueError, IndexError):
+        return None
 
 
-def _random_beacon_config(rng: np.random.Generator, world_size: tuple[int, int], difficulty: str) -> MultiBeaconConfig:
-    w, h = world_size
-    count = int(rng.integers(1, 4))  # 1-3
+def _next_index(image_dir: Path, split: str) -> int:
+    if not image_dir.exists():
+        return 0
+    values = [i for p in image_dir.glob(f"{split}_*.jpg") if (i := _extract_index(p)) is not None]
+    return max(values, default=-1) + 1
+
+
+def _pair_state(img_path: Path, lbl_path: Path, fov_size: tuple[int, int]) -> tuple[bool, str, int]:
+    if not img_path.exists() or img_path.stat().st_size <= 0:
+        return False, "missing/empty image", 0
+    img = cv2.imread(str(img_path), cv2.IMREAD_COLOR)
+    if img is None:
+        return False, "unreadable image", 0
+    if (img.shape[1], img.shape[0]) != fov_size:
+        return False, f"wrong image size {img.shape[1]}x{img.shape[0]}", 0
+    if not lbl_path.exists():
+        return False, "missing label", 0
+    text = lbl_path.read_text(encoding="utf-8").strip()
+    if not text:
+        return True, "background", 0
+    count = 0
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) != 5:
+            return False, f"bad label: {line}", 0
+        try:
+            cls = int(parts[0])
+            vals = [float(x) for x in parts[1:]]
+        except ValueError:
+            return False, f"non-numeric label: {line}", 0
+        if cls != CLASS_ID:
+            return False, f"unexpected class {cls}", 0
+        if not all(0.0 <= v <= 1.0 for v in vals):
+            return False, f"out-of-range label: {line}", 0
+        if vals[2] <= 0.0 or vals[3] <= 0.0:
+            return False, f"zero-size box: {line}", 0
+        count += 1
+    return True, "labeled", count
+
+
+def validate_split(root: Path, split: str, fov_size: tuple[int, int] = FOV) -> dict:
+    image_dir = root / "images" / split
+    label_dir = root / "labels" / split
+    images = sorted(image_dir.glob(f"{split}_*.jpg"))
+    bad = 0
+    labeled = 0
+    background = 0
+    boxes = 0
+    for image in images:
+        label = label_dir / f"{image.stem}.txt"
+        ok, reason, count = _pair_state(image, label, fov_size)
+        if not ok:
+            bad += 1
+        elif count:
+            labeled += 1
+            boxes += count
+        else:
+            background += 1
+    return {
+        "split": split,
+        "images": len(images),
+        "labeled_images": labeled,
+        "background_images": background,
+        "boxes": boxes,
+        "invalid_pairs": bad,
+        "image_size": f"{fov_size[0]}x{fov_size[1]}",
+    }
+
+
+def _random_beacon_config(rng: np.random.Generator, difficulty: str) -> MultiBeaconConfig:
+    w, h = WORLD
+    count = int(rng.integers(1, 4))
     target = int(rng.integers(0, count))
-    shapes = ["square", "circle", "random"]
-    shape = str(rng.choice(shapes))
+    shape = str(rng.choice(SHAPES))
     size_w = int(rng.integers(5, 21))
     size_h = int(rng.integers(5, 21))
-    x = float(rng.integers(200, max(201, w - 200)))
-    y = float(rng.integers(200, max(201, h - 200)))
-    profiles = ["linear", "curved", "figure_eight", "random", "spiral", "sinusoidal", "zigzag"]
-    profile = str(rng.choice(profiles))
-    # Speed varies with difficulty
+    x = float(rng.integers(200, w - 199))
+    y = float(rng.integers(200, h - 199))
+    profile = str(rng.choice(MOTIONS))
     if difficulty == "easy":
         speed = float(rng.uniform(20, 60))
     elif difficulty == "hard":
         speed = float(rng.uniform(60, 140))
     else:
         speed = float(rng.uniform(20, 120))
-    blinking = bool(rng.random() < 0.08)  # low for dataset, beacon should be visible
-    speed_random = bool(rng.random() < 0.2)
-    cfg = MultiBeaconConfig(
-        beacon_count=count, target_index=target, shape=shape,
-        size_w=size_w, size_h=size_h, x=x, y=y,
-        profile=profile, speed=speed, blinking=blinking, speed_random=speed_random
+    return MultiBeaconConfig(
+        beacon_count=count,
+        target_index=target,
+        shape=shape,
+        size_w=size_w,
+        size_h=size_h,
+        x=x,
+        y=y,
+        profile=profile,
+        speed=speed,
+        blinking=bool(rng.random() < 0.05),
+        speed_random=bool(rng.random() < 0.20),
     ).validate()
-    return cfg
 
 
-def _capture_with_retry(
-    sim: HeadlessSimulation,
-    rng: np.random.Generator,
-    fov_size: tuple[int, int],
-    world_size: tuple[int, int],
-    max_retries: int = 3,
-) -> tuple[np.ndarray, list[tuple[float, float, float, float]], dict]:
-    """
-    Capture one image with 70% centered 30% offset logic and fallback re-center.
-    Returns (frame, labels, meta) with retry up to max_retries if no beacon visible.
-    """
-    fov_w, fov_h = fov_size
-    last_frame = None
-    last_labels = []
-    last_meta = {}
+def _difficulty_for(rng: np.random.Generator, requested: str) -> str:
+    if requested == "mixed":
+        return str(rng.choice(DIFFICULTIES, p=MIXED_WEIGHTS))
+    if requested == "clear":
+        return "easy"
+    return requested
 
-    for attempt in range(max_retries):
-        # 70% center, 30% offset
+
+def _build_configs(rng: np.random.Generator, difficulty: str, seed: int, idx: int, attempt: int):
+    env_cfg = EnvironmentConfig(world_width=WORLD[0], world_height=WORLD[1], seed=seed + idx + attempt).validate()
+    if difficulty == "clear":
+        env_cfg = EnvironmentConfig(
+            world_width=WORLD[0], world_height=WORLD[1], seed=seed + idx + attempt,
+            bg_top=12, bg_bottom=22, vignetting_pct=0, haze_pct=0,
+            star_count=int(rng.integers(30, 80)), star_brightness=1.0,
+        ).validate()
+    else:
+        env_cfg = env_cfg.randomize_for_training(rng, difficulty)
+
+    cam_cfg = CameraConfig(fov_width=FOV[0], fov_height=FOV[1]).validate(WORLD)
+
+    if difficulty == "clear":
+        dist_cfg = DisturbanceConfig(
+            atmospheric_preset="Clear",
+            camera_jitter=0,
+            platform_speed=0,
+            enable_salt_pepper=False,
+            enable_gaussian=False,
+            enable_poisson=False,
+            platform_profile="Linear",
+        ).validate()
+    else:
+        dist_cfg = DisturbanceConfig().randomize_for_training(rng, difficulty)
+
+    beacon_cfg = _random_beacon_config(rng, difficulty)
+    sim_seed = seed + idx * 997 + attempt * 101
+    sim = HeadlessSimulation(
+        seed=sim_seed,
+        env_config=env_cfg,
+        camera_config=cam_cfg,
+        disturbance_config=dist_cfg,
+        beacon_config=beacon_cfg,
+        rng=np.random.default_rng(sim_seed),
+    )
+    return sim, beacon_cfg, dist_cfg
+
+
+def _bbox_from_beacon(beacon, fov_x0: float, fov_y0: float, fov_w: int, fov_h: int):
+    try:
+        cx = float(beacon.x) - float(fov_x0)
+        cy = float(beacon.y) - float(fov_y0)
+        bw = max(1.0, float(getattr(beacon, "size_w", 10)))
+        bh = max(1.0, float(getattr(beacon, "size_h", 10)))
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+    x1 = max(0.0, cx - bw / 2.0)
+    y1 = max(0.0, cy - bh / 2.0)
+    x2 = min(float(fov_w), cx + bw / 2.0)
+    y2 = min(float(fov_h), cy + bh / 2.0)
+    if x2 <= x1 or y2 <= y1:
+        return None
+    # Drop sub-pixel edge slivers that would collapse to zero area after
+    # the int()+clamp projection used at visualization / training time.
+    if (x2 - x1) < MIN_BOX_PX or (y2 - y1) < MIN_BOX_PX:
+        return None
+
+    xc = ((x1 + x2) / 2.0) / fov_w
+    yc = ((y1 + y2) / 2.0) / fov_h
+    w = (x2 - x1) / fov_w
+    h = (y2 - y1) / fov_h
+    return float(xc), float(yc), float(w), float(h)
+
+
+def _capture(sim: HeadlessSimulation, rng: np.random.Generator, max_attempts: int = 3):
+    last = None
+    for attempt in range(max_attempts):
         try:
-            tgt = sim.target
-            if rng.random() < 0.7:
-                jx = int(rng.integers(-60, 60))
-                jy = int(rng.integers(-60, 60))
-                sim.camera.set_position(float(tgt.x + jx), float(tgt.y + jy))
+            target = sim.target
+            if rng.random() < 0.70:
+                jx = int(rng.integers(-60, 61))
+                jy = int(rng.integers(-60, 61))
             else:
-                jx = int(rng.integers(-fov_w // 2, fov_w // 2))
-                jy = int(rng.integers(-fov_h // 2, fov_h // 2))
-                sim.camera.set_position(float(tgt.x + jx), float(tgt.y + jy))
+                # Search-mode camera displacement is approximately one image FOV.
+                jx = int(rng.integers(-FOV[0] // 2, FOV[0] // 2 + 1))
+                jy = int(rng.integers(-FOV[1] // 2, FOV[1] // 2 + 1))
+            sim.camera.set_position(float(target.x + jx), float(target.y + jy))
         except Exception:
             pass
 
-        # Small warm up 0-3 steps
         for _ in range(int(rng.integers(0, 4))):
             sim.step()
+        obs, *_ = sim.step()
+        frame = obs.get("frame")
+        if frame is None or frame.size == 0:
+            continue
+        if (frame.shape[1], frame.shape[0]) != FOV:
+            frame = cv2.resize(frame, FOV, interpolation=cv2.INTER_LINEAR)
 
-        obs, _, _, _, _ = sim.step()
-        frame = obs["frame"]
-        if frame.shape[1] != fov_w or frame.shape[0] != fov_h:
-            frame = cv2.resize(frame, (fov_w, fov_h), interpolation=cv2.INTER_LINEAR)
-
-        # Compute labels
         fov_x0, fov_y0, _, _ = sim.camera.get_fov_rect()
         labels = []
         for beacon in sim.beacons:
@@ -207,376 +279,199 @@ def _capture_with_retry(
                 continue
             if getattr(beacon, "blinking", False) and not getattr(beacon, "_blink_visible", True):
                 continue
-            try:
-                px = float(beacon.x) - float(fov_x0)
-                py = float(beacon.y) - float(fov_y0)
-            except Exception:
-                continue
-            if px < -40 or px > fov_w + 40 or py < -40 or py > fov_h + 40:
-                continue
-            size_w = int(getattr(beacon, "size_w", 10))
-            size_h = int(getattr(beacon, "size_h", 10))
-            x_center = px / fov_w
-            y_center = py / fov_h
-            w_norm = size_w / fov_w
-            h_norm = size_h / fov_h
-            if not (0 <= x_center <= 1 and 0 <= y_center <= 1):
-                continue
-            labels.append((float(np.clip(x_center, 0, 1)), float(np.clip(y_center, 0, 1)), float(np.clip(w_norm, 0.005, 1)), float(np.clip(h_norm, 0.005, 1))))
+            box = _bbox_from_beacon(beacon, fov_x0, fov_y0, FOV[0], FOV[1])
+            if box is not None:
+                labels.append(box)
 
+        last = (frame, labels, {"attempt": attempt})
         if labels:
-            return frame, labels, {"attempt": attempt, "centered": True}
+            return last
 
-        # No beacon visible — fallback re-center and retry
-        last_frame = frame
-        last_labels = labels
-        if attempt < max_retries - 1:
+        # Center fallback makes the generator robust to an unlucky search position.
+        if attempt < max_attempts - 1:
             try:
-                tgt = sim.target
-                sim.camera.set_position(float(tgt.x), float(tgt.y))
-                # One step to re-render
-                obs, _, _, _, _ = sim.step()
-                frame2 = obs["frame"]
-                if frame2.shape[1] != fov_w or frame2.shape[0] != fov_h:
-                    frame2 = cv2.resize(frame2, (fov_w, fov_h))
-                # Recompute labels for centered view
-                fov_x0, fov_y0, _, _ = sim.camera.get_fov_rect()
-                labels2 = []
-                for beacon in sim.beacons:
-                    px = float(beacon.x) - float(fov_x0)
-                    py = float(beacon.y) - float(fov_y0)
-                    if px < -40 or px > fov_w + 40 or py < -40 or py > fov_h + 40:
-                        continue
-                    size_w = int(getattr(beacon, "size_w", 10))
-                    size_h = int(getattr(beacon, "size_h", 10))
-                    x_center = px / fov_w
-                    y_center = py / fov_h
-                    if 0 <= x_center <= 1 and 0 <= y_center <= 1:
-                        labels2.append((float(np.clip(x_center,0,1)), float(np.clip(y_center,0,1)), float(np.clip(size_w/fov_w,0.005,1)), float(np.clip(size_h/fov_h,0.005,1))))
-                if labels2:
-                    return frame2, labels2, {"attempt": attempt, "centered": True, "fallback": True}
+                target = sim.target
+                sim.camera.set_position(float(target.x), float(target.y))
             except Exception:
                 pass
-        # If still no labels, return last (may be empty background) — but for training we prefer to retry with new random config outside
-    return last_frame, last_labels, {"attempt": max_retries, "centered": False}
+    return last
+
+
+def _safe_remove_dir(path: Path):
+    if path.exists():
+        shutil.rmtree(path)
 
 
 def build_dataset(
-    num: int = 100,
+    num: int,
     output: str = "dataset",
     split: str = "train",
-    fov_size: tuple[int, int] = (640, 480),
-    difficulty: str = "mixed",  # easy/medium/hard/mixed/clear
+    difficulty: str = "mixed",
     seed: int = 42,
     resume: bool = True,
     overwrite: bool = False,
     validate: bool = True,
 ) -> dict:
-    """
-    Robust builder for any N.
-    Handles resume, validation, stats, ETA, retries, balancing.
-    """
-    assert split in ("train", "val", "test")
-    assert fov_size == (640, 480), "Only 640x480 supported per request (spec Sr3)"
+    if split not in {"train", "val", "test"}:
+        raise ValueError("split must be train, val, or test")
+    if num < 0:
+        raise ValueError("num must be >= 0")
 
-    out_root = Path(output)
-    img_dir = out_root / "images" / split
-    lbl_dir = out_root / "labels" / split
-    img_dir.mkdir(parents=True, exist_ok=True)
-    lbl_dir.mkdir(parents=True, exist_ok=True)
+    root = Path(output)
+    image_dir = root / "images" / split
+    label_dir = root / "labels" / split
+    image_dir.mkdir(parents=True, exist_ok=True)
+    label_dir.mkdir(parents=True, exist_ok=True)
+    write_dataset_yaml(root)
 
-    # Resume handling
-    start_idx = 0
-    if resume and not overwrite:
-        start_idx = _get_resume_start(img_dir, prefix=f"{split}_")
-        if start_idx > 0:
-            print(f"Resuming {split}: found {start_idx} existing images, continuing from {start_idx}")
-            if start_idx >= num:
-                print(f"Already have {start_idx} >= requested {num}, nothing to do.")
-                return {"total": start_idx, "new": 0, "skipped": start_idx}
-
-    # For large N, adjust num to be additional, not total, if resuming
-    # If user asks for 5000 and we have 3874, we generate 1126 more to reach 5000 total
-    # But if they want any N as total, we handle: if resume, target is num total
-    target_total = num
-    if resume and start_idx > 0:
-        # If existing >= target, done. Else generate remaining
-        remaining = target_total - start_idx
-        if remaining <= 0:
-            print(f"Target {target_total} already reached with {start_idx} existing.")
-            return {"total": start_idx, "new": 0}
-        print(f"Need {remaining} more to reach {target_total} total (have {start_idx})")
-        num_to_generate = remaining
+    if overwrite:
+        _safe_remove_dir(image_dir)
+        _safe_remove_dir(label_dir)
+        image_dir.mkdir(parents=True, exist_ok=True)
+        label_dir.mkdir(parents=True, exist_ok=True)
+        start_idx = 0
+    elif resume:
+        start_idx = _next_index(image_dir, split)
     else:
-        num_to_generate = num
         start_idx = 0
 
-    difficulties_map = {
-        "easy": ["easy"],
-        "medium": ["medium"],
-        "hard": ["hard"],
-        "mixed": ["easy", "medium", "hard"],
-        "clear": ["clear"],  # special: no disturbances
-    }
-    difficulties = difficulties_map.get(difficulty, ["easy", "medium", "hard"])
-    # For mixed, weights 30/40/30 per spec
-    p = [0.3, 0.4, 0.3] if difficulty == "mixed" else None
+    existing = start_idx
+    remaining = max(0, num - existing) if resume else num
+    rng = np.random.default_rng(seed + start_idx * 9973)
+    py_rng = random.Random(seed + start_idx * 13331)
 
-    rng = np.random.default_rng(seed + start_idx * 997)  # advance RNG for resume
-    # Use separate Python random for some choices
-    py_rng = random.Random(seed + start_idx * 1337)
-
-    # Stats
     stats = {
-        "requested": num,
-        "start_idx": start_idx,
-        "fov": f"{fov_size[0]}x{fov_size[1]}",
-        "difficulty": difficulty,
+        "split": split,
+        "fov": f"{FOV[0]}x{FOV[1]}",
+        "requested_total": num,
+        "starting_images": existing,
+        "requested_new": remaining,
+        "saved_new": 0,
+        "labeled_new": 0,
+        "background_new": 0,
+        "failed_images": 0,
+        "retries": 0,
+        "errors": 0,
         "seed": seed,
-        "counts": Counter(),
+        "difficulty_requested": difficulty,
+        "counts_by_difficulty": Counter(),
         "shapes": Counter(),
         "motions": Counter(),
         "presets": Counter(),
         "beacon_counts": Counter(),
-        "labeled": 0,
-        "background": 0,
-        "retries": 0,
-        "errors": 0,
-        "start_time": time.time(),
+        "elapsed_sec": 0.0,
     }
 
-    # Progress
-    t0 = time.time()
-    total_to_generate = num_to_generate
-    print(f"Generating {total_to_generate} images for '{split}' at {fov_size} difficulty={difficulty} seed={seed} -> {img_dir}")
-    print(f"Strategy: 70% centered (±60px) + 30% search offset (±{fov_size[0]//2}/{fov_size[1]//2}), fallback re-center, max 3 retries")
-
-    for i in range(total_to_generate):
+    t0 = time.perf_counter()
+    for i in range(remaining):
         if _interrupted:
-            print(f"\nInterrupted at {i}/{total_to_generate}, saving stats...")
             break
-
         idx = start_idx + i
-        # Per-image difficulty
-        if len(difficulties) > 1:
-            if difficulty == "mixed":
-                diff = str(rng.choice(difficulties, p=p))
-            else:
-                diff = str(rng.choice(difficulties))
-        else:
-            diff = difficulties[0]
-
-        # Retry loop per image up to 3 times if no beacon visible (for training we want >95% labeled)
         success = False
         for attempt in range(3):
             try:
-                w, h = 2000, 2000
-                # Env
-                if difficulty == "clear":
-                    env_cfg = EnvironmentConfig(world_width=w, world_height=h, seed=seed+idx, bg_top=12, bg_bottom=22, vignetting_pct=0, haze_pct=0, star_count=int(rng.integers(30, 80)), star_brightness=1.0).validate()
-                else:
-                    env_cfg = EnvironmentConfig(world_width=w, world_height=h, seed=seed+idx).validate()
-                    env_cfg = env_cfg.randomize_for_training(rng, diff)
+                actual_diff = _difficulty_for(rng, difficulty)
+                sim, beacon_cfg, dist_cfg = _build_configs(rng, actual_diff, seed, idx, attempt)
+                result = _capture(sim, rng, max_attempts=3)
+                if result is None:
+                    raise RuntimeError("capture returned no frame")
+                frame, labels, meta = result
+                stats["retries"] += int(meta.get("attempt", 0))
 
-                cam_cfg = CameraConfig(fov_width=fov_size[0], fov_height=fov_size[1]).validate((w, h))
-
-                if difficulty == "clear":
-                    dist_cfg = DisturbanceConfig(atmospheric_preset="Clear", camera_jitter=0, platform_speed=0, enable_salt_pepper=False, enable_gaussian=False, enable_poisson=False, platform_profile="Linear").validate()
-                else:
-                    dist_cfg = DisturbanceConfig().randomize_for_training(rng, diff)
-
-                # Beacon fully randomized per PDF
-                beacon_cfg = _random_beacon_config(rng, (w, h), diff)
-
-                sim_seed = seed + idx * 997 + attempt * 101
-                sim = HeadlessSimulation(seed=sim_seed, env_config=env_cfg, camera_config=cam_cfg, disturbance_config=dist_cfg, beacon_config=beacon_cfg, rng=np.random.default_rng(sim_seed))
-
-                frame, labels, meta = _capture_with_retry(sim, rng, fov_size, (w, h), max_retries=3)
-
-                # For clear/easy we require at least one label, for hard we allow background but prefer retry
-                if not labels and diff in ("clear", "easy"):
+                # Training/validation/test are intended to contain visible targets.
+                # A background image is allowed only if explicitly requested via --allow-background.
+                if not labels:
                     if attempt < 2:
-                        # Retry with new random beacon position
                         continue
+                    raise RuntimeError("no visible beacon after retries")
+
+                img_path = image_dir / f"{split}_{idx:06d}.jpg"
+                lbl_path = label_dir / f"{split}_{idx:06d}.txt"
+                if img_path.exists() or lbl_path.exists():
+                    if resume and not overwrite:
+                        idx = _next_index(image_dir, split)
+                        img_path = image_dir / f"{split}_{idx:06d}.jpg"
+                        lbl_path = label_dir / f"{split}_{idx:06d}.txt"
                     else:
-                        # Fallback: generate centered clear beacon
-                        # Force a simple beacon at centre
-                        beacon_cfg2 = MultiBeaconConfig(beacon_count=1, target_index=0, shape="square", size_w=10, size_h=10, x=w/2 + int(rng.integers(-50,50)), y=h/2 + int(rng.integers(-50,50)), profile="linear", speed=60, blinking=False).validate()
-                        sim2 = HeadlessSimulation(seed=sim_seed+999, env_config=env_cfg, camera_config=cam_cfg, disturbance_config=dist_cfg, beacon_config=beacon_cfg2, rng=np.random.default_rng(sim_seed+999))
-                        sim2.camera.set_position(float(beacon_cfg2.x), float(beacon_cfg2.y))
-                        obs, _, _, _, _ = sim2.step()
-                        frame = obs["frame"]
-                        if frame.shape[1] != fov_size[0] or frame.shape[0] != fov_size[1]:
-                            frame = cv2.resize(frame, fov_size)
-                        fov_x0, fov_y0, _, _ = sim2.camera.get_fov_rect()
-                        px = float(beacon_cfg2.x) - float(fov_x0)
-                        py = float(beacon_cfg2.y) - float(fov_y0)
-                        x_center = px / fov_size[0]
-                        y_center = py / fov_size[1]
-                        labels = [(float(np.clip(x_center,0,1)), float(np.clip(y_center,0,1)), 10/640, 10/480)]
-                        beacon_cfg = beacon_cfg2
-                        sim = sim2
+                        raise FileExistsError(f"output exists: {img_path}")
 
-                # Validate frame
-                if frame is None or frame.size == 0:
-                    raise ValueError("empty frame")
-                if frame.shape[1] != fov_size[0] or frame.shape[0] != fov_size[1]:
-                    frame = cv2.resize(frame, fov_size, interpolation=cv2.INTER_LINEAR)
-
-                # Save
-                img_name = f"{split}_{idx:06d}.jpg"
-                lbl_name = f"{split}_{idx:06d}.txt"
-                img_path = img_dir / img_name
-                lbl_path = lbl_dir / lbl_name
-
-                # Check disk space (rough)
-                # Write image
-                ok = cv2.imwrite(str(img_path), frame)
-                if not ok:
+                if not cv2.imwrite(str(img_path), frame, [cv2.IMWRITE_JPEG_QUALITY, 95]):
                     raise IOError(f"failed to write {img_path}")
+                lbl_path.write_text(
+                    "".join(f"{CLASS_ID} {xc:.6f} {yc:.6f} {w:.6f} {h:.6f}\n" for xc, yc, w, h in labels),
+                    encoding="utf-8",
+                )
 
-                # Write label YOLO
-                with open(lbl_path, "w") as f:
-                    for xc, yc, w_n, h_n in labels:
-                        f.write(f"0 {xc:.6f} {yc:.6f} {w_n:.6f} {h_n:.6f}\n")
+                ok, reason, box_count = _pair_state(img_path, lbl_path, FOV)
+                if not ok or box_count <= 0:
+                    img_path.unlink(missing_ok=True)
+                    lbl_path.unlink(missing_ok=True)
+                    raise RuntimeError(f"post-write validation failed: {reason}")
 
-                # Validation
-                if validate:
-                    valid, reason = _validate_image_label(img_path, lbl_path, fov_size)
-                    if not valid:
-                        print(f"  Warning: {img_name} validation failed: {reason}")
-
-                # Stats
-                stats["counts"][diff] += 1
-                stats["shapes"][beacon_cfg.shape] += 1
-                stats["motions"][beacon_cfg.profile] += 1
-                stats["presets"][dist_cfg.atmospheric_preset] += 1
-                stats["beacon_counts"][beacon_cfg.beacon_count] += 1
-                if labels:
-                    stats["labeled"] += 1
-                else:
-                    stats["background"] += 1
-                if meta.get("attempt", 0) > 0:
-                    stats["retries"] += 1
-
+                stats["saved_new"] += 1
+                stats["labeled_new"] += 1
+                stats["counts_by_difficulty"][actual_diff] += 1
+                stats["shapes"][str(beacon_cfg.shape)] += 1
+                stats["motions"][str(beacon_cfg.profile)] += 1
+                stats["presets"][str(dist_cfg.atmospheric_preset)] += 1
+                stats["beacon_counts"][int(beacon_cfg.beacon_count)] += 1
                 success = True
                 break
-
-            except Exception as e:
+            except Exception as exc:
                 stats["errors"] += 1
                 if attempt == 2:
-                    print(f"  [{idx:06d}] failed after 3 attempts: {e}")
-                # Retry
-                continue
-
+                    print(f"[{idx:06d}] failed after 3 attempts: {exc}")
         if not success:
-            print(f"  [{idx:06d}] SKIPPED after retries")
+            stats["failed_images"] += 1
 
-        # Progress & ETA
-        if (i + 1) % 100 == 0 or i == 0 or i == total_to_generate - 1:
-            elapsed = time.time() - t0
-            per_img = elapsed / (i + 1)
-            remaining = total_to_generate - (i + 1)
-            eta = remaining * per_img
-            pct = (i + 1) / total_to_generate * 100
-            print(f"  [{i+1}/{total_to_generate}] {pct:.1f}% — {img_name} - {len(labels)} beacons - {diff} - {1/per_img:.1f} img/s - ETA {eta/60:.1f}m — labeled {stats['labeled']}/{i+1}")
+        if i == 0 or (i + 1) % 100 == 0 or i == remaining - 1:
+            elapsed = time.perf_counter() - t0
+            rate = (i + 1) / max(elapsed, 1e-9)
+            eta = (remaining - (i + 1)) / max(rate, 1e-9)
+            print(f"[{i+1}/{remaining}] saved={stats['saved_new']} failed={stats['failed_images']} rate={rate:.2f} img/s ETA={eta/60:.1f}m")
 
-        # Periodic stats flush for large runs
-        if (i + 1) % 500 == 0:
-            # Save interim stats
-            try:
-                (Path(output) / f"stats_{split}_interim.json").write_text(json.dumps({k: dict(v) if isinstance(v, Counter) else v for k, v in stats.items()}, indent=2))
-            except Exception:
-                pass
+    stats["elapsed_sec"] = round(time.perf_counter() - t0, 3)
+    stats["total_images"] = len(list(image_dir.glob(f"{split}_*.jpg")))
+    stats["validation"] = validate_split(root, split) if validate else None
+    for key in ("counts_by_difficulty", "shapes", "motions", "presets", "beacon_counts"):
+        stats[key] = {str(k): int(v) for k, v in stats[key].items()}
 
-    elapsed = time.time() - t0
-    # Final stats
-    final_stats = {
-        "split": split,
-        "fov": f"{fov_size[0]}x{fov_size[1]}",
-        "difficulty": difficulty,
-        "seed": seed,
-        "requested": num,
-        "start_idx": start_idx,
-        "generated": total_to_generate if not _interrupted else (i + 1),
-        "total_existing": _get_resume_start(img_dir, prefix=f"{split}_"),
-        "labeled": stats["labeled"],
-        "background": stats["background"],
-        "retries": stats["retries"],
-        "errors": stats["errors"],
-        "elapsed_sec": round(elapsed, 1),
-        "per_img_ms": round(elapsed / max(1, total_to_generate) * 1000, 1),
-        "counts_by_difficulty": dict(stats["counts"]),
-        "shapes": dict(stats["shapes"]),
-        "motions": dict(stats["motions"]),
-        "presets": dict(stats["presets"]),
-        "beacon_counts": dict(stats["beacon_counts"]),
-    }
-    # Save stats
-    try:
-        stats_path = Path(output) / f"stats_{split}.json"
-        stats_path.write_text(json.dumps(final_stats, indent=2))
-        print(f"\nStats saved to {stats_path}")
-    except Exception as e:
-        print(f"Failed to save stats: {e}")
-
-    # Ensure dataset.yaml
-    yaml_path = Path(output) / "dataset.yaml"
-    yaml_content = f"path: {Path(output).as_posix()}\ntrain: images/train\nval: images/val\ntest: images/test\nnc: 1\nnames: ['beacon']\n"
-    if not yaml_path.exists():
-        yaml_path.write_text(yaml_content)
-        print(f"Created {yaml_path}")
-    else:
-        # Ensure it has correct fov note
-        pass
-
-    # Final validation summary
-    if validate:
-        print(f"\nValidating {split} ...")
-        bad = 0
-        for img_path in sorted(img_dir.glob(f"{split}_*.jpg")):
-            lbl_path = lbl_dir / f"{img_path.stem}.txt"
-            valid, reason = _validate_image_label(img_path, lbl_path, fov_size)
-            if not valid:
-                bad += 1
-                if bad < 5:
-                    print(f"  Bad: {img_path.name} — {reason}")
-        if bad == 0:
-            print(f"Validation OK: all {len(list(img_dir.glob(f'{split}_*.jpg')))} images 640x480 and labels 0-1 normalized")
-        else:
-            print(f"Validation: {bad} bad images/labels found")
-
-    print(f"\nDone {split}: {final_stats['generated']} new, {final_stats['total_existing']} total, {final_stats['labeled']} labeled, {final_stats['background']} background, {elapsed/60:.1f}m, {final_stats['per_img_ms']}ms/img")
-    return final_stats
+    stats_path = root / f"stats_{split}.json"
+    stats_path.write_text(json.dumps(stats, indent=2), encoding="utf-8")
+    print(f"Done {split}: {stats['total_images']} total images; stats -> {stats_path}")
+    return stats
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Robust FSOC Dataset Builder — any N, 640x480, YOLO, resume, validation")
-    parser.add_argument("--num", type=int, default=100, help="Total number for split (if resuming, will generate up to total, not additional)")
-    parser.add_argument("--output", type=str, default="dataset", help="Output root")
-    parser.add_argument("--split", type=str, default="train", choices=["train", "val", "test"], help="Split name")
-    parser.add_argument("--fov_w", type=int, default=640, help="FOV width (must be 640 per spec)")
-    parser.add_argument("--fov_h", type=int, default=480, help="FOV height (must be 480 per spec)")
-    parser.add_argument("--seed", type=int, default=42, help="Base seed")
-    parser.add_argument("--difficulty", type=str, default="mixed", choices=["easy", "medium", "hard", "mixed", "clear"], help="Difficulty or clear")
-    parser.add_argument("--resume", action="store_true", default=True, help="Resume from existing max index (default True)")
-    parser.add_argument("--no-resume", dest="resume", action="store_false", help="Disable resume, overwrite from 0")
-    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing files")
-    parser.add_argument("--validate", action="store_true", default=True, help="Validate each image/label")
+    parser = argparse.ArgumentParser(description="FSOC beacon YOLO dataset builder")
+    parser.add_argument("--output", default="dataset")
+    parser.add_argument("--split", choices=["train", "val", "test"])
+    parser.add_argument("--num", type=int, help="target total images for the selected split")
+    parser.add_argument("--difficulty", choices=["easy", "medium", "hard", "mixed", "clear"], default="mixed")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--resume", action="store_true", default=True)
+    parser.add_argument("--no-resume", dest="resume", action="store_false")
+    parser.add_argument("--overwrite", action="store_true", help="delete the selected split before generation")
     parser.add_argument("--no-validate", dest="validate", action="store_false")
-    parser.add_argument("--full", action="store_true", help="Generate full: 8000 train / 2000 val / 1000 test mixed 640x480")
+    parser.add_argument("--full", action="store_true", help="generate all three splits")
+    parser.add_argument("--train", type=int, default=80000)
+    parser.add_argument("--val", type=int, default=10000)
+    parser.add_argument("--test", type=int, default=10000)
     args = parser.parse_args()
 
-    if args.fov_w != 640 or args.fov_h != 480:
-        print(f"Warning: FOV {args.fov_w}x{args.fov_h} != 640x480 spec, but proceeding. Spec requires 640x480 only.")
+    global _interrupted
+    _interrupted = False
 
+    root = Path(args.output)
     if args.full:
-        print("Full dataset: 8000 train / 2000 val / 1000 test (640x480, mixed)")
-        build_dataset(num=8000, output=args.output, split="train", fov_size=(args.fov_w, args.fov_h), difficulty="mixed", seed=args.seed, resume=True, overwrite=args.overwrite, validate=args.validate)
-        build_dataset(num=2000, output=args.output, split="val", fov_size=(args.fov_w, args.fov_h), difficulty="mixed", seed=args.seed+100000, resume=True, overwrite=args.overwrite, validate=args.validate)
-        build_dataset(num=1000, output=args.output, split="test", fov_size=(args.fov_w, args.fov_h), difficulty="mixed", seed=args.seed+200000, resume=True, overwrite=args.overwrite, validate=args.validate)
+        # Independent seeds reduce accidental correlation between splits.
+        build_dataset(args.train, str(root), "train", args.difficulty, args.seed, True, args.overwrite, args.validate)
+        build_dataset(args.val, str(root), "val", args.difficulty, args.seed + 100_000, True, args.overwrite, args.validate)
+        build_dataset(args.test, str(root), "test", args.difficulty, args.seed + 200_000, True, args.overwrite, args.validate)
     else:
-        build_dataset(num=args.num, output=args.output, split=args.split, fov_size=(args.fov_w, args.fov_h), difficulty=args.difficulty, seed=args.seed, resume=args.resume, overwrite=args.overwrite, validate=args.validate)
+        if args.split is None or args.num is None:
+            parser.error("either use --full or provide both --split and --num")
+        build_dataset(args.num, str(root), args.split, args.difficulty, args.seed, args.resume, args.overwrite, args.validate)
 
 
 if __name__ == "__main__":
