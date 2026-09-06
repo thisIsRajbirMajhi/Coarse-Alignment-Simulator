@@ -1200,9 +1200,33 @@ def main(argv: list[str] | None = None):
 
     presets = {
         "fast": {
-            "epochs": 30, "patience": 10, "cache": "ram", "imgsz": 640,
-            "mosaic": 0.30, "close_mosaic": 10, "plots": False, "reval": False,
-            "sweep_conf": False, "export_onnx": False, "cos_lr": False,
+            # Fast profile: optimize iteration throughput while retaining
+            # validation during training for a useful early-stop signal.
+            "epochs": 30,
+            "patience": 10,
+            "imgsz": 640,
+            "batch": -1,              # Ultralytics auto-batch (~60% VRAM)
+            "workers": 4,              # good Windows starting point; test 0/4/8
+            "cache": "ram",            # fastest when dataset fits in RAM
+            "amp": True,
+            "cos_lr": False,
+            "mosaic": 0.30,
+            "close_mosaic": 10,
+            "mixup": 0.0,
+            "fliplr": 0.5,
+            "flipud": 0.0,
+            "rect": False,
+            "multi_scale": 0.0,
+            "compile_mode": False,
+            "deterministic": False,
+            "val_during_train": True,
+            "plots": False,
+            "reval": False,
+            "sweep_conf": False,
+            "save": True,
+            "save_period": -1,
+            "export_onnx": False,
+            "onnx_parity": False,
         },
         "best": {
             "epochs": 100, "patience": 20, "cache": "disk", "imgsz": 768,
