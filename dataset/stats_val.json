@@ -2,44 +2,44 @@
   "split": "val",
   "fov": "640x480",
   "difficulty": "mixed",
-  "seed": 123,
-  "requested": 20,
+  "seed": 150,
+  "requested": 10000,
   "start_idx": 0,
-  "generated": 20,
-  "total_existing": 20,
-  "labeled": 20,
+  "generated": 10000,
+  "total_existing": 10000,
+  "labeled": 10000,
   "background": 0,
   "retries": 0,
   "errors": 0,
-  "elapsed_sec": 8.9,
-  "per_img_ms": 443.8,
+  "elapsed_sec": 5004.7,
+  "per_img_ms": 500.5,
   "counts_by_difficulty": {
-    "medium": 7,
-    "easy": 8,
-    "hard": 5
+    "easy": 2937,
+    "medium": 4051,
+    "hard": 3012
   },
   "shapes": {
-    "random": 5,
-    "circle": 9,
-    "square": 6
+    "random": 3341,
+    "square": 3377,
+    "circle": 3282
   },
   "motions": {
-    "sinusoidal": 4,
-    "random": 2,
-    "zigzag": 3,
-    "linear": 2,
-    "curved": 7,
-    "spiral": 1,
-    "figure_eight": 1
+    "sinusoidal": 1378,
+    "curved": 1478,
+    "zigzag": 1416,
+    "spiral": 1463,
+    "random": 1467,
+    "figure_eight": 1410,
+    "linear": 1388
   },
   "presets": {
-    "Haze": 10,
-    "Clear": 5,
-    "Fog": 5
+    "Haze": 2578,
+    "Clear": 3196,
+    "Fog": 4226
   },
   "beacon_counts": {
-    "3": 10,
-    "2": 4,
-    "1": 6
+    "1": 3284,
+    "3": 3352,
+    "2": 3364
   }
 }

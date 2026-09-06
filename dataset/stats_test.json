@@ -2,40 +2,40 @@
   "split": "test",
   "fov": "640x480",
   "difficulty": "clear",
-  "seed": 999,
-  "requested": 20,
-  "start_idx": 10,
-  "generated": 10,
-  "total_existing": 20,
-  "labeled": 10,
+  "seed": 540,
+  "requested": 4000,
+  "start_idx": 2000,
+  "generated": 2000,
+  "total_existing": 4000,
+  "labeled": 2000,
   "background": 0,
   "retries": 0,
   "errors": 0,
-  "elapsed_sec": 0.8,
-  "per_img_ms": 78.9,
+  "elapsed_sec": 140.3,
+  "per_img_ms": 70.2,
   "counts_by_difficulty": {
-    "clear": 10
+    "clear": 2000
   },
   "shapes": {
-    "square": 3,
-    "random": 5,
-    "circle": 2
+    "circle": 689,
+    "square": 658,
+    "random": 653
   },
   "motions": {
-    "curved": 1,
-    "sinusoidal": 2,
-    "spiral": 1,
-    "random": 2,
-    "figure_eight": 1,
-    "linear": 2,
-    "zigzag": 1
+    "spiral": 287,
+    "figure_eight": 293,
+    "sinusoidal": 290,
+    "random": 290,
+    "linear": 283,
+    "zigzag": 286,
+    "curved": 271
   },
   "presets": {
-    "Clear": 10
+    "Clear": 2000
   },
   "beacon_counts": {
-    "3": 2,
-    "1": 4,
-    "2": 4
+    "3": 678,
+    "2": 656,
+    "1": 666
   }
 }

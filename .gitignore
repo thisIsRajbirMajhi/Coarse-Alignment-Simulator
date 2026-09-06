@@ -28,7 +28,6 @@ dist/
 *.json
 !requirements.json
 !dataset/dataset.yaml
-!dataset/README.md
 !dataset/stats_*.json
 dataset/images/
 dataset/labels/
@@ -36,6 +35,12 @@ runs/
 *.onnx
 *.pt
 *.pth
+dataset/images/val/
+dataset/images/train/
+dataset/labels/val/
+dataset/labels/train/
+dataset/images/test/
+dataset/labels/test/
 
 # IDE
 .vscode/
