@@ -1,7 +1,0 @@
-# YOLO dataset for FSOC beacon — 640x480 only
-path: dataset
-train: images/train
-val: images/val
-test: images/test
-nc: 1
-names: ['beacon']
