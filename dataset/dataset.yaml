@@ -1,5 +1,5 @@
 # FSOC beacon detection dataset - YOLO format
-path: .
+path: C:/Users/mrajb/OneDrive/Desktop/FSOC Simulator/dataset
 train: images/train
 val: images/val
 test: images/test

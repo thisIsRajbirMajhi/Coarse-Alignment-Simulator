@@ -137,6 +137,12 @@ def train_yolo(
     if not data_path.exists():
         raise FileNotFoundError(f"Dataset YAML not found: {data_path}")
 
+    # Resolve project to an absolute dir: Ultralytics re-resolves a relative
+    # `project` against its own default output dir, which nests outputs as
+    # runs/detect/runs/detect/<name> and breaks --resume lookup.
+    project = str((Path(project) if Path(project).is_absolute()
+                   else Path.cwd() / project).resolve())
+
     cfg = _load_yaml(data_path)
     if cfg.get("nc") not in (1, "1"):
         raise ValueError(f"Expected one class (beacon), found nc={cfg.get('nc')!r}")

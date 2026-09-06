@@ -61,7 +61,15 @@ except Exception:
 def write_dataset_yaml(root: Path) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     path = root / "dataset.yaml"
-    content = """# FSOC beacon detection dataset - YOLO format\npath: .\ntrain: images/train\nval: images/val\ntest: images/test\nnc: 1\nnames: ['beacon']\n"""
+    # Use an absolute dataset root: Ultralytics resolves a relative `path`
+    # against the process working directory (not the yaml location), so
+    # `path: .` breaks when training from the repo root.
+    abs_root = root.resolve().as_posix()
+    content = (
+        "# FSOC beacon detection dataset - YOLO format\n"
+        f"path: {abs_root}\n"
+        "train: images/train\nval: images/val\ntest: images/test\nnc: 1\nnames: ['beacon']\n"
+    )
     path.write_text(content, encoding="utf-8")
     return path
 
