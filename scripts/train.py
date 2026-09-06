@@ -96,24 +96,58 @@ def _warn_if_split_empty(data_path: Path, cfg: dict) -> None:
             print(f"[WARNING] no training images found in {split_dir}")
 
 
+def _register_boxloss_stopping(model, patience: int, min_delta: float) -> None:
+    """Stop training when val/box_loss stops improving.
+
+    Ultralytics' built-in `patience` watches mAP-based fitness; this adds a
+    second, independent stopper on localization loss. Training halts when
+    either fires. No-ops safely if the metric key is ever absent.
+    """
+    state = {"best": float("inf"), "wait": 0}
+
+    def _on_fit_epoch_end(trainer) -> None:
+        metrics = getattr(trainer, "metrics", None)
+        current = metrics.get("val/box_loss") if isinstance(metrics, dict) else None
+        if current is None:
+            return
+        try:
+            current = float(current)
+        except (TypeError, ValueError):
+            return
+        if current < state["best"] - min_delta:
+            state["best"] = current
+            state["wait"] = 0
+        else:
+            state["wait"] += 1
+            if state["wait"] >= patience:
+                print(f"\nEarly stopping on val/box_loss: no improvement "
+                      f"(best={state['best']:.4f}) for {patience} epoch(s).")
+                trainer.stop = True
+
+    model.add_callback("on_fit_epoch_end", _on_fit_epoch_end)
+    print(f"Box-loss early stopping armed: patience={patience}, min_delta={min_delta}")
+
+
 def train_yolo(
     data: str = "dataset/dataset.yaml",
     model_path: str = DEFAULT_MODEL,
-    epochs: int = 50,
+    epochs: int = 25,
     imgsz: int = 640,
-    batch: int = 16,
+    batch: int = 32,
     device: str = "auto",
     project: str = "runs/detect",
     name: str = "beacon",
     workers: int = 0,
     seed: int = 42,
-    patience: int = 15,
+    patience: int = 8,
     resume: bool = False,
     freeze: int | None = None,
     test: bool = False,
     export_onnx: bool = True,
     single_cls: bool = True,
     close_mosaic: int = 10,
+    boxloss_patience: int | None = 5,
+    boxloss_min_delta: float = 0.01,
 ):
     try:
         from ultralytics import YOLO
@@ -132,6 +166,10 @@ def train_yolo(
         raise ValueError("freeze must be >= 0 or None")
     if close_mosaic < 0:
         raise ValueError("close_mosaic must be >= 0")
+    if boxloss_patience is not None and boxloss_patience < 0:
+        raise ValueError("boxloss_patience must be >= 0 or None (0 disables it)")
+    if boxloss_min_delta < 0:
+        raise ValueError("boxloss_min_delta must be >= 0")
 
     data_path = Path(data).resolve()
     if not data_path.exists():
@@ -204,6 +242,9 @@ def train_yolo(
     )
     if freeze is not None:
         train_args["freeze"] = freeze
+
+    if boxloss_patience:
+        _register_boxloss_stopping(model, boxloss_patience, boxloss_min_delta)
 
     print(f"Training model={model_path}")
     print(f"Dataset={data_path}")
@@ -280,7 +321,12 @@ def main(argv: list[str] | None = None):
     parser.add_argument("--workers", type=int, default=0,
                         help="DataLoader workers; use 0 on Windows if loading hangs")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--patience", type=int, default=15)
+    parser.add_argument("--patience", type=int, default=8)
+    parser.add_argument("--boxloss-patience", type=int, default=5,
+                        help="extra early stopping on val/box_loss: stop after N epochs "
+                             "without improvement (0 or None = off; built-in --patience on mAP still applies)")
+    parser.add_argument("--boxloss-min-delta", type=float, default=0.01,
+                        help="minimum val/box_loss improvement to reset the box-loss stopper")
     parser.add_argument("--project", default="runs/detect")
     parser.add_argument("--name", default="beacon")
     parser.add_argument("--freeze", type=int, default=None)
@@ -321,6 +367,8 @@ def main(argv: list[str] | None = None):
         export_onnx=args.export_onnx,
         single_cls=args.single_cls,
         close_mosaic=args.close_mosaic,
+        boxloss_patience=args.boxloss_patience,
+        boxloss_min_delta=args.boxloss_min_delta,
     )
 
 
