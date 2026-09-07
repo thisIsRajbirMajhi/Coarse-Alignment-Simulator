@@ -17,7 +17,7 @@ import cv2
 # Prefer the CLI flags; these remain so existing imports keep working.
 DATASET = Path("dataset")
 SPLIT = "train"
-MAX_IMAGES: int | None = 20
+MAX_IMAGES: int | None = 25000
 
 IMAGE_EXTENSIONS = ("*.jpg", "*.jpeg", "*.png", "*.bmp", "*.webp")
 CLASS_ID = 0

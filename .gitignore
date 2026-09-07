@@ -37,3 +37,8 @@ dist/
 # Temp
 *.tmp
 *.bak
+
+# Dataset
+dataset/
+
+
