@@ -1397,9 +1397,9 @@ def main(argv: list[str] | None = None):
             "onnx_parity": False,
         },
         "best": {
-            "epochs": 150,
-            "patience": 20,
-            "imgsz": 768,
+            "epochs": 50,
+            "patience": 8,
+            "imgsz": 640,
             "batch": -1,
             "workers": 4,
             "cache": "ram",
@@ -1417,7 +1417,7 @@ def main(argv: list[str] | None = None):
             "cls_gain": 0.56,
             "dfl_gain": 9.04,
 
-            "mosaic": 0.85,
+            "mosaic": 0.50,
             "mixup": 0.0,
             "copy_paste": 0.0,
 
@@ -1426,7 +1426,7 @@ def main(argv: list[str] | None = None):
 
             "degrees": 1.0,
             "translate": 0.07,
-            "scale": 0.50,
+            "scale": 0.30,
             "shear": 1.0,
             "perspective": 0.0,
 
