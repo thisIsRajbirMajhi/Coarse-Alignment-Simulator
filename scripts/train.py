@@ -1397,15 +1397,14 @@ def main(argv: list[str] | None = None):
             "onnx_parity": False,
         },
         "best": {
-            # Accuracy-oriented YOLO26n fine-tuning for the current beacon task.
-            # 768 is retained because the beacon can be only 5-20 source pixels.
-            "epochs": 80,
-            "patience": 15,
+            "epochs": 150,
+            "patience": 20,
             "imgsz": 768,
             "batch": -1,
             "workers": 4,
             "cache": "ram",
             "amp": True,
+
             "optimizer": "MuSGD",
             "lr0": 0.0054,
             "lrf": 0.0495,
@@ -1413,33 +1412,34 @@ def main(argv: list[str] | None = None):
             "weight_decay": 0.00064,
             "warmup_epochs": 1.0,
             "cos_lr": True,
+
             "box_gain": 5.63,
             "cls_gain": 0.56,
             "dfl_gain": 9.04,
+
             "mosaic": 0.85,
             "mixup": 0.0,
             "copy_paste": 0.0,
+
             "fliplr": 0.5,
             "flipud": 0.0,
+
             "degrees": 1.0,
             "translate": 0.07,
             "scale": 0.50,
             "shear": 1.0,
             "perspective": 0.0,
-            "rect": False,
-            "multi_scale": 0.0,
-            "compile_mode": False,
-            "deterministic": False,
+
+            "close_mosaic": 10,
+
             "val_during_train": True,
             "plots": True,
             "reval": True,
             "sweep_conf": True,
-            "export_onnx": False,
-            "onnx_parity": False,
-            "close_mosaic": 10,
+
             "save": True,
             "save_period": 10,
-        },
+        }
     }
     if args.profile:
         for key, value in presets[args.profile].items():
