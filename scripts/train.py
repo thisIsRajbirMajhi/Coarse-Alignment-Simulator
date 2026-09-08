@@ -31,10 +31,15 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+# Strict YOLO26 policy:
+# - No YOLO11/YOLOv8/other-family fallback is permitted.
+# - The default is the official YOLO26 nano pretrained checkpoint.
 DEFAULT_MODEL = str(ROOT / "yolo26n.pt") if (ROOT / "yolo26n.pt").is_file() else "yolo26n.pt"
 DEFAULT_DATA = ROOT / "dataset" / "dataset.yaml"
-FALLBACK_MODELS = ("yolo11n.pt", "yolov8n.pt")
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
+DEFAULT_EXPECTED_TRAIN = 25_000
+DEFAULT_EXPECTED_VAL = 10_000
+DEFAULT_EXPECTED_TEST = 10_000
 
 log = logging.getLogger("train")
 
@@ -310,25 +315,119 @@ def _setup_determinism(seed: int, deterministic: bool) -> None:
         log.warning("deterministic setup incomplete: %s", exc)
 
 
-def _load_model_with_fallback(model_path: str, resume_ckpt: Path | None = None):
+def _load_strict_yolo26(model_path: str, resume_ckpt: Path | None = None):
+    """Load a YOLO26 model and hard-fail on any other model family.
+
+    This deliberately does NOT fall back to YOLO11/YOLOv8/etc. A failed
+    yolo26n.pt download must stop the run rather than silently changing the
+    experiment's architecture.
+    """
     from ultralytics import YOLO
-    if resume_ckpt is not None:
-        return YOLO(str(resume_ckpt)), str(resume_ckpt)
 
-    # Never silently replace a user-specified/custom checkpoint. Fallbacks are
-    # only appropriate when the default YOLO checkpoint cannot be loaded.
-    candidates = [model_path]
-    if model_path == DEFAULT_MODEL:
-        candidates.extend(m for m in FALLBACK_MODELS if m != model_path)
+    source = str(resume_ckpt) if resume_ckpt is not None else str(model_path)
+    try:
+        model = YOLO(source)
+    except Exception as exc:
+        raise RuntimeError(
+            f"YOLO26 model could not be loaded from {source!r}. "
+            "No fallback model will be used. Verify that yolo26n.pt is "
+            "downloaded locally or that internet access is available."
+        ) from exc
 
-    last_err: Exception | None = None
-    for cand in candidates:
+    _assert_yolo26_model(model, source)
+    return model, source
+
+
+def _model_yaml_dict(model) -> dict[str, Any]:
+    """Best-effort extraction of the underlying model YAML/config."""
+    candidates: list[Any] = [
+        getattr(getattr(model, "model", None), "yaml", None),
+        getattr(getattr(model, "model", None), "yaml_dict", None),
+        getattr(getattr(model, "model", None), "args", None),
+        getattr(model, "ckpt", None),
+    ]
+    for item in candidates:
+        if isinstance(item, dict):
+            # Some checkpoint containers hold the actual model YAML here.
+            if isinstance(item.get("model"), dict):
+                nested = item["model"]
+                if isinstance(nested, dict):
+                    return nested
+            return item
+    return {}
+
+
+def _extract_model_family_hints(model) -> list[str]:
+    """Collect architecture/config strings useful for strict family checks."""
+    hints: list[str] = []
+    for obj in (
+        model,
+        getattr(model, "model", None),
+        getattr(getattr(model, "model", None), "yaml", None),
+        getattr(getattr(model, "model", None), "yaml_file", None),
+        getattr(model, "ckpt", None),
+    ):
+        if obj is None:
+            continue
+        if isinstance(obj, dict):
+            for key in ("yaml_file", "yaml", "model_name", "model", "name", "git"):
+                val = obj.get(key)
+                if val is not None:
+                    hints.append(str(val))
+        else:
+            for attr in ("yaml_file", "yaml", "model_name", "name"):
+                try:
+                    val = getattr(obj, attr, None)
+                except Exception:
+                    val = None
+                if val is not None:
+                    hints.append(str(val))
+    return hints
+
+
+def _assert_yolo26_model(model, source: str) -> None:
+    """Fail unless the loaded architecture is demonstrably YOLO26."""
+    hints = _extract_model_family_hints(model)
+    hint_text = " ".join(hints).lower()
+
+    # Official YOLO26 architecture characteristics:
+    # end2end=True and reg_max=1.
+    cfg = _model_yaml_dict(model)
+    end2end = cfg.get("end2end", None)
+    reg_max = cfg.get("reg_max", None)
+
+    net = getattr(model, "model", None)
+    if end2end is None:
+        end2end = getattr(net, "end2end", None)
+    if reg_max is None:
+        reg_max = getattr(net, "reg_max", None)
+
+    family_by_name = "yolo26" in (Path(source).name.lower() + " " + hint_text)
+
+    # For official filenames/checkpoints the family name is definitive.
+    # For a renamed checkpoint (e.g. best.pt), architecture markers are required.
+    if not family_by_name:
         try:
-            return YOLO(cand), cand
-        except Exception as exc:
-            last_err = exc
-            log.warning("Could not load %r: %s", cand, exc)
-    raise RuntimeError(f"Could not load model {model_path!r}: {last_err}") from last_err
+            end2end_ok = bool(end2end) is True
+        except Exception:
+            end2end_ok = False
+        try:
+            reg_max_ok = int(reg_max) == 1
+        except (TypeError, ValueError):
+            reg_max_ok = False
+
+        if not (end2end_ok and reg_max_ok):
+            raise RuntimeError(
+                "STRICT YOLO26 CHECK FAILED. "
+                f"Loaded source={source!r}, family_hint={family_by_name}, "
+                f"end2end={end2end!r}, reg_max={reg_max!r}. "
+                "The training pipeline will not run a non-YOLO26 model."
+            )
+
+    log.info(
+        "STRICT YOLO26 CHECK PASSED: source=%s end2end=%s reg_max=%s",
+        source, end2end, reg_max
+    )
 
 
 def _versions() -> dict:
@@ -693,7 +792,10 @@ def _explicit_dests(argv: list[str]) -> set[str]:
         "--classes": "classes", "--pretrained": "pretrained", "--no-pretrained": "pretrained",
         "--no-cls-remap": "cls_remap", "--nbs": "nbs", "--warmup-momentum": "warmup_momentum",
         "--warmup-bias-lr": "warmup_bias_lr", "--label-smoothing": "label_smoothing",
-        "--bgr": "bgr", "--cutmix": "cutmix", "--val-conf": "val_conf", "--val-iou": "val_iou",
+        "--bgr": "bgr", "--cutmix": "cutmix", "--copy-paste": "copy_paste",
+        "--expected-train": "expected_train", "--expected-val": "expected_val",
+        "--expected-test": "expected_test", "--allow-incomplete-dataset": "allow_incomplete_dataset",
+        "--val-conf": "val_conf", "--val-iou": "val_iou",
         "--max-det": "max_det", "--agnostic-nms": "agnostic_nms", "--save-json": "save_json",
     }
     return {mapping[token.split("=", 1)[0]] for token in argv if token.split("=", 1)[0] in mapping}
@@ -757,7 +859,7 @@ def train_yolo(
     momentum: float = 0.937,
     weight_decay: float = 0.0005,
     warmup_epochs: float = 3.0,
-    optimizer: str = "auto",
+    optimizer: str = "MuSGD",
     cos_lr: bool = True,
     box_gain: float = 7.5,
     cls_gain: float = 0.5,
@@ -775,7 +877,7 @@ def train_yolo(
     fliplr: float = 0.5,
     flipud: float = 0.0,
     amp: bool | str = True,
-    cache: bool | str = "disk",
+    cache: bool | str = "ram",
     rect: bool = False,
     multi_scale: float = 0.0,
     deterministic: bool = False,
@@ -792,8 +894,13 @@ def train_yolo(
     label_smoothing: float = 0.0,
     bgr: float = 0.0,
     cutmix: float = 0.0,
+    copy_paste: float = 0.0,
     exist_ok: bool = False,
     overwrite: bool = False,
+    expected_train: int = DEFAULT_EXPECTED_TRAIN,
+    expected_val: int = DEFAULT_EXPECTED_VAL,
+    expected_test: int = DEFAULT_EXPECTED_TEST,
+    allow_incomplete_dataset: bool = False,
     val_during_train: bool = True,
     save_period: int = -1,
     reval: bool = True,
@@ -853,6 +960,8 @@ def train_yolo(
         raise ValueError("max_det must be > 0")
     if time_hours is not None and time_hours <= 0:
         raise ValueError("time_hours must be > 0 or None")
+    if expected_train < 0 or expected_val < 0 or expected_test < 0:
+        raise ValueError("expected split counts must be >= 0 (0 disables that check)")
     if multi_scale < 0 or multi_scale > 1:
         raise ValueError("multi_scale must be between 0 and 1")
     cache = _parse_cache(cache)
@@ -862,6 +971,14 @@ def train_yolo(
     data_path = Path(data).resolve()
     if not data_path.is_file():
         raise FileNotFoundError(f"Dataset YAML not found: {data_path}")
+
+    model_name_lower = str(model_path).lower()
+    if not resume and "yolo26" not in model_name_lower:
+        raise ValueError(
+            f"Strict YOLO26 mode rejects model={model_path!r}. "
+            "Use yolo26n.pt/yolo26s.pt/... or another checkpoint that "
+            "is actually a YOLO26 model and can be architecturally verified."
+        )
 
     project = str((Path(project) if Path(project).is_absolute() else Path.cwd() / project).resolve())
     if save_dir is not None:
@@ -874,6 +991,29 @@ def train_yolo(
         log.warning("dataset names=%r (expected ['beacon'])", names)
 
     split_report = _check_splits(data_path, cfg, hash_leakage=hash_leakage, label_validation=True)
+
+    # Prevent another expensive run from silently training on a partial dataset.
+    expected_counts = {
+        "train": expected_train,
+        "val": expected_val,
+        "test": expected_test,
+    }
+    for split, expected in expected_counts.items():
+        actual = split_report.get(split, {}).get("images", 0)
+        if expected and split in ("train", "val"):
+            if actual < expected and not allow_incomplete_dataset:
+                raise ValueError(
+                    f"{split} split is incomplete: found {actual:,} images, "
+                    f"expected at least {expected:,}. "
+                    "Finish dataset generation or use --allow-incomplete-dataset "
+                    "only for an intentional partial-data experiment."
+                )
+        if expected and split == "test" and test and actual < expected and not allow_incomplete_dataset:
+            raise ValueError(
+                f"test split is incomplete: found {actual:,} images, "
+                f"expected at least {expected:,}."
+            )
+
     for split in ("train", "val"):
         if split_report.get(split, {}).get("images", 0) == 0:
             raise ValueError(f"'{split}' split has 0 images")
@@ -894,8 +1034,10 @@ def train_yolo(
         log.warning("--resume requested but no checkpoint found under %s; starting fresh.", Path(project) / name)
         resume = False
 
-    from ultralytics import YOLO
-    model, resolved_model = _load_model_with_fallback(model_path, resume_ckpt if resume else None)
+    model, resolved_model = _load_strict_yolo26(
+        model_path,
+        resume_ckpt if resume else None,
+    )
 
     if overwrite and not resume:
         import shutil
@@ -916,7 +1058,7 @@ def train_yolo(
         compile=compile_mode, fraction=fraction, classes=classes, pretrained=pretrained,
         cls_remap=cls_remap, nbs=nbs, warmup_momentum=warmup_momentum,
         warmup_bias_lr=warmup_bias_lr, label_smoothing=label_smoothing,
-        bgr=bgr, cutmix=cutmix,
+        bgr=bgr, cutmix=cutmix, copy_paste=copy_paste,
         lr0=lr0, lrf=lrf, momentum=momentum, weight_decay=weight_decay,
         warmup_epochs=warmup_epochs, cos_lr=cos_lr,
         box=box_gain, cls=cls_gain, dfl=dfl_gain,
@@ -936,8 +1078,14 @@ def train_yolo(
         log.warning("Custom box-loss stopper enabled. For normal runs, keep it at 0.")
         _register_boxloss_stopping(model, boxloss_patience, boxloss_min_delta)
 
-    log.info("Training model=%s (resolved=%s)", model_path, resolved_model)
+    log.info("Training model=%s (resolved=%s) [YOLO26 ONLY]", model_path, resolved_model)
     log.info("Dataset=%s", data_path)
+    log.info(
+        "Dataset counts: train=%d/%d val=%d/%d test=%d/%d",
+        split_report.get("train", {}).get("images", 0), expected_train,
+        split_report.get("val", {}).get("images", 0), expected_val,
+        split_report.get("test", {}).get("images", 0), expected_test,
+    )
     log.info("epochs=%d imgsz=%d batch=%s device=%s workers=%d amp=%s cache=%s rect=%s cos_lr=%s",
              epochs, imgsz, batch, device_label, workers, amp, cache, rect, cos_lr)
     if optimizer == "auto" and (lr0 != 0.01 or momentum != 0.937):
@@ -982,21 +1130,30 @@ def train_yolo(
     snapshot = {
         "train_args": {k: (str(v) if isinstance(v, Path) else v) for k, v in train_args.items()},
         "dataset": str(data_path), "splits": split_report,
+        "expected_counts": expected_counts,
+        "allow_incomplete_dataset": allow_incomplete_dataset,
         "save_dir": save_dir, "time_hours": time_hours,
-        "resolved_model": str(resolved_model), "versions": _versions(), "git": _git_hash(),
+        "resolved_model": str(resolved_model), "strict_model_family": "YOLO26",
+        "versions": _versions(), "git": _git_hash(),
     }
     (run_dir / "train_args.json").write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
 
     best_model = YOLO(str(best_pt))
+    _assert_yolo26_model(best_model, str(best_pt))
     summary: dict[str, Any] = {
         "weights": str(best_pt), "run_dir": str(run_dir), "model": model_path,
-        "resolved_model": str(resolved_model), "dataset": str(data_path),
+        "resolved_model": str(resolved_model), "strict_model_family": "YOLO26",
+        "dataset": str(data_path),
         "epochs": epochs, "epochs_trained": epochs_trained, "imgsz": imgsz,
         "batch_requested": batch, "device": device_label, "seed": seed,
         "git": _git_hash(), "versions": _versions(),
         "train_images": train_images,
         "val_images": split_report.get("val", {}).get("images", 0),
         "test_images": split_report.get("test", {}).get("images", 0),
+        "expected_train_images": expected_train,
+        "expected_val_images": expected_val,
+        "expected_test_images": expected_test,
+        "allow_incomplete_dataset": allow_incomplete_dataset,
         "train_duration_sec": train_duration_sec,
         "throughput_img_per_sec": throughput,
         "model_file_size_mb": round(best_pt.stat().st_size / (1024 ** 2), 2),
@@ -1014,6 +1171,7 @@ def train_yolo(
             "amp": amp, "cache": cache, "rect": rect, "multi_scale": multi_scale,
             "compile": compile_mode, "fraction": fraction, "save": save, "nbs": nbs,
             "label_smoothing": label_smoothing, "bgr": bgr, "cutmix": cutmix,
+            "copy_paste": copy_paste,
             "mosaic": mosaic, "mixup": mixup, "fliplr": fliplr, "flipud": flipud,
             "classes": classes, "pretrained": pretrained, "cls_remap": cls_remap,
             "degrees": degrees, "translate": translate, "scale": scale, "shear": shear,
@@ -1125,7 +1283,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--momentum", type=float, default=0.937)
     parser.add_argument("--weight-decay", type=float, default=0.0005)
     parser.add_argument("--warmup-epochs", type=float, default=3.0)
-    parser.add_argument("--optimizer", default="auto")
+    parser.add_argument("--optimizer", default="MuSGD")
     parser.add_argument("--cos-lr", action="store_true", default=True)
     parser.add_argument("--no-cos-lr", dest="cos_lr", action="store_false")
     parser.add_argument("--box-gain", type=float, default=7.5)
@@ -1157,6 +1315,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--label-smoothing", type=float, default=0.0)
     parser.add_argument("--bgr", type=float, default=0.0)
     parser.add_argument("--cutmix", type=float, default=0.0)
+    parser.add_argument("--copy-paste", type=float, default=0.0)
     parser.add_argument("--exist-ok", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--no-val", dest="val_during_train", action="store_false")
@@ -1184,6 +1343,14 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--hash-leakage", action="store_true",
                         help="hash all images to detect pixel-identical cross-split leakage")
+    parser.add_argument("--expected-train", type=int, default=DEFAULT_EXPECTED_TRAIN)
+    parser.add_argument("--expected-val", type=int, default=DEFAULT_EXPECTED_VAL)
+    parser.add_argument("--expected-test", type=int, default=DEFAULT_EXPECTED_TEST)
+    parser.add_argument(
+        "--allow-incomplete-dataset",
+        action="store_true",
+        help="allow training/evaluation below expected split counts; use only intentionally",
+    )
 
     single_cls_group = parser.add_mutually_exclusive_group()
     single_cls_group.add_argument("--single-cls", dest="single_cls", action="store_true", default=True)
@@ -1200,19 +1367,20 @@ def main(argv: list[str] | None = None):
 
     presets = {
         "fast": {
-            # Fast profile: optimize iteration throughput while retaining
-            # validation during training for a useful early-stop signal.
+            # YOLO26 quick experiment. Still strict YOLO26 and still validates.
             "epochs": 30,
-            "patience": 10,
+            "patience": 8,
             "imgsz": 640,
-            "batch": -1,              # Ultralytics auto-batch (~60% VRAM)
-            "workers": 4,              # good Windows starting point; test 0/4/8
-            "cache": "ram",            # fastest when dataset fits in RAM
+            "batch": -1,
+            "workers": 4,
+            "cache": "ram",
             "amp": True,
-            "cos_lr": False,
-            "mosaic": 0.30,
-            "close_mosaic": 10,
+            "optimizer": "MuSGD",
+            "cos_lr": True,
+            "mosaic": 0.50,
+            "close_mosaic": 8,
             "mixup": 0.0,
+            "copy_paste": 0.0,
             "fliplr": 0.5,
             "flipud": 0.0,
             "rect": False,
@@ -1229,9 +1397,48 @@ def main(argv: list[str] | None = None):
             "onnx_parity": False,
         },
         "best": {
-            "epochs": 100, "patience": 20, "cache": "disk", "imgsz": 768,
-            "mosaic": 0.30, "close_mosaic": 10, "plots": True, "reval": True,
-            "sweep_conf": True, "export_onnx": False, "cos_lr": True,
+            # Accuracy-oriented YOLO26n fine-tuning for the current beacon task.
+            # 768 is retained because the beacon can be only 5-20 source pixels.
+            "epochs": 80,
+            "patience": 15,
+            "imgsz": 768,
+            "batch": -1,
+            "workers": 4,
+            "cache": "ram",
+            "amp": True,
+            "optimizer": "MuSGD",
+            "lr0": 0.0054,
+            "lrf": 0.0495,
+            "momentum": 0.947,
+            "weight_decay": 0.00064,
+            "warmup_epochs": 1.0,
+            "cos_lr": True,
+            "box_gain": 5.63,
+            "cls_gain": 0.56,
+            "dfl_gain": 9.04,
+            "mosaic": 0.85,
+            "mixup": 0.0,
+            "copy_paste": 0.0,
+            "fliplr": 0.5,
+            "flipud": 0.0,
+            "degrees": 1.0,
+            "translate": 0.07,
+            "scale": 0.50,
+            "shear": 1.0,
+            "perspective": 0.0,
+            "rect": False,
+            "multi_scale": 0.0,
+            "compile_mode": False,
+            "deterministic": False,
+            "val_during_train": True,
+            "plots": True,
+            "reval": True,
+            "sweep_conf": True,
+            "export_onnx": False,
+            "onnx_parity": False,
+            "close_mosaic": 10,
+            "save": True,
+            "save_period": 10,
         },
     }
     if args.profile:
@@ -1241,7 +1448,11 @@ def main(argv: list[str] | None = None):
         log.info("Using '%s' profile; explicit CLI arguments take precedence.", args.profile)
 
     if args.imgsz != 640:
-        log.warning("Source frames are 640x480; imgsz=%d will be letterboxed/resized. Use the same imgsz at inference.", args.imgsz)
+        log.warning(
+            "Source frames are 640x480; imgsz=%d will be resized/letterboxed. "
+            "Use the same imgsz at inference.",
+            args.imgsz,
+        )
     if args.batch == 0 or args.batch < -1:
         raise ValueError("batch must be > 0, -1, or a positive fraction between 0 and 1 for auto-batch")
     if 0 < args.batch < 1 and args.batch < 0.01:
