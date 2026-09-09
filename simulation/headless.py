@@ -20,9 +20,12 @@ from disturbance import disturbances as dist
 from disturbance.config import DisturbanceConfig
 from environment.config import EnvironmentConfig
 from environment.scene import Scene
-from gui.core.renderer import Renderer
 from target.config import MultiBeaconConfig
 from target.motion import MotionProfile, create_beacons
+
+# NOTE: No GUI imports at top level here. The viewport renderer pulls in Qt
+# bindings which clash with the model backend DLL on some Windows setups.
+# Viewport rendering is done via lazy import inside step() with raw-frame fallback.
 
 
 @dataclass
@@ -87,8 +90,8 @@ class HeadlessSimulation:
         self._scene_size = (int(self.env_config.world_width), int(self.env_config.world_height))
 
         if camera_config is None:
-            from gui.styles import FOV_SIZE  # noqa, for default FOV
-            fov = FOV_SIZE
+            # Default sensor size without pulling GUI/Qt chain (avoids backend clash).
+            fov = (640, 480)
             self.camera_config = CameraConfig(
                 fov_width=fov[0], fov_height=fov[1],
                 viewport_width=2000, viewport_height=2000,
@@ -369,7 +372,9 @@ class HeadlessSimulation:
         obs["is_locked"] = is_locked
 
         try:
-            obs["viewport"] = Renderer.render_viewport(fov_frame, self.camera, self.beacons, self.target, None, all_dets, estimate=estimate)
+            from gui.core.renderer import Renderer as _Renderer
+
+            obs["viewport"] = _Renderer.render_viewport(fov_frame, self.camera, self.beacons, self.target, None, all_dets, estimate=estimate)
         except Exception:
             obs["viewport"] = fov_frame
 
