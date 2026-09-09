@@ -356,10 +356,25 @@ class TickMixin:
                         except Exception:
                             lat = 0.0
                         self._frame_id = int(getattr(self, "_frame_id", 0)) + 1
+                        try:
+                            det_pos_var = None
+                            if all_dets and det_c is not None:
+                                for _dd in all_dets:
+                                    try:
+                                        if tuple(_dd.get("center", (0, 0))) == tuple(det_c):
+                                            det_pos_var = float(_dd.get("pos_var", 9.0))
+                                            break
+                                    except Exception:
+                                        continue
+                        except Exception:
+                            det_pos_var = None
                         logger.log(
                             self._frame_id, (gx, gy), vis, det_c, det_conf,
                             estimate, vel, str(getattr(self, "_last_lock_state", "searching")),
                             lat,
+                            lock_quality=float(getattr(self, "_last_lock_quality", 0.0) or 0.0),
+                            detection_pos_var=det_pos_var,
+                            all_detections=all_dets,
                         )
             except Exception:
                 pass

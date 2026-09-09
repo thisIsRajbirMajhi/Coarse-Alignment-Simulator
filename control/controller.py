@@ -73,6 +73,39 @@ class PIDController:
         self.config.kp = float(value)
         self.config.validate()
 
+    def set_gain_scale(self, scale: float) -> None:
+        """Scale kp/ki/kd together (for lock-state gain scheduling)."""
+        try:
+            s = float(np.clip(scale, 0.2, 2.0))
+            base_kp = float(getattr(self, "_base_kp", float(self.config.kp)))
+            base_ki = float(getattr(self, "_base_ki", float(self.config.ki)))
+            base_kd = float(getattr(self, "_base_kd", float(self.config.kd)))
+            if not hasattr(self, "_base_kp"):
+                self._base_kp, self._base_ki, self._base_kd = base_kp, base_ki, base_kd
+            self.config.kp = float(np.clip(self._base_kp * s, 0.0, 1.0))
+            self.config.ki = max(0.0, self._base_ki * s)
+            self.config.kd = max(0.0, self._base_kd * s)
+            self.config.validate()
+        except Exception:
+            pass
+
+    def schedule_by_lock(self, lock_quality: float | None, speed_px_s: float | None = None) -> float:
+        """Gain schedule: gentle when uncertain, aggressive when locked+fast.
+
+        Returns applied scale. Never raises.
+        """
+        try:
+            q = 1.0 if lock_quality is None else float(np.clip(lock_quality, 0.0, 1.0))
+            scale = 0.6 + 0.6 * q  # 0.6 .. 1.2
+            if speed_px_s is not None and float(speed_px_s) > 120.0:
+                scale = min(1.5, scale + 0.15)  # extra authority for fast targets
+            if q < 0.3:
+                scale = min(scale, 0.7)  # avoid chasing noisy estimates
+            self.set_gain_scale(scale)
+            return float(scale)
+        except Exception:
+            return 1.0
+
     def compute_correction(
         self,
         error_x: float,
@@ -80,6 +113,7 @@ class PIDController:
         dt: float | None = None,
         camera_max_slew: float | None = None,
         target_velocity: tuple[float, float] | None = None,
+        lock_quality: float | None = None,
     ) -> tuple[float, float]:
         """
         Compute PID correction with feedforward, adaptive gain, Smith predictor, and proper dead zone.
@@ -89,6 +123,7 @@ class PIDController:
           dt: seconds (from MainWindow, already sim_speed scaled)
           camera_max_slew: px/s for anti-windup clamp
           target_velocity: (vx, vy) px/s from tracker for feedforward/Smith
+          lock_quality: optional [0,1]; scales output down when uncertain
         """
         err_mag = math.hypot(float(error_x), float(error_y))
         # FIX: Proper dead zone — freeze integral (not fast decay), zero derivative, avoid windup
@@ -228,6 +263,15 @@ class PIDController:
             try:
                 cam_clamp = float(camera_max_slew) * float(dt)
                 clamp = min(float(clamp), float(cam_clamp))
+            except Exception:
+                pass
+        # Lock-aware output scaling: don't chase uncertain estimates
+        if lock_quality is not None:
+            try:
+                q = float(np.clip(float(lock_quality), 0.0, 1.0))
+                scale = 0.5 + 0.5 * q  # 0.5 .. 1.0
+                u_x *= scale
+                u_y *= scale
             except Exception:
                 pass
         u_x = float(np.clip(u_x, -clamp, clamp))

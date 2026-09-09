@@ -39,12 +39,17 @@ class Detection:
     """Single beacon hypothesis from one frame."""
 
     bbox: tuple[float, float, float, float]  # (x1, y1, x2, y2) in FOV pixels
-    center: tuple[float, float]  # (cx, cy) precomputed for convenience
+    center: tuple[float, float]  # (cx, cy) refined centroid where available
     width: float
     height: float
-    confidence: float  # [0, 1]
+    confidence: float  # [0, 1] calibrated where possible
     class_id: int = 0  # 0 = beacon (single class)
     latency_ms: float = 0.0  # detector time for this frame (diagnostics)
+    # Phase-1 robustness fields (optional, backward compatible):
+    pos_var: float = 9.0  # measurement variance px^2 for KF R (from conf/size)
+    source: str = "unknown"  # "yolo" | "classical" | "fused"
+    area: float = 0.0  # bbox area px^2
+    circularity: float = 1.0  # 1.0 = compact/blob-like, 0 = streak/noise
 
     def to_dict(self) -> dict:
         return {
@@ -54,6 +59,10 @@ class Detection:
             "height": float(self.height),
             "confidence": float(self.confidence),
             "class_id": int(self.class_id),
+            "pos_var": float(self.pos_var),
+            "source": str(self.source),
+            "area": float(self.area if self.area else self.width * self.height),
+            "circularity": float(self.circularity),
         }
 
 
@@ -67,6 +76,134 @@ def pixel_error(cx: float, cy: float, fov_w: int = 640, fov_h: int = 480) -> tup
     bx, by = float(fov_w) / 2.0, float(fov_h) / 2.0
     ex, ey = float(cx) - bx, float(cy) - by
     return ex, ey, float(np.hypot(ex, ey))
+
+
+# ----------------------------------------------------------------------------
+# Phase-1 helpers: sub-pixel localization, uncertainty, fusion
+# ----------------------------------------------------------------------------
+
+def intensity_refined_centroid(gray: np.ndarray, x1: float, y1: float, x2: float, y2: float) -> tuple[float, float]:
+    """Intensity-weighted centroid inside bbox; falls back to geometric center.
+
+    More accurate than (x1+x2)/2 for bloomed/asymmetric beacons (±0.5-1px gain).
+    Never raises — returns geometric center on any failure.
+    """
+    try:
+        h, w = gray.shape[:2]
+        ix1, iy1 = max(0, int(x1)), max(0, int(y1))
+        ix2, iy2 = min(w, int(np.ceil(x2))), min(h, int(np.ceil(y2)))
+        if ix2 <= ix1 or iy2 <= iy1:
+            return bbox_to_center(x1, y1, x2, y2)
+        roi = gray[iy1:iy2, ix1:ix2].astype(np.float64)
+        if roi.size == 0:
+            return bbox_to_center(x1, y1, x2, y2)
+        roi = np.clip(roi - float(np.min(roi)), 0.0, None)
+        total = float(np.sum(roi))
+        if total < 1e-9:
+            return bbox_to_center(x1, y1, x2, y2)
+        ys, xs = np.mgrid[iy1:iy2, ix1:ix2].astype(np.float64)
+        cx = float(np.sum(xs * roi) / total)
+        cy = float(np.sum(ys * roi) / total)
+        # Sanity: keep inside expanded bbox (rejects bleed from neighbours)
+        if not (x1 - 3 <= cx <= x2 + 3 and y1 - 3 <= cy <= y2 + 3):
+            return bbox_to_center(x1, y1, x2, y2)
+        return cx, cy
+    except Exception:
+        return bbox_to_center(x1, y1, x2, y2)
+
+
+def measurement_noise_for(confidence: float, width: float, height: float) -> float:
+    """Map detection quality -> measurement variance px^2 for KF R.
+
+    High-conf compact boxes -> ~2-4; weak/diffuse -> up to ~50.
+    Keeps KF from over-trusting dim/blobby observations.
+    """
+    try:
+        c = float(np.clip(confidence, 0.05, 1.0))
+        size = max(2.0, float(width + height) / 2.0)
+        # base from confidence: conf=1 -> 2.0, conf=0.25 -> ~12, conf=0.05 -> ~40
+        base = 2.0 / (c ** 1.5)
+        # size penalty: nominal 5-20px; huge boxes are less precise
+        size_factor = float(np.clip(size / 12.0, 0.7, 2.5))
+        return float(np.clip(base * size_factor, 1.0, 60.0))
+    except Exception:
+        return 9.0
+
+
+def calibrate_classical_conf(mean_intensity: float, area: float, circularity: float) -> float:
+    """Calibrated confidence for classical spots (was mean(ROI)/255).
+
+    Combines brightness + compactness + plausible size so sky noise scores low.
+    """
+    try:
+        b = float(np.clip(mean_intensity / 255.0, 0.0, 1.0))
+        # Size term: peak at ~25-400 px^2, penalize tiny specks and huge blobs
+        if area < 6:
+            s = 0.2
+        elif area <= 400:
+            s = 0.7 + 0.3 * (1.0 - abs(area - 100.0) / 400.0)
+        else:
+            s = float(np.clip(400.0 / area, 0.1, 0.7))
+        circ = float(np.clip(circularity, 0.0, 1.0))
+        shape = 0.5 + 0.5 * circ
+        conf = 0.55 * b + 0.25 * s + 0.20 * shape
+        return float(np.clip(conf, 0.0, 1.0))
+    except Exception:
+        return 0.5
+
+
+def bbox_iou(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> float:
+    try:
+        ix1, iy1 = max(a[0], b[0]), max(a[1], b[1])
+        ix2, iy2 = min(a[2], b[2]), min(a[3], b[3])
+        iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+        inter = iw * ih
+        if inter <= 0:
+            return 0.0
+        aa = max(0.0, a[2] - a[0]) * max(0.0, a[3] - a[1])
+        bb = max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
+        union = aa + bb - inter
+        return float(inter / union) if union > 1e-9 else 0.0
+    except Exception:
+        return 0.0
+
+
+def fuse_detections_nms(dets: list[Detection], iou_thresh: float = 0.45) -> list[Detection]:
+    """Cross-source NMS fusion: YOLO + classical boxes merged, best kept.
+
+    Keeps highest (confidence / sqrt(pos_var)) box per overlapping cluster.
+    Pure-python, no scipy. Never raises.
+    """
+    try:
+        if len(dets) <= 1:
+            return list(dets)
+        def _score(d: Detection) -> float:
+            try:
+                return float(d.confidence) / float(np.sqrt(max(1.0, d.pos_var)))
+            except Exception:
+                return float(d.confidence)
+        ordered = sorted(dets, key=_score, reverse=True)
+        kept: list[Detection] = []
+        for d in ordered:
+            dup = False
+            for k in kept:
+                # Near-duplicate if IoU high OR centers within few px (small beacons)
+                try:
+                    dist = float(np.hypot(d.center[0] - k.center[0], d.center[1] - k.center[1]))
+                except Exception:
+                    dist = 1e9
+                if bbox_iou(d.bbox, k.bbox) >= iou_thresh or dist < 6.0:
+                    dup = True
+                    break
+            if not dup:
+                if d.source in ("yolo", "classical") and len(kept) < 20:
+                    d.source = "fused" if any(
+                        bbox_iou(d.bbox, o.bbox) >= 0.1 for o in dets if o is not d
+                    ) else d.source
+                kept.append(d)
+        return kept
+    except Exception:
+        return list(dets)
 
 
 # ----------------------------------------------------------------------------
@@ -207,23 +344,30 @@ class YOLO26Detector:
                     conf = boxes.conf.cpu().numpy() if hasattr(boxes.conf, "cpu") else np.asarray(boxes.conf)
                     cls = boxes.cls.cpu().numpy() if hasattr(boxes.cls, "cpu") else np.asarray(boxes.cls)
                     h, w = frame.shape[:2]
+                    gray_ref = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
                     for (x1, y1, x2, y2), c, k in zip(xyxy, conf, cls):
                         if int(k) != 0:
                             continue
-                        cx, cy = bbox_to_center(float(x1), float(y1), float(x2), float(y2))
                         # Clamp to frame for safety
                         x1c, y1c = max(0.0, float(x1)), max(0.0, float(y1))
                         x2c, y2c = min(float(w), float(x2)), min(float(h), float(y2))
                         if x2c <= x1c or y2c <= y1c:
                             continue
+                        # Sub-pixel refinement: intensity centroid inside bbox
+                        cx, cy = intensity_refined_centroid(gray_ref, x1c, y1c, x2c, y2c)
+                        bw, bh = float(x2c - x1c), float(y2c - y1c)
                         dets.append(
                             Detection(
                                 bbox=(float(x1c), float(y1c), float(x2c), float(y2c)),
                                 center=(float(cx), float(cy)),
-                                width=float(x2c - x1c),
-                                height=float(y2c - y1c),
-                                confidence=float(c),
+                                width=bw,
+                                height=bh,
+                                confidence=float(np.clip(c, 0.0, 1.0)),
                                 class_id=0,
+                                pos_var=measurement_noise_for(float(c), bw, bh),
+                                source="yolo",
+                                area=bw * bh,
+                                circularity=1.0,
                             )
                         )
             # Sort by confidence desc, cap count
@@ -275,10 +419,21 @@ class BrightSpotDetector:
                 continue
             if bw < 2 or bh < 2:
                 continue
+            # Shape filter: reject streaks/noise (circularity + aspect)
+            try:
+                peri = cv2.arcLength(cnt, True)
+                circ = (4.0 * np.pi * area / (peri * peri)) if peri > 1e-6 else 0.0
+            except Exception:
+                circ = 1.0
+            circ = float(np.clip(circ, 0.0, 1.0))
+            aspect = max(bw, bh) / max(1.0, min(bw, bh))
+            if circ < 0.15 and aspect > 5.0:
+                continue  # thin streak, not a beacon blob
             x1, y1, x2, y2 = float(x), float(y), float(x + bw), float(y + bh)
-            cx, cy = bbox_to_center(x1, y1, x2, y2)
-            roi = gray[int(y1):int(y2), int(x1):int(x2)]
-            conf = float(np.mean(roi) / 255.0) if roi.size else 0.5
+            cx, cy = intensity_refined_centroid(gray, x1, y1, x2, y2)
+            roi = gray[max(0, int(y1)):int(y2), max(0, int(x1)):int(x2)]
+            mean_i = float(np.mean(roi)) if roi.size else 0.0
+            conf = calibrate_classical_conf(mean_i, float(area), circ)
             dets.append(
                 Detection(
                     bbox=(x1, y1, x2, y2),
@@ -287,6 +442,10 @@ class BrightSpotDetector:
                     height=float(bh),
                     confidence=float(np.clip(conf, 0.0, 1.0)),
                     class_id=0,
+                    pos_var=measurement_noise_for(conf, float(bw), float(bh)),
+                    source="classical",
+                    area=float(area),
+                    circularity=circ,
                 )
             )
         return dets
@@ -323,8 +482,12 @@ class BrightSpotDetector:
 
 
 class UnifiedDetector:
-    """Try YOLO first, fall back to classical if YOLO unavailable or empty
-    and fallback is enabled. Guarantees loop never crashes on missing weights."""
+    """Fused detector: YOLO + classical merged via NMS.
+
+    Previously YOLO-only-if-any (classical ignored when YOLO fired). Now both
+    run and are fused so dim/small beacons missed by one path are still found,
+    with duplicates merged. Falls back gracefully if either path fails.
+    Guarantees loop never crashes on missing weights."""
 
     def __init__(self, config: DetectorConfig | None = None, model_path: str | None = None):
         self.config = (config or DetectorConfig()).validate()
@@ -334,16 +497,36 @@ class UnifiedDetector:
         self.last_latency_ms: float = 0.0
 
     def detect(self, frame: np.ndarray) -> list[Detection]:
-        dets = self.yolo.detect(frame)
-        if dets:
+        yolo_dets: list[Detection] = []
+        try:
+            yolo_dets = self.yolo.detect(frame)
+        except Exception:
+            yolo_dets = []
+        classical_dets: list[Detection] = []
+        if self.config.use_classical_fallback:
+            try:
+                classical_dets = self.classical.detect(frame)
+            except Exception:
+                classical_dets = []
+        if yolo_dets and classical_dets:
+            fused = fuse_detections_nms(
+                list(yolo_dets) + list(classical_dets),
+                iou_thresh=float(self.config.iou_threshold) if self.config.iou_threshold < 0.9 else 0.45,
+            )
+            self.last_used = "fused"
+            self.last_latency_ms = float(self.yolo.last_latency_ms + self.classical.last_latency_ms)
+        elif yolo_dets:
+            fused = yolo_dets
             self.last_used = "yolo"
             self.last_latency_ms = self.yolo.last_latency_ms
-            return dets
-        if self.config.use_classical_fallback:
-            dets = self.classical.detect(frame)
-            self.last_used = "classical" if dets else "none"
+        elif classical_dets:
+            fused = classical_dets
+            self.last_used = "classical"
             self.last_latency_ms = self.classical.last_latency_ms
-            return dets
-        self.last_used = "none"
-        self.last_latency_ms = self.yolo.last_latency_ms
-        return []
+        else:
+            self.last_used = "none"
+            self.last_latency_ms = self.yolo.last_latency_ms
+            return []
+        fused.sort(key=lambda d: (d.confidence / max(1.0, d.pos_var ** 0.5)), reverse=True)
+        fused = fused[: int(self.config.max_detections)]
+        return fused
