@@ -8,6 +8,9 @@ Key properties:
 - Resume/checkpoint handling, reproducibility controls, run snapshots and metrics.
 - Optional validation confidence sweep for F1 selection.
 - Optional ONNX export plus checker/runtime/metric-parity validation.
+- Strict YOLO26 architecture enforcement with zero cross-family fallback.
+- Dataset completeness gates to prevent expensive runs on partial splits.
+- Safe post-training reload/evaluation and complete metrics snapshotting.
 
 Dataset source images are 640x480. YOLO uses square inputs by default, so the
 same imgsz used for training should be used at inference/export.
@@ -919,6 +922,11 @@ def train_yolo(
     dry_run: bool = False,
     hash_leakage: bool = False,
 ):
+    # Import once for the complete train -> validate -> test -> export lifecycle.
+    # This fixes the post-training NameError that occurred when best.pt was
+    # reloaded after model.train() completed.
+    from ultralytics import YOLO
+
     if epochs <= 0:
         raise ValueError("epochs must be > 0")
     if batch == 0 or batch < -1:
@@ -972,13 +980,9 @@ def train_yolo(
     if not data_path.is_file():
         raise FileNotFoundError(f"Dataset YAML not found: {data_path}")
 
-    model_name_lower = str(model_path).lower()
-    if not resume and "yolo26" not in model_name_lower:
-        raise ValueError(
-            f"Strict YOLO26 mode rejects model={model_path!r}. "
-            "Use yolo26n.pt/yolo26s.pt/... or another checkpoint that "
-            "is actually a YOLO26 model and can be architecturally verified."
-        )
+    # Do not rely on the filename alone. The strict loader below verifies the
+    # actual loaded architecture. This permits renamed YOLO26 checkpoints while
+    # still rejecting every non-YOLO26 model before training.
 
     project = str((Path(project) if Path(project).is_absolute() else Path.cwd() / project).resolve())
     if save_dir is not None:
@@ -1481,7 +1485,8 @@ def main(argv: list[str] | None = None):
         dropout=args.dropout, fraction=args.fraction, classes=class_ids, pretrained=args.pretrained,
         cls_remap=args.cls_remap, nbs=args.nbs, warmup_momentum=args.warmup_momentum,
         warmup_bias_lr=args.warmup_bias_lr, label_smoothing=args.label_smoothing,
-        bgr=args.bgr, cutmix=args.cutmix, exist_ok=args.exist_ok, overwrite=args.overwrite,
+        bgr=args.bgr, cutmix=args.cutmix, copy_paste=args.copy_paste,
+        exist_ok=args.exist_ok, overwrite=args.overwrite,
         val_during_train=args.val_during_train, save_period=args.save_period,
         reval=args.reval, sweep_conf=args.sweep_conf, val_conf=args.val_conf,
         val_iou=args.val_iou, max_det=args.max_det, agnostic_nms=args.agnostic_nms,
