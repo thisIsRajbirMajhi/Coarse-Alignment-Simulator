@@ -115,6 +115,33 @@ class LifecycleMixin:
         except Exception as e:
             print(f"Reset defaults error: {e}")
         self._build_simulation()
+        # Re-apply tracking toggle + close video on reset (clean state)
+        try:
+            enabled = True
+            try:
+                enabled = bool(self.global_panel.tracking_checkbox.isChecked())
+            except Exception:
+                pass
+            self._tracking_enabled = enabled
+        except Exception:
+            pass
+        try:
+            cap = getattr(self, "_video_cap", None)
+            if cap is not None:
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+            self._video_cap = None
+            self._source = "live"
+            try:
+                self.global_panel.source_combo.blockSignals(True)
+                self.global_panel.source_combo.setCurrentText("live")
+                self.global_panel.source_combo.blockSignals(False)
+            except Exception:
+                pass
+        except Exception:
+            pass
         try:
             self._invalidate_minimap_cache()
         except Exception: pass
@@ -150,7 +177,130 @@ class LifecycleMixin:
         self.statusBar().showMessage("Reset — ready", 2000)
 
     def _export_log(self):
-        QMessageBox.information(self, "Export", "Logging has been removed — no data to export.")
+        try:
+            logger = getattr(self, "_metrics_logger", None)
+            if logger is None or len(getattr(logger, "records", [])) == 0:
+                QMessageBox.information(self, "Export", "No frames logged yet — press Start and run a while, then export.")
+                return
+            import time as _t
+            from PyQt5.QtWidgets import QFileDialog
+
+            stamp = _t.strftime("%Y%m%d_%H%M%S")
+            default_csv = f"performance_log_{stamp}.csv"
+            csv_path, _ = QFileDialog.getSaveFileName(self, "Save performance log (CSV)", default_csv, "CSV (*.csv)")
+            if not csv_path:
+                return
+            logger.save_csv(csv_path)
+            try:
+                summ_path = str(csv_path).rsplit(".", 1)[0] + "_summary.json"
+                logger.save_summary(summ_path)
+                summ = logger.summary()
+                QMessageBox.information(
+                    self, "Export",
+                    f"Saved {summ.get('frames', 0)} frames.\nCSV: {csv_path}\nSummary: {summ_path}\n"
+                    f"FPS {summ.get('fps')}, retention {summ.get('lock_retention_pct')}%, "
+                    f"acq {summ.get('acquisition_time_s')}s.",
+                )
+            except Exception:
+                QMessageBox.information(self, "Export", f"Saved log: {csv_path}")
+            try:
+                self.statusBar().showMessage(f"Exported log to {csv_path}", 4000)
+            except Exception:
+                pass
+        except Exception as e:
+            QMessageBox.warning(self, "Export", f"Failed: {e}")
+
+    def _set_tracking_enabled(self, enabled: bool) -> None:
+        self._tracking_enabled = bool(enabled)
+        if not enabled:
+            try:
+                self._last_lock_state = "searching"
+                self._last_estimate = None
+                self._last_all_detections = []
+            except Exception:
+                pass
+
+    def _set_source_live(self) -> None:
+        try:
+            cap = getattr(self, "_video_cap", None)
+            if cap is not None:
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+            self._video_cap = None
+            self._source = "live"
+            self.statusBar().showMessage("Source: live simulation", 2000)
+        except Exception:
+            pass
+
+    def _open_video_file(self, path: str | None = None) -> bool:
+        try:
+            from PyQt5.QtWidgets import QFileDialog
+            import cv2 as _cv2
+
+            if path is None:
+                path, _ = QFileDialog.getOpenFileName(self, "Open video (.mp4)", "", "Video (*.mp4 *.avi)")
+                if not path:
+                    return False
+            cap = _cv2.VideoCapture(str(path))
+            if not cap.isOpened():
+                QMessageBox.warning(self, "Video", f"Cannot open: {path}")
+                return False
+            old = getattr(self, "_video_cap", None)
+            if old is not None:
+                try:
+                    old.release()
+                except Exception:
+                    pass
+            self._video_cap = cap
+            self._video_path = str(path)
+            self._source = "video"
+            # Reset pipeline + logger for clean video scoring run
+            try:
+                if getattr(self, "_pipeline", None) is not None:
+                    self._pipeline.reset()
+                if getattr(self, "_metrics_logger", None) is not None:
+                    self._metrics_logger.reset()
+                self._frame_id = 0
+            except Exception:
+                pass
+            self.statusBar().showMessage(f"Source: video {path} (PTZ bypassed)", 3000)
+            return True
+        except Exception as e:
+            QMessageBox.warning(self, "Video", f"Failed: {e}")
+            return False
+
+    def _on_source_changed(self, text: str) -> None:
+        try:
+            if str(text) == "video":
+                # If no file yet, ask for one; stay live if cancelled
+                if getattr(self, "_video_cap", None) is None:
+                    if not self._open_video_file():
+                        try:
+                            self.global_panel.source_combo.blockSignals(True)
+                            self.global_panel.source_combo.setCurrentText("live")
+                            self.global_panel.source_combo.blockSignals(False)
+                        except Exception:
+                            pass
+                        return
+                self._source = "video"
+            else:
+                self._set_source_live()
+        except Exception:
+            pass
+
+    def _on_video_browse(self) -> None:
+        try:
+            if self._open_video_file():
+                try:
+                    self.global_panel.source_combo.blockSignals(True)
+                    self.global_panel.source_combo.setCurrentText("video")
+                    self.global_panel.source_combo.blockSignals(False)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def closeEvent(self, event):
         try:

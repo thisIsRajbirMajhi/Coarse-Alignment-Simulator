@@ -3,6 +3,17 @@
 
 from tracking.association import AssociationConfig, associate
 from tracking.kalman import KalmanConfig, KalmanTracker
+from tracking.metrics import FrameRecord, MetricsLogger
+from tracking.pipeline import PipelineResult, TrackingPipeline
+from tracking.state_machine import (
+    DETECTED,
+    LOST,
+    REACQUIRING,
+    SEARCHING,
+    TRACKING,
+    AcquisitionStateMachine,
+    StateMachineConfig,
+)
 from tracking.detector import (
     BrightSpotDetector,
     Detection,
@@ -18,6 +29,17 @@ __all__ = [
     "associate",
     "KalmanConfig",
     "KalmanTracker",
+    "AcquisitionStateMachine",
+    "StateMachineConfig",
+    "SEARCHING",
+    "DETECTED",
+    "TRACKING",
+    "LOST",
+    "REACQUIRING",
+    "TrackingPipeline",
+    "PipelineResult",
+    "MetricsLogger",
+    "FrameRecord",
     "Detection",
     "DetectorConfig",
     "YOLO26Detector",

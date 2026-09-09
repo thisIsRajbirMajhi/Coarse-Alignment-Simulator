@@ -42,6 +42,9 @@ class GlobalPanel(BaseConfigPanel):
     simSpeedChanged = pyqtSignal(float)
     globalBrightnessChanged = pyqtSignal(int)
     globalRadiusChanged = pyqtSignal(int)
+    trackingToggled = pyqtSignal(bool)
+    sourceChanged = pyqtSignal(str)
+    videoBrowseRequested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -119,14 +122,50 @@ class GlobalPanel(BaseConfigPanel):
 
         # Export / Open Dashboard buttons removed entirely per user request (dashboard now in MainWindow, graph removed)
         # Kept as hidden dummies for backward compat so MainWindow wiring does not break
-        self.export_btn = QPushButton()
-        self.export_btn.hide()
+        self.export_btn = QPushButton("Export performance log")
+        self.export_btn.setMinimumHeight(40)
         self.export_btn.clicked.connect(self.exportRequested.emit)
         self.dashboard_btn = QPushButton()
         self.dashboard_btn.hide()
         self.dashboard_btn.clicked.connect(self.dashboardRequested.emit)
 
         layout.addWidget(transport_card)
+
+        # Tracking + source card (Phase 7): enable closed loop, live vs video file
+        from PyQt5.QtWidgets import QCheckBox
+
+        track_card = QFrame()
+        track_card.setStyleSheet("QFrame { background:#ffffff; border:1px solid #e5e7eb; border-radius:8px; }")
+        tcl = QVBoxLayout(track_card)
+        tcl.setContentsMargins(16, 14, 16, 14)
+        tcl.setSpacing(10)
+        track_title = QLabel("Tracking + Source")
+        track_title.setStyleSheet("color:#111827; font-weight:700; font-size:12px; background: transparent;")
+        track_title.setAlignment(Qt.AlignCenter)
+        tcl.addWidget(track_title)
+
+        self.tracking_checkbox = QCheckBox("Enable auto-tracking (closed loop)")
+        self.tracking_checkbox.setChecked(True)
+        self.tracking_checkbox.toggled.connect(self.trackingToggled.emit)
+        tcl.addWidget(self.tracking_checkbox)
+
+        src_row = QHBoxLayout()
+        src_lab = QLabel("Source:")
+        src_lab.setStyleSheet("color:#374151; font-size:11px; background: transparent;")
+        self.source_combo = QComboBox()
+        self.source_combo.addItems(["live", "video"])
+        self.source_combo.currentTextChanged.connect(self.sourceChanged.emit)
+        src_row.addWidget(src_lab)
+        src_row.addWidget(self.source_combo, 1)
+        tcl.addLayout(src_row)
+
+        self.video_btn = QPushButton("Open video file (.mp4)")
+        self.video_btn.setMinimumHeight(36)
+        self.video_btn.clicked.connect(self.videoBrowseRequested.emit)
+        tcl.addWidget(self.video_btn)
+        tcl.addWidget(self.export_btn)
+
+        layout.addWidget(track_card)
 
         layout.addStretch()
 

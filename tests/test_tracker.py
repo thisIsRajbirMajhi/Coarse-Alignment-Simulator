@@ -1,4 +1,4 @@
-"""beacon_tracker and tracking removed: verify complete removal."""
+"""Tracking stack present: Kalman + state machine + closed-loop pipeline."""
 
 import sys
 from pathlib import Path
@@ -7,11 +7,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pytest
 
 
-def test_tracking_module_removed():
-    with pytest.raises(ModuleNotFoundError):
-        import tracking.tracker  # noqa
-    with pytest.raises(ModuleNotFoundError):
-        import tracking.kalman  # noqa
+def test_tracking_module_present():
+    from tracking.kalman import KalmanTracker
+    from tracking.state_machine import AcquisitionStateMachine
+    from tracking.pipeline import TrackingPipeline
+    tr = KalmanTracker()
+    tr.step((100, 100))
+    assert tr.initialized
+    sm = AcquisitionStateMachine()
+    assert sm.step(False) == "searching"
 
 
 def test_beacon_tracker_fully_removed():

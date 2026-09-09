@@ -197,7 +197,17 @@ class Renderer:
 
         if all_dets:
             for d in all_dets:
-                x, y = int(d["x"]), int(d["y"])
+                try:
+                    if isinstance(d, dict):
+                        if "center" in d:
+                            cx, cy = d["center"]
+                            x, y = int(cx), int(cy)
+                        else:
+                            x, y = int(d.get("x", 0)), int(d.get("y", 0))
+                    else:
+                        x, y = int(d[0]), int(d[1])
+                except Exception:
+                    continue
                 pts = np.array([[x, y-3],[x+3, y],[x, y+3],[x-3, y]], np.int32)
                 cv2.polylines(display, [pts], True, (130, 130, 255), 1, cv2.LINE_AA)
 
@@ -381,7 +391,11 @@ class Renderer:
         h, w, ch = rgb.shape
         qimg = QImage(rgb.data, w, h, ch*w, QImage.Format_RGB888)
         qimg = qimg.copy()
-        pixmap = QPixmap.fromImage(qimg).scaled(label.width(), label.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        # Fast scaling for 30Hz real-time (Smooth costs ~3-4x CPU per frame).
+        lw, lh = int(label.width()), int(label.height())
+        if lw < 10 or lh < 10:
+            lw, lh = w, h
+        pixmap = QPixmap.fromImage(qimg).scaled(lw, lh, Qt.KeepAspectRatio, Qt.FastTransformation)
         label.setPixmap(pixmap)
         return rgb
 

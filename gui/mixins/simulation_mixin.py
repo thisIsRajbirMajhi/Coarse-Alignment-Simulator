@@ -171,3 +171,33 @@ class SimulationMixin:
         self._minimap_thumb = None  # type: ignore
         self._minimap_thumb_size = None  # type: ignore
         self._minimap_scene_id = None  # type: ignore
+        # Closed-loop tracking (Phase 7): classical-only for 30Hz real-time safety
+        try:
+            from tracking.detector import DetectorConfig as _DC
+            from tracking.pipeline import TrackingPipeline as _TP
+            from tracking.metrics import MetricsLogger as _ML
+
+            thresh = 80
+            try:
+                if hasattr(self, "beacon_manager") and hasattr(self.beacon_manager, "spin_thresh"):
+                    thresh = int(self.beacon_manager.spin_thresh.value())
+            except Exception:
+                pass
+            self._pipeline = _TP(
+                detector_config=_DC(threshold=int(thresh)),
+                controller_config=ctrl_cfg,
+                fov_size=(int(fov_w), int(fov_h)),
+                use_yolo=False,
+            )
+            self._tracking_enabled = bool(getattr(self, "_tracking_enabled", True))
+            self._metrics_logger = _ML(fov_size=(int(fov_w), int(fov_h)))
+            self._frame_id = 0
+        except Exception:
+            self._pipeline = None
+            self._tracking_enabled = True
+            self._metrics_logger = None
+            self._frame_id = 0
+        # Video-file source for Benchmark-2 (bypass PTZ, score file frames)
+        self._source = str(getattr(self, "_source", "live"))
+        self._video_cap = None
+        self._video_path = getattr(self, "_video_path", None)

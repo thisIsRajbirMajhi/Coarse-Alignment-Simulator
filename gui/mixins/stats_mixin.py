@@ -232,7 +232,7 @@ class StatsMixin:
                     try:
                         w.hide()
                     except Exception: pass
-            self.statusBar().showMessage("Dashboard — live in-memory metrics (no file logging)", 2000)
+            # NOTE: no per-tick statusBar spam here (was causing flicker + lag).
         except Exception: pass
 
     def _reset_stats(self):

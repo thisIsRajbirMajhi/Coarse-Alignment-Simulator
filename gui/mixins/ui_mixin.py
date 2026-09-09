@@ -261,6 +261,12 @@ class UIMixin:
         self.global_panel.resetRequested.connect(self._reset)
         self.global_panel.exportRequested.connect(self._export_log)
         self.global_panel.dashboardRequested.connect(self._show_dashboard_window)
+        try:
+            self.global_panel.trackingToggled.connect(self._set_tracking_enabled)
+            self.global_panel.sourceChanged.connect(self._on_source_changed)
+            self.global_panel.videoBrowseRequested.connect(self._on_video_browse)
+        except Exception:
+            pass
         tabs.addTab(self.global_panel, "Global")
 
         # ── Beacons Tab — Simplified: only count, target, randomize motion ──

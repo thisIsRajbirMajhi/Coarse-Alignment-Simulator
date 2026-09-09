@@ -112,15 +112,38 @@ class HeadlessSimulation:
         self._platform_motion_state: dict = {}
         self._jitter_state: dict = {}
 
-        # No detection state (beacon_tracker removed)
+        # Perception state (open loop by default; closed loop opt-in preserves old tests)
         self._last_estimate: tuple[float, float] | None = None
         self._last_all_detections: list[dict] = []
         self._last_lock_state: str = "searching"
+        self._pipeline = None
+        self._closed_loop: bool = False
+        self._last_pipeline_latency: float = 0.0
+        self._last_pipeline_vel: tuple[float, float] = (0.0, 0.0)
 
         self._build_simulation()
 
         self._start_time = None
         self._last_tick_time: float | None = None
+
+    def enable_closed_loop(self, detector_config=None, assoc_config=None, kalman_config=None,
+                           state_config=None, controller_config=None, model_path: str | None = None):
+        """Opt-in closed-loop tracking. Control uses image estimates only (no GT)."""
+        from tracking.pipeline import TrackingPipeline
+
+        fov = getattr(self, "_fov_size", (640, 480))
+        ctrl_cfg = controller_config or getattr(self, "controller_config", None)
+        self._pipeline = TrackingPipeline(
+            detector_config=detector_config, assoc_config=assoc_config,
+            kalman_config=kalman_config, state_config=state_config,
+            controller_config=ctrl_cfg, fov_size=(int(fov[0]), int(fov[1])),
+            model_path=model_path,
+        )
+        self._closed_loop = True
+        return self._pipeline
+
+    def disable_closed_loop(self) -> None:
+        self._closed_loop = False
 
     def _build_simulation(self):
         cfg = self.env_config.validate()
@@ -328,14 +351,16 @@ class HeadlessSimulation:
                 rng=self.rng,
             )
 
-        # No detection (beacon_tracker removed) — all detections empty
+        # Perception-estimation-control (closed loop) or legacy open loop.
+        # Open loop (default, keeps old tests green): no detection, direct action only.
+        # Closed loop (enable_closed_loop): frame -> pipeline -> PID -> camera.move.
+        # GT is NEVER read here for control; metric error is computed in logger only.
         all_dets: list[dict] = []
         self._last_all_detections = all_dets
         if fov_capture_x0 is not None and fov_capture_y0 is not None:
             fov_x0, fov_y0 = int(fov_capture_x0), int(fov_capture_y0)
         else:
             fov_x0, fov_y0, _, _ = self.camera.get_fov_rect()
-        # No autonomous detection; estimate stays None
         estimate = None
         self._last_estimate = estimate
         tracking_error_px = None
@@ -343,7 +368,36 @@ class HeadlessSimulation:
         center_hit = False
         detection = None
 
-        # No PID from detection — only direct action moves camera
+        pipeline_result = None
+        if bool(getattr(self, "_closed_loop", False)) and getattr(self, "_pipeline", None) is not None:
+            try:
+                pipeline_result = self._pipeline.update(fov_frame, dt_eff)
+            except Exception:
+                pipeline_result = None
+        if pipeline_result is not None:
+            try:
+                all_dets = [d.to_dict() for d in pipeline_result.all_detections]
+            except Exception:
+                all_dets = []
+            self._last_all_detections = all_dets
+            estimate = pipeline_result.estimate
+            self._last_estimate = estimate
+            tracking_error_px = pipeline_result.error_px
+            detection = pipeline_result.selected.to_dict() if pipeline_result.selected is not None else None
+            # State-gated PID already applied inside pipeline; move camera for NEXT frame
+            try:
+                if abs(pipeline_result.d_pan) > 1e-9 or abs(pipeline_result.d_tilt) > 1e-9:
+                    try:
+                        self.camera.move(float(pipeline_result.d_pan), float(pipeline_result.d_tilt), dt_eff)
+                    except Exception:
+                        self.camera.move(float(pipeline_result.d_pan), float(pipeline_result.d_tilt))
+            except Exception:
+                pass
+            self._last_lock_state = str(pipeline_result.state)
+            self._last_pipeline_latency = float(pipeline_result.latency_ms)
+            self._last_pipeline_vel = tuple(pipeline_result.velocity)
+
+        # Direct action (manual override / gym action) still honoured on top
         if action is not None:
             try:
                 arr = np.asarray(action, dtype=float).reshape(-1)
@@ -353,9 +407,14 @@ class HeadlessSimulation:
                 except Exception: self.camera.move(d_pan, d_tilt)
             except Exception: pass
 
-        is_locked = False
-        lock_state = "searching"
-        self._last_lock_state = lock_state
+        if pipeline_result is None:
+            is_locked = False
+            lock_state = "searching"
+            self._last_lock_state = lock_state
+        else:
+            lock_state = str(pipeline_result.state)
+            is_locked = bool(lock_state == "tracking")
+            self._last_lock_state = lock_state
 
         self.step_count += 1
         reward = -1.0

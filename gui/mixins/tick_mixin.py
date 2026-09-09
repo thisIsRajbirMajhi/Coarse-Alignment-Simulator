@@ -197,22 +197,176 @@ class TickMixin:
                 fov_capture_x0, fov_capture_y0 = None, None
             fov_frame = dist.apply_turbulence(fov_frame, self.sliders["Turbulence"].value(), dt=dt_eff, rng=_rng)
             fov_frame = dist.apply_sensor_noise(fov_frame, self.sliders["Noise"].value(), rng=_rng)
-        # No beacon_tracker — no detection
+        # Closed-loop tracking (Phase 7) + Benchmark-2 video mode + metrics log.
+        # GT is used ONLY for logger scoring, never for control.
         all_dets: list[dict] = []
-        self._last_all_detections = all_dets
-        self._last_estimate = None
-        self._last_lock_state = "searching"
+        estimate = None
         tracking_error_px = None
         try:
-            self._render_viewport(fov_frame, None, all_dets)
+            src = str(getattr(self, "_source", "live"))
+            if src == "video" and getattr(self, "_video_cap", None) is not None:
+                # --- Video-file mode: bypass PTZ, score file frames ---
+                import cv2 as _cv2
+
+                ok, vframe = self._video_cap.read()
+                if not ok:
+                    try:
+                        self._video_cap.set(_cv2.CAP_PROP_POS_FRAMES, 0)
+                        ok, vframe = self._video_cap.read()
+                    except Exception:
+                        pass
+                if ok and vframe is not None:
+                    try:
+                        fw, fh = int(self._fov_size[0]), int(self._fov_size[1])
+                        if (vframe.shape[1], vframe.shape[0]) != (fw, fh):
+                            vframe = _cv2.resize(vframe, (fw, fh), interpolation=_cv2.INTER_AREA)
+                    except Exception:
+                        pass
+                    fov_frame = vframe
+                # Run pipeline without moving camera (PTZ bypassed)
+                pipe = getattr(self, "_pipeline", None)
+                if pipe is not None and fov_frame is not None:
+                    try:
+                        res = pipe.update(fov_frame, dt_eff)
+                        all_dets = [d.to_dict() for d in res.all_detections]
+                        estimate = res.estimate
+                        tracking_error_px = res.error_px
+                        self._last_lock_state = str(res.state)
+                    except Exception:
+                        pass
+                self._last_all_detections = all_dets
+                self._last_estimate = estimate
+            else:
+                # --- Live mode: frame -> pipeline -> PID -> camera.move (next frame) ---
+                pipe = getattr(self, "_pipeline", None)
+                enabled = bool(getattr(self, "_tracking_enabled", True))
+                if pipe is not None and enabled and fov_frame is not None:
+                    try:
+                        # Keep pipeline FOV + controller in sync with panels
+                        try:
+                            pipe.fov_w, pipe.fov_h = int(self._fov_size[0]), int(self._fov_size[1])
+                        except Exception:
+                            pass
+                        try:
+                            thresh = None
+                            if hasattr(self, "beacon_manager") and hasattr(self.beacon_manager, "spin_thresh"):
+                                thresh = int(self.beacon_manager.spin_thresh.value())
+                            elif hasattr(self, "thresh_slider"):
+                                thresh = int(self.thresh_slider.value())
+                            if thresh is not None:
+                                pipe.detector_config.threshold = int(thresh)
+                                try:
+                                    pipe.detector.config.threshold = int(thresh)
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+                        try:
+                            if hasattr(self, "controller_config"):
+                                pipe.controller_config = self.controller_config.validate()
+                                pipe.controller_config.use_privileged_velocity = False
+                                pipe.controller.apply_config(pipe.controller_config)
+                        except Exception:
+                            pass
+                        res = pipe.update(fov_frame, dt_eff)
+                        all_dets = [d.to_dict() for d in res.all_detections]
+                        estimate = res.estimate
+                        tracking_error_px = res.error_px
+                        self._last_lock_state = str(res.state)
+                        self._last_all_detections = all_dets
+                        self._last_estimate = estimate
+                        # State-gated PID already inside pipeline; apply motion for NEXT frame
+                        if abs(float(res.d_pan)) > 1e-9 or abs(float(res.d_tilt)) > 1e-9:
+                            try:
+                                self.camera.move(float(res.d_pan), float(res.d_tilt), dt_eff)
+                            except Exception:
+                                try:
+                                    self.camera.move(float(res.d_pan), float(res.d_tilt))
+                                except Exception:
+                                    pass
+                    except Exception:
+                        self._last_all_detections = []
+                else:
+                    self._last_all_detections = []
+                    self._last_estimate = None
+                    if not hasattr(self, "_last_lock_state") or self._last_lock_state not in ("searching", "tracking", "lost", "detected", "reacquiring"):
+                        self._last_lock_state = "searching"
+            # --- Metrics log (GT only here) ---
+            try:
+                logger = getattr(self, "_metrics_logger", None)
+                if logger is not None and fov_frame is not None:
+                    tid = int(getattr(self, "_target_beacon_id", 0))
+                    beacons = getattr(self, "beacons", [])
+                    if beacons:
+                        tid = int(np.clip(tid, 0, len(beacons) - 1))
+                        b = beacons[tid]
+                        try:
+                            x0, y0, _, _ = self.camera.get_fov_rect()
+                        except Exception:
+                            x0, y0 = 0, 0
+                        gx, gy = float(b.x) - float(x0), float(b.y) - float(y0)
+                        fw, fh = int(self._fov_size[0]), int(self._fov_size[1])
+                        vis = (0 <= gx < fw) and (0 <= gy < fh)
+                        # Selected approximated as closest det to estimate
+                        det_c = None
+                        det_conf = None
+                        try:
+                            if all_dets and estimate is not None:
+                                import math as _m
+
+                                best = min(all_dets, key=lambda d: _m.dist(tuple(d.get("center", (0, 0))), tuple(estimate)))
+                                det_c = tuple(best.get("center", (0, 0)))
+                                det_conf = float(best.get("confidence", 0.0))
+                            elif all_dets:
+                                det_c = tuple(all_dets[0].get("center", (0, 0)))
+                                det_conf = float(all_dets[0].get("confidence", 0.0))
+                        except Exception:
+                            pass
+                        try:
+                            vel = tuple(getattr(getattr(self, "_pipeline", None), "tracker", None).velocity) if getattr(getattr(self, "_pipeline", None), "tracker", None) is not None and getattr(getattr(self, "_pipeline", None).tracker, "initialized", False) else (0.0, 0.0)
+                        except Exception:
+                            vel = (0.0, 0.0)
+                        try:
+                            lat = float(getattr(getattr(self, "_pipeline", None).detector, "last_latency_ms", 0.0))
+                        except Exception:
+                            lat = 0.0
+                        self._frame_id = int(getattr(self, "_frame_id", 0)) + 1
+                        logger.log(
+                            self._frame_id, (gx, gy), vis, det_c, det_conf,
+                            estimate, vel, str(getattr(self, "_last_lock_state", "searching")),
+                            lat,
+                        )
+            except Exception:
+                pass
+        except Exception:
+            pass
+        if not hasattr(self, "_last_all_detections"):
+            self._last_all_detections = all_dets
+        if not hasattr(self, "_last_estimate"):
+            self._last_estimate = estimate
+        try:
+            self._render_viewport(fov_frame, self._last_estimate, self._last_all_detections)
+        except Exception:
+            pass
+        # Throttle heavy UI (minimap + stats + dashboard) to every 3rd tick (~10Hz).
+        # Viewport stays every tick (user watches FOV); control stays every tick (30Hz loop).
+        try:
+            self._tick_count = int(getattr(self, "_tick_count", 0)) + 1
+        except Exception:
+            self._tick_count = 1
+        do_slow_ui = (int(getattr(self, "_tick_count", 1)) % 3 == 0)
+        try:
+            if do_slow_ui:
+                self._render_minimap(scene_frame)
         except Exception:
             pass
         try:
-            self._render_minimap(scene_frame)
+            if do_slow_ui and hasattr(self, "_update_stats"):
+                self._update_stats(tracking_error_px)
         except Exception:
             pass
         try:
-            if hasattr(self, "dashboard_panel"):
+            if do_slow_ui and hasattr(self, "dashboard_panel"):
                 self.dashboard_panel.repaint()
                 if hasattr(self.dashboard_panel, "graph"):
                     self.dashboard_panel.graph.plot.repaint()
