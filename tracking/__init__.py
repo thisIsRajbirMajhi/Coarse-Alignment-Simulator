@@ -2,6 +2,7 @@
 """Perception and tracking stack. Control path never receives privileged ground truth."""
 
 from tracking.association import AssociationConfig, associate
+from tracking.kalman import KalmanConfig, KalmanTracker
 from tracking.detector import (
     BrightSpotDetector,
     Detection,
@@ -15,6 +16,8 @@ from tracking.detector import (
 __all__ = [
     "AssociationConfig",
     "associate",
+    "KalmanConfig",
+    "KalmanTracker",
     "Detection",
     "DetectorConfig",
     "YOLO26Detector",
