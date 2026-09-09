@@ -3,7 +3,8 @@
 
 SCENE_SIZE: tuple[int, int] = (2000, 2000)
 FOV_SIZE: tuple[int, int] = (640, 480)
-TICK_MS: int = 33
+# Keep margin below the 33.3 ms frame budget on timer platforms with jitter.
+TICK_MS: int = 30
 
 APP_STYLE: str = """
 /* ---------- Global ---------- */

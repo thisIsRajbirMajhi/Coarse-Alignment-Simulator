@@ -176,6 +176,7 @@ class SimulationMixin:
             from tracking.detector import DetectorConfig as _DC
             from tracking.pipeline import TrackingPipeline as _TP
             from tracking.metrics import MetricsLogger as _ML
+            from tracking.search import SearchPattern
 
             thresh = 80
             try:
@@ -192,11 +193,16 @@ class SimulationMixin:
             self._tracking_enabled = bool(getattr(self, "_tracking_enabled", True))
             self._metrics_logger = _ML(fov_size=(int(fov_w), int(fov_h)))
             self._frame_id = 0
+            self._search_pattern = SearchPattern(
+                pan_speed=400.0,
+                row_step=max(40.0, float(fov_h) * 0.75),
+            )
         except Exception:
             self._pipeline = None
             self._tracking_enabled = True
             self._metrics_logger = None
             self._frame_id = 0
+            self._search_pattern = None
         # Video-file source for Benchmark-2 (bypass PTZ, score file frames)
         self._source = str(getattr(self, "_source", "live"))
         self._video_cap = None

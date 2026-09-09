@@ -15,7 +15,7 @@
 # Tracking/Search removed: MainWindow no longer exposes .tracker; use _last_detection/_last_estimate instead.
 #   Legacy .tracker kept as dummy for compat but is None.
 
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtWidgets import QMainWindow, QStatusBar
 
 from camera.config import CameraConfig
@@ -137,6 +137,7 @@ class MainWindow(
             print(f"Button animation install failed: {e}")
 
         self.timer = QTimer(self)
+        self.timer.setTimerType(Qt.PreciseTimer)
         self.timer.timeout.connect(self._tick)
         self._running = False
         self._last_tick_time = None

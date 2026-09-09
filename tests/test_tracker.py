@@ -45,3 +45,18 @@ def test_env_without_beacon_tracker():
     assert obs["lock"] == 0
     obs2, reward, _, _, _ = env.step([0, 0])
     assert "image" in obs2
+
+
+def test_search_pattern_moves_and_reverses_pan():
+    from tracking.search import SearchPattern
+
+    search = SearchPattern(pan_speed=100.0, row_step=40.0)
+    positions = [(50.0, 50.0)]
+    for _ in range(20):
+        pan, tilt = search.step(positions[-1][0], positions[-1][1], (0.0, 100.0), (0.0, 100.0), 0.5)
+        positions.append((pan, tilt))
+
+    pans = [pan for pan, _ in positions]
+    assert max(pans) == 100.0
+    assert min(pans) == 0.0
+    assert any(a > b for a, b in zip(pans, pans[1:]))

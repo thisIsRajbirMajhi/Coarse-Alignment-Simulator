@@ -28,16 +28,7 @@ class StatsMixin:
         try:
             # Timing
             now = time.time()
-            self._stats_frames += 1
-            # Estimate processing time as time since last tick (approx)
-            if not hasattr(self, "_stats_last_tick"):
-                self._stats_last_tick = now
-                proc_ms = 5.0
-            else:
-                proc_ms = (now - self._stats_last_tick) * 1000.0
-                self._stats_last_tick = now
-            proc_ms = float(np.clip(proc_ms, 1.0, 80.0))
-            self._stats_proc.append(proc_ms)
+            # _tick records timing for every frame; this method only refreshes the UI.
 
             # Lock / retention tracking (open-loop: always searching, unless estimate exists)
             lock = getattr(self, "_last_lock_state", "searching")

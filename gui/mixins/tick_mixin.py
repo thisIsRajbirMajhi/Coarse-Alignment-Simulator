@@ -16,6 +16,15 @@ class TickMixin:
         frame_start=time.time()
         dt = TICK_MS/1000.0 if self._last_tick_time is None else float(np.clip(frame_start-self._last_tick_time,0.005,0.1))
         self._last_tick_time=frame_start
+        # Record every simulation frame; dashboard rendering is intentionally throttled.
+        try:
+            self._ensure_stats()
+            if getattr(self, "_stats_last_tick", None) is not None:
+                self._stats_proc.append((frame_start - self._stats_last_tick) * 1000.0)
+            self._stats_last_tick = frame_start
+            self._stats_frames += 1
+        except Exception:
+            pass
         sim_speed = 1.0
         self._sim_speed = float(sim_speed)
         dt_eff = float(np.clip(dt * sim_speed, 1e-4, 0.1))
@@ -275,13 +284,29 @@ class TickMixin:
                         self._last_lock_state = str(res.state)
                         self._last_all_detections = all_dets
                         self._last_estimate = estimate
-                        # State-gated PID already inside pipeline; apply motion for NEXT frame
-                        if abs(float(res.d_pan)) > 1e-9 or abs(float(res.d_tilt)) > 1e-9:
+                        # Search scans the valid camera range until acquisition;
+                        # PID motion remains state-gated inside the pipeline.
+                        move_pan = float(res.d_pan)
+                        move_tilt = float(res.d_tilt)
+                        if res.state in ("searching", "lost"):
+                            search = getattr(self, "_search_pattern", None)
+                            if search is not None:
+                                target_pan, target_tilt = search.step(
+                                    self.camera.pan,
+                                    self.camera.tilt,
+                                    self.camera.get_pan_range(),
+                                    self.camera.get_tilt_range(),
+                                    dt_eff,
+                                )
+                                move_pan = target_pan - float(self.camera.pan)
+                                move_tilt = target_tilt - float(self.camera.tilt)
+                        # Apply motion for the next frame.
+                        if abs(move_pan) > 1e-9 or abs(move_tilt) > 1e-9:
                             try:
-                                self.camera.move(float(res.d_pan), float(res.d_tilt), dt_eff)
+                                self.camera.move(move_pan, move_tilt, dt_eff)
                             except Exception:
                                 try:
-                                    self.camera.move(float(res.d_pan), float(res.d_tilt))
+                                    self.camera.move(move_pan, move_tilt)
                                 except Exception:
                                     pass
                     except Exception:
