@@ -156,6 +156,7 @@ class TrackingPipeline:
             last_velocity=last_vel, dt=dt, config=self.assoc_config,
             pred_cov=pred_cov, last_size=self._last_size,
             last_area=self._last_area, last_circ=self._last_circ,
+            boresight=(self.fov_w / 2.0, self.fov_h / 2.0),
         )
 
         # 3. Fuse into tracker with per-detection measurement noise

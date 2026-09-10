@@ -112,15 +112,21 @@ if _HAS_GYM:
                 err_x, err_y = 0.0, 0.0
             pan = float(obs_dict.get("pan", self.sim.camera.pan))
             tilt = float(obs_dict.get("tilt", self.sim.camera.tilt))
+            # Estimated velocity only — never GT. Pipeline tracker is the
+            # single source; privileged flag is rejected in closed loop.
             vx, vy = 0.0, 0.0
             try:
-                if bool(getattr(self.sim.controller_config, "use_privileged_velocity", False)):
-                    if hasattr(self.sim.target, "get_velocity"):
-                        v = self.sim.target.get_velocity()
-                        if v is not None:
-                            vx, vy = float(v[0]), float(v[1])
+                v = getattr(self.sim, "_last_pipeline_vel", (0.0, 0.0))
+                if v is not None:
+                    vx, vy = float(v[0]), float(v[1])
             except Exception:
                 vx, vy = 0.0, 0.0
+            try:
+                if bool(getattr(self.sim.controller_config, "use_privileged_velocity", False)):
+                    import warnings
+                    warnings.warn("use_privileged_velocity ignored: GT velocity blocked (using tracker estimate)", UserWarning)
+            except Exception:
+                pass
             vec = np.array([err_x, err_y, pan, tilt, float(vx), float(vy)], dtype=np.float32)
             lock_map = {"searching":0, "tracking":1, "locked":1, "acquired":1, "lost":0}
             lock = lock_map.get(str(obs_dict.get("lock_status","searching")).lower(), 0)
@@ -176,15 +182,21 @@ else:
                 err_x, err_y = 0.0, 0.0
             pan = float(obs_dict.get("pan", self.sim.camera.pan))
             tilt = float(obs_dict.get("tilt", self.sim.camera.tilt))
+            # Estimated velocity only — never GT. Pipeline tracker is the
+            # single source; privileged flag is rejected in closed loop.
             vx, vy = 0.0, 0.0
             try:
-                if bool(getattr(self.sim.controller_config, "use_privileged_velocity", False)):
-                    if hasattr(self.sim.target, "get_velocity"):
-                        v = self.sim.target.get_velocity()
-                        if v is not None:
-                            vx, vy = float(v[0]), float(v[1])
+                v = getattr(self.sim, "_last_pipeline_vel", (0.0, 0.0))
+                if v is not None:
+                    vx, vy = float(v[0]), float(v[1])
             except Exception:
                 vx, vy = 0.0, 0.0
+            try:
+                if bool(getattr(self.sim.controller_config, "use_privileged_velocity", False)):
+                    import warnings
+                    warnings.warn("use_privileged_velocity ignored: GT velocity blocked (using tracker estimate)", UserWarning)
+            except Exception:
+                pass
             vec = np.array([err_x, err_y, pan, tilt, float(vx), float(vy)], dtype=np.float32)
             lock_map = {"searching":0, "tracking":1, "locked":1, "acquired":1, "lost":0}
             lock = lock_map.get(str(obs_dict.get("lock_status","searching")).lower(), 0)

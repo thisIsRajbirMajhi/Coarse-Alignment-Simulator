@@ -277,11 +277,24 @@ class IMMTracker:
         self._update_turn_rate(dtc)
         return self.state
 
+    P_MAX = 5000.0
+
+    def _cap_cov(self) -> None:
+        try:
+            for j in range(3):
+                if float(np.trace(self._Ps[j])) > float(self.P_MAX):
+                    self._Ps[j] = self._Ps[j] * (float(self.P_MAX) / max(float(np.trace(self._Ps[j])), 1e-9))
+            if float(np.trace(self.P)) > float(self.P_MAX):
+                self.P = self.P * (float(self.P_MAX) / max(float(np.trace(self.P)), 1e-9))
+        except Exception:
+            pass
+
     def _combine(self) -> None:
         xc = sum(self.mu[j] * self._xs[j] for j in range(3))
         Pc = sum(self.mu[j] * (self._Ps[j] + np.outer(self._xs[j] - xc, self._xs[j] - xc)) for j in range(3))
         self.x = np.array(xc)
         self.P = np.array(Pc)
+        self._cap_cov()
 
     @staticmethod
     def _gauss_likelihood(res: np.ndarray, S: np.ndarray) -> float:
@@ -366,14 +379,22 @@ class IMMTracker:
             return self.update(float(measurement[0]), float(measurement[1]), dt)
 
     def peek_predict(self, dt: float | None = None):
+        # Mixture peek: sum mu_j * (F_j x_j) so turn + cruise both count.
         try:
             dtc = float(np.clip(float(dt if dt is not None else self.last_dt), 1e-4, 0.2))
-            F = self._F(dtc, int(np.argmax(self.mu)))
-            # use combined state with nominal Q for peek
-            Q = self._Q(dtc, self._qs[1])
-            xp = F @ self.x
-            Pp = F @ self.P @ F.T + Q
-            return ((float(xp[0]), float(xp[1])), np.array([[Pp[0, 0], Pp[0, 1]], [Pp[1, 0], Pp[1, 1]]]))
+            xps, pps = [], []
+            for j in range(3):
+                Fj = self._F(dtc, j)
+                Qj = self._Q(dtc, self._qs[j])
+                xj = Fj @ self._xs[j]
+                Pj = Fj @ self._Ps[j] @ Fj.T + Qj
+                xps.append(xj)
+                pps.append(Pj)
+            mu = np.asarray(self.mu, dtype=float)
+            mu = mu / max(float(np.sum(mu)), 1e-9)
+            xc = sum(float(mu[j]) * xps[j] for j in range(3))
+            Pc = sum(float(mu[j]) * (pps[j] + np.outer(xps[j] - xc, xps[j] - xc)) for j in range(3))
+            return ((float(xc[0]), float(xc[1])), np.array([[Pc[0, 0], Pc[0, 1]], [Pc[1, 0], Pc[1, 1]]]))
         except Exception:
             return (self.position, self.cov_xy)
 

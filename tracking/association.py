@@ -267,14 +267,13 @@ def associate(
     last_size: float | None = None,
     last_area: float | None = None,
     last_circ: float | None = None,
+    boresight: tuple[float, float] | None = None,
 ) -> Detection | None:
     """Select designated target. Returns None if no valid candidate.
 
     Never uses ground truth — only prediction, confidence, history, motion,
-    IoU (§17.2) and appearance (§17.3).
-    New optional args (backward compatible): pred_cov (2x2 tracker covariance
-    for Mahalanobis gating), last_size (mean target size), last_area /
-    last_circ (previous appearance for similarity).
+    IoU and appearance. boresight (fov center) fixes the no-prior tie-break
+    to prefer near-center over near-origin.
     """
     cfg = (config or AssociationConfig()).validate()
     if not detections:
@@ -292,23 +291,21 @@ def associate(
         return None
 
     if predicted is None and last_position is None:
-        return max(cands, key=lambda d: (d.confidence, -(d.center[0] ** 2 + d.center[1] ** 2)))
+        # No-prior tie-break: confidence first, then near-boresight (or origin).
+        try:
+            bx, by = (float(boresight[0]), float(boresight[1])) if boresight is not None else (0.0, 0.0)
+        except Exception:
+            bx, by = 0.0, 0.0
+        return max(cands, key=lambda d: (float(d.confidence), -((float(d.center[0]) - bx) ** 2 + (float(d.center[1]) - by) ** 2)))
 
-    # Single candidate: still gate it (fixes old bypass that accepted any
-    # distractor). Return None if hard-gated so state machine can coast.
+    # Single candidate: same gating as multi (no lenient bypass).
     if len(cands) == 1:
         d = cands[0]
         anchor1 = predicted if predicted is not None else last_position
         assert anchor1 is not None
-        score, gated, _ = _score_candidate(d, anchor1, last_position, last_velocity, last_size, dt, pred_cov, cfg, last_area, last_circ)
+        _, gated, _ = _score_candidate(d, anchor1, last_position, last_velocity, last_size, dt, pred_cov, cfg, last_area, last_circ)
         if gated:
-            # Robust reacq: accept only if within hard pixel gate
-            try:
-                dist = float(np.hypot(d.center[0] - anchor1[0], d.center[1] - anchor1[1]))
-            except Exception:
-                return None
-            if dist > float(cfg.gate_px) * 1.5:
-                return None
+            return None
         return d
 
     anchor = predicted if predicted is not None else last_position

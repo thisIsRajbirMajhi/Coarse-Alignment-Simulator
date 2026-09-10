@@ -112,6 +112,8 @@ class TickMixin:
                 self._platform_motion_state = {}
             if not hasattr(self, "_camera_drift_state") or self._camera_drift_state is None:
                 self._camera_drift_state = {}
+            if not hasattr(self, "_jitter_state") or self._jitter_state is None:
+                self._jitter_state = {}
             pan_a, tilt_a = dist.apply_platform_vibration(self.camera.pan, self.camera.tilt, int(getattr(dc, "vibration", 0)), dt=dt_eff, rng=_rng)
             if float(getattr(dc, "platform_speed", 0.0)) > 1e-9:
                 pan_b, tilt_b = dist.apply_platform_motion(
@@ -126,7 +128,7 @@ class TickMixin:
             else:
                 pan_b, tilt_b = pan_a, tilt_a
             if float(getattr(dc, "camera_jitter", 0.0)) > 1e-9:
-                pan_c, tilt_c = dist.apply_camera_jitter(pan_b, tilt_b, jitter_px=float(getattr(dc, "camera_jitter")), rng=_rng)
+                pan_c, tilt_c = dist.apply_camera_jitter_with_state(pan_b, tilt_b, float(getattr(dc, "camera_jitter")), state=getattr(self, "_jitter_state", None), dt=dt_eff, rng=_rng)
             else:
                 pan_c, tilt_c = pan_b, tilt_b
             pan_dist, tilt_dist = dist.apply_camera_motion_with_state(
@@ -134,7 +136,13 @@ class TickMixin:
             )
             # Apply disturbed pan/tilt to camera — respects all camera params and scene bounds
             try:
-                self.camera.set_position(float(pan_dist), float(tilt_dist))
+                try:
+                    self.camera.apply_disturbance(float(pan_dist), float(tilt_dist))
+                except AttributeError:
+                    try:
+                        self.camera.set_position(float(pan_dist), float(tilt_dist), clear_queue=False)
+                    except TypeError:
+                        self.camera.set_position(float(pan_dist), float(tilt_dist))
             except Exception:
                 self.camera.pan, self.camera.tilt = float(pan_dist), float(tilt_dist)
                 try: self.camera._clamp_to_range()
@@ -163,27 +171,37 @@ class TickMixin:
                 fov_frame = dist.apply_atmospheric_disturbance(
                     fov_frame, preset=preset, contrast_reduction=contrast, brightness_reduction=brightness, rng=_rng
                 )
-            if int(getattr(dc, "noise", 0)) > 0:
+            _sensor_on = int(getattr(dc, "noise", 0)) > 0
+            if _sensor_on:
                 fov_frame = dist.apply_sensor_noise(fov_frame, int(getattr(dc, "noise")), rng=_rng)
             if bool(getattr(dc, "enable_salt_pepper", False) or getattr(dc, "enable_gaussian", False) or getattr(dc, "enable_poisson", False)):
-                fov_frame = dist.apply_image_noise(
-                    fov_frame,
-                    enable_salt_pepper=bool(getattr(dc, "enable_salt_pepper", False)),
-                    enable_gaussian=bool(getattr(dc, "enable_gaussian", False)),
-                    enable_poisson=bool(getattr(dc, "enable_poisson", False)),
-                    salt_pepper_density=float(getattr(dc, "salt_pepper_density", 0.10)),
-                    salt_pepper_ratio=float(getattr(dc, "salt_pepper_ratio", 0.50)),
-                    gaussian_sigma=float(getattr(dc, "gaussian_sigma", 8.0)),
-                    gaussian_sigma_max=float(getattr(dc, "gaussian_sigma_max", 20.0)),
-                    poisson_scale=float(getattr(dc, "poisson_scale", 1.0)),
-                    poisson_peak=float(getattr(dc, "poisson_peak", 100.0)),
-                    rng=_rng,
-                )
+                _img_p = bool(getattr(dc, "enable_poisson", False)) and not _sensor_on
+                _img_g = bool(getattr(dc, "enable_gaussian", False)) and not _sensor_on
+                if bool(getattr(dc, "enable_salt_pepper", False)) or _img_g or _img_p:
+                    fov_frame = dist.apply_image_noise(
+                        fov_frame,
+                        enable_salt_pepper=bool(getattr(dc, "enable_salt_pepper", False)),
+                        enable_gaussian=_img_g,
+                        enable_poisson=_img_p,
+                        salt_pepper_density=float(getattr(dc, "salt_pepper_density", 0.10)),
+                        salt_pepper_ratio=float(getattr(dc, "salt_pepper_ratio", 0.50)),
+                        gaussian_sigma=float(getattr(dc, "gaussian_sigma", 8.0)),
+                        gaussian_sigma_max=float(getattr(dc, "gaussian_sigma_max", 20.0)),
+                        poisson_scale=float(getattr(dc, "poisson_scale", 1.0)),
+                        poisson_peak=float(getattr(dc, "poisson_peak", 100.0)),
+                        rng=_rng,
+                    )
         else:
             pan_vib, tilt_vib = dist.apply_platform_vibration(self.camera.pan, self.camera.tilt, self.sliders["Vibration"].value(), dt=dt_eff, rng=_rng)
             pan_dist, tilt_dist = dist.apply_camera_motion_with_state(pan_vib, tilt_vib, self.sliders["Camera Motion"].value(), self._camera_drift_state, dt=dt_eff, rng=_rng)
             try:
-                self.camera.set_position(float(pan_dist), float(tilt_dist))
+                try:
+                    self.camera.apply_disturbance(float(pan_dist), float(tilt_dist))
+                except AttributeError:
+                    try:
+                        self.camera.set_position(float(pan_dist), float(tilt_dist), clear_queue=False)
+                    except TypeError:
+                        self.camera.set_position(float(pan_dist), float(tilt_dist))
             except Exception:
                 self.camera.pan, self.camera.tilt = float(pan_dist), float(tilt_dist)
                 try: self.camera._clamp_to_range()
@@ -232,7 +250,7 @@ class TickMixin:
                     except Exception:
                         pass
                     fov_frame = vframe
-                # Run pipeline without moving camera (PTZ bypassed)
+                # Run pipeline without moving camera (PTZ bypassed for video files)
                 pipe = getattr(self, "_pipeline", None)
                 if pipe is not None and fov_frame is not None:
                     try:
@@ -241,6 +259,10 @@ class TickMixin:
                         estimate = res.estimate
                         tracking_error_px = res.error_px
                         self._last_lock_state = str(res.state)
+                        try:
+                            self._last_lock_quality = float(getattr(res, "lock_quality", 0.0) or 0.0)
+                        except Exception:
+                            pass
                     except Exception:
                         pass
                 self._last_all_detections = all_dets
@@ -277,29 +299,30 @@ class TickMixin:
                                 pipe.controller.apply_config(pipe.controller_config)
                         except Exception:
                             pass
-                        res = pipe.update(fov_frame, dt_eff)
+                        try:
+                            pan_rng = self.camera.get_pan_range()
+                            tilt_rng = self.camera.get_tilt_range()
+                        except Exception:
+                            pan_rng, tilt_rng = None, None
+                        res = pipe.update(
+                            fov_frame, dt_eff,
+                            current_pan_tilt=(float(self.camera.pan), float(self.camera.tilt)),
+                            pan_range=pan_rng, tilt_range=tilt_rng,
+                        )
                         all_dets = [d.to_dict() for d in res.all_detections]
                         estimate = res.estimate
                         tracking_error_px = res.error_px
                         self._last_lock_state = str(res.state)
                         self._last_all_detections = all_dets
                         self._last_estimate = estimate
-                        # Search scans the valid camera range until acquisition;
-                        # PID motion remains state-gated inside the pipeline.
+                        try:
+                            self._last_lock_quality = float(getattr(res, "lock_quality", 0.0) or 0.0)
+                        except Exception:
+                            pass
+                        # Single source: pipeline owns PID + focus-aware search.
+                        # Legacy GUI-side _search_pattern bypass removed.
                         move_pan = float(res.d_pan)
                         move_tilt = float(res.d_tilt)
-                        if res.state in ("searching", "lost"):
-                            search = getattr(self, "_search_pattern", None)
-                            if search is not None:
-                                target_pan, target_tilt = search.step(
-                                    self.camera.pan,
-                                    self.camera.tilt,
-                                    self.camera.get_pan_range(),
-                                    self.camera.get_tilt_range(),
-                                    dt_eff,
-                                )
-                                move_pan = target_pan - float(self.camera.pan)
-                                move_tilt = target_tilt - float(self.camera.tilt)
                         # Apply motion for the next frame.
                         if abs(move_pan) > 1e-9 or abs(move_tilt) > 1e-9:
                             try:

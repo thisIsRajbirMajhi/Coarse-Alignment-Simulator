@@ -43,6 +43,7 @@ class PIDController:
         self._prev_deriv_y: float = 0.0
         self._last_compute_time: float | None = None
         self._last_output: tuple[float, float] = (0.0, 0.0)
+        self._last_saturated: bool = False
 
     def apply_config(self, config: ControllerConfig) -> None:
         self.config = config.validate()
@@ -90,17 +91,21 @@ class PIDController:
             pass
 
     def schedule_by_lock(self, lock_quality: float | None, speed_px_s: float | None = None) -> float:
-        """Gain schedule: gentle when uncertain, aggressive when locked+fast.
+        """Single gain schedule (merged; output scaling removed from compute).
 
+        Previously gain-schedule (0.6-1.2x) multiplied by output scale
+        (0.5-1.0x) = 0.3x authority when uncertain. Now only this schedule
+        applies: 0.8-1.1x, capped at 0.8 when q<0.3. compute_correction()
+        no longer re-scales output, so authority stays predictable.
         Returns applied scale. Never raises.
         """
         try:
             q = 1.0 if lock_quality is None else float(np.clip(lock_quality, 0.0, 1.0))
-            scale = 0.6 + 0.6 * q  # 0.6 .. 1.2
+            scale = 0.8 + 0.3 * q  # 0.8 .. 1.1
             if speed_px_s is not None and float(speed_px_s) > 120.0:
-                scale = min(1.5, scale + 0.15)  # extra authority for fast targets
+                scale = min(1.25, scale + 0.1)
             if q < 0.3:
-                scale = min(scale, 0.7)  # avoid chasing noisy estimates
+                scale = min(scale, 0.8)
             self.set_gain_scale(scale)
             return float(scale)
         except Exception:
@@ -184,12 +189,23 @@ class PIDController:
         p_x = kp_eff * float(error_x) * w
         p_y = kp_eff * float(error_y) * w
 
+        # Pre-compute D + FF estimates for full-output anti-windup check.
+        # (Old code checked I+P only, so D+FF could still saturate.)
+        ff_gain_pre = float(getattr(self.config, "feedforward_gain", 0.0))
+        ff_pre_x, ff_pre_y = 0.0, 0.0
+        if ff_gain_pre > 1e-9 and target_velocity is not None:
+            try:
+                ff_pre_x = ff_gain_pre * float(target_velocity[0]) * float(dt)
+                ff_pre_y = ff_gain_pre * float(target_velocity[1]) * float(dt)
+            except Exception:
+                pass
+        d_pre_x = float(self._prev_deriv_x) * float(self.config.kd) if self.config.controller_type == "PID" else 0.0
+        d_pre_y = float(self._prev_deriv_y) * float(self.config.kd) if self.config.controller_type == "PID" else 0.0
+
         # Integral with conditional anti-windup (only integrate when not saturated)
         i_x = self._integral_x
         i_y = self._integral_y
         if self.config.controller_type in ("PI", "PID") and float(self.config.ki) > 1e-9:
-            # Conditional integration: don't accumulate if output would saturate same direction
-            # Compute provisional clamp
             clamp = float(self.config.output_clamp)
             if camera_max_slew is not None:
                 try:
@@ -197,9 +213,9 @@ class PIDController:
                     clamp = min(clamp, cam_clamp_i)
                 except Exception:
                     pass
-            # Check if adding would push same direction as saturation
-            would_sat_x = (i_x > 0 and error_x > 0 and abs(i_x + p_x) >= clamp) or (i_x < 0 and error_x < 0 and abs(i_x + p_x) >= clamp)
-            would_sat_y = (i_y > 0 and error_y > 0 and abs(i_y + p_y) >= clamp) or (i_y < 0 and error_y < 0 and abs(i_y + p_y) >= clamp)
+            # Full-output check: P + I_proposed + D + FF vs clamp.
+            would_sat_x = (i_x > 0 and error_x > 0 and abs(i_x + p_x + d_pre_x + ff_pre_x) >= clamp) or (i_x < 0 and error_x < 0 and abs(i_x + p_x + d_pre_x + ff_pre_x) >= clamp)
+            would_sat_y = (i_y > 0 and error_y > 0 and abs(i_y + p_y + d_pre_y + ff_pre_y) >= clamp) or (i_y < 0 and error_y < 0 and abs(i_y + p_y + d_pre_y + ff_pre_y) >= clamp)
             if not would_sat_x:
                 i_x += float(self.config.ki) * float(error_x) * float(dt)
             if not would_sat_y:
@@ -265,15 +281,13 @@ class PIDController:
                 clamp = min(float(clamp), float(cam_clamp))
             except Exception:
                 pass
-        # Lock-aware output scaling: don't chase uncertain estimates
-        if lock_quality is not None:
-            try:
-                q = float(np.clip(float(lock_quality), 0.0, 1.0))
-                scale = 0.5 + 0.5 * q  # 0.5 .. 1.0
-                u_x *= scale
-                u_y *= scale
-            except Exception:
-                pass
+        # NOTE: lock-aware gain lives in schedule_by_lock() only (single
+        # scaling). No second output re-scale here; lock_quality accepted
+        # for API compat and saturation logging.
+        try:
+            self._last_saturated = bool(abs(u_x) >= clamp or abs(u_y) >= clamp)
+        except Exception:
+            self._last_saturated = False
         u_x = float(np.clip(u_x, -clamp, clamp))
         u_y = float(np.clip(u_y, -clamp, clamp))
         self._last_output = (float(u_x), float(u_y))

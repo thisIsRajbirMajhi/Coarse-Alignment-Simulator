@@ -55,6 +55,20 @@ def get_rng(rng: np.random.Generator | None = None, seed: int | None = None) -> 
     return get_global_rng()
 
 
+def substream(parent_seed: int, *labels: str) -> np.random.Generator:
+    """Independent substream via SeedSequence.spawn (no cross-talk).
+
+    Adding a new subsystem with its own label never shifts draws of others,
+    unlike sharing one Generator sequentially.
+    """
+    try:
+        seq = np.random.SeedSequence(int(parent_seed), spawn_key=tuple(int(abs(hash(str(l))) % (2**32)) for l in labels) if labels else ())
+        child = seq.spawn(1)[0]
+        return np.random.default_rng(child)
+    except Exception:
+        return np.random.default_rng(int(parent_seed))
+
+
 def resolve_rng(rng: np.random.Generator | None = None) -> np.random.Generator:
     """Shorthand for get_rng(rng) — fallback to global."""
     if isinstance(rng, np.random.Generator):

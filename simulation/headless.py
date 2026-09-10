@@ -299,13 +299,21 @@ class HeadlessSimulation:
         else:
             pan_b, tilt_b = pan_a, tilt_a
         if float(getattr(dc, "camera_jitter", 0.0)) > 1e-9:
-            pan_c, tilt_c = dist.apply_camera_jitter(pan_b, tilt_b, jitter_px=float(getattr(dc, "camera_jitter")), rng=self.rng)
+            if not hasattr(self, "_jitter_state") or not isinstance(getattr(self, "_jitter_state", None), dict):
+                self._jitter_state = {}
+            pan_c, tilt_c = dist.apply_camera_jitter_with_state(pan_b, tilt_b, jitter_px=float(getattr(dc, "camera_jitter")), state=self._jitter_state, dt=dt_eff, rng=self.rng)
         else:
             pan_c, tilt_c = pan_b, tilt_b
         pan_dist, tilt_dist = dist.apply_camera_motion_with_state(pan_c, tilt_c, int(getattr(dc, "camera_motion", 0)), self._camera_drift_state, dt=dt_eff, rng=self.rng)
 
-        # Apply disturbed position to camera — respects all camera params and scene bounds
+        # Apply disturbed position — preserve servo latency queue (no wipe).
         try:
+            try:
+                self.camera.apply_disturbance(float(pan_dist), float(tilt_dist))
+            except AttributeError:
+                self.camera.set_position(float(pan_dist), float(tilt_dist), clear_queue=False)
+        except TypeError:
+            # Old camera without clear_queue flag
             self.camera.set_position(float(pan_dist), float(tilt_dist))
         except Exception:
             self.camera.pan, self.camera.tilt = float(pan_dist), float(tilt_dist)
@@ -328,28 +336,11 @@ class HeadlessSimulation:
             fov_frame = self.camera.capture(scene_frame)
             fov_capture_x0, fov_capture_y0 = None, None
 
-        fov_frame = dist.apply_turbulence(fov_frame, int(getattr(dc, "turbulence", 0)), dt=dt_eff, rng=self.rng)
-        preset = str(getattr(dc, "atmospheric_preset", "Clear"))
-        contrast = float(getattr(dc, "atmospheric_contrast", 0.0))
-        brightness = float(getattr(dc, "atmospheric_brightness", 0.0))
-        if preset != "Clear" or contrast > 1e-9 or brightness > 1e-9:
-            fov_frame = dist.apply_atmospheric_disturbance(fov_frame, preset=preset, contrast_reduction=contrast, brightness_reduction=brightness, rng=self.rng)
-        if int(getattr(dc, "noise", 0)) > 0:
-            fov_frame = dist.apply_sensor_noise(fov_frame, int(getattr(dc, "noise")), rng=self.rng)
-        if bool(getattr(dc, "enable_salt_pepper", False) or getattr(dc, "enable_gaussian", False) or getattr(dc, "enable_poisson", False)):
-            fov_frame = dist.apply_image_noise(
-                fov_frame,
-                enable_salt_pepper=bool(getattr(dc, "enable_salt_pepper", False)),
-                enable_gaussian=bool(getattr(dc, "enable_gaussian", False)),
-                enable_poisson=bool(getattr(dc, "enable_poisson", False)),
-                salt_pepper_density=float(getattr(dc, "salt_pepper_density", 0.10)),
-                salt_pepper_ratio=float(getattr(dc, "salt_pepper_ratio", 0.50)),
-                gaussian_sigma=float(getattr(dc, "gaussian_sigma", 8.0)),
-                gaussian_sigma_max=float(getattr(dc, "gaussian_sigma_max", 20.0)),
-                poisson_scale=float(getattr(dc, "poisson_scale", 1.0)),
-                poisson_peak=float(getattr(dc, "poisson_peak", 100.0)),
-                rng=self.rng,
-            )
+        try:
+            from simulation.fov_pipeline import apply_post_noise as _post
+            fov_frame = _post(fov_frame, dc, dt_eff, self.rng)
+        except Exception:
+            fov_frame = dist.apply_turbulence(fov_frame, int(getattr(dc, "turbulence", 0)), dt=dt_eff, rng=self.rng)
 
         # Perception-estimation-control (closed loop) or legacy open loop.
         # Open loop (default, keeps old tests green): no detection, direct action only.
@@ -371,7 +362,16 @@ class HeadlessSimulation:
         pipeline_result = None
         if bool(getattr(self, "_closed_loop", False)) and getattr(self, "_pipeline", None) is not None:
             try:
-                pipeline_result = self._pipeline.update(fov_frame, dt_eff)
+                try:
+                    pan_rng = self.camera.get_pan_range()
+                    tilt_rng = self.camera.get_tilt_range()
+                except Exception:
+                    pan_rng, tilt_rng = None, None
+                pipeline_result = self._pipeline.update(
+                    fov_frame, dt_eff,
+                    current_pan_tilt=(float(self.camera.pan), float(self.camera.tilt)),
+                    pan_range=pan_rng, tilt_range=tilt_rng,
+                )
             except Exception:
                 pipeline_result = None
         if pipeline_result is not None:

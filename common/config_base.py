@@ -53,18 +53,32 @@ class BaseValidatedConfig:
     DEFAULTS: ClassVar[dict[str, Any]] = {}
 
     def validate(self) -> "BaseValidatedConfig":  # type: ignore[override]
-        # Resolve LIMITS: prefer instance/class LIMITS, else empty
+        # Resolve LIMITS: prefer instance/class LIMITS, else empty.
+        # Clipped fields are recorded in last_warnings (no longer silent).
         limits = getattr(self.__class__, "LIMITS", {}) or getattr(self, "LIMITS", {})
-        # Also allow module-level LIMITS via subclass override that imports
-        # If subclass defines validate() that passes explicit limits, this is bypassed
+        warns: list[str] = []
         if limits:
             for fname, (lo, hi) in limits.items():
                 if hasattr(self, fname):
                     try:
                         val = getattr(self, fname)
-                        setattr(self, fname, clip_field(val, lo, hi))
+                        clipped = clip_field(val, lo, hi)
+                        try:
+                            changed = float(clipped) != float(val)
+                        except Exception:
+                            changed = str(clipped) != str(val)
+                        if changed:
+                            warns.append(f"{fname} clipped {val!r} -> {clipped!r} [{lo},{hi}]")
+                        setattr(self, fname, clipped)
                     except Exception:
                         pass
+        try:
+            object.__setattr__(self, "last_warnings", warns)
+        except Exception:
+            try:
+                self.last_warnings = warns  # type: ignore
+            except Exception:
+                pass
         return self  # type: ignore
 
     def to_dict(self) -> dict:

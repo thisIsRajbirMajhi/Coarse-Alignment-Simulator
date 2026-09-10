@@ -319,6 +319,8 @@ def build_dataset(
     resume: bool = True,
     overwrite: bool = False,
     validate: bool = True,
+    allow_background: bool = False,
+    background_ratio: float = 0.05,
 ) -> dict:
     if split not in {"train", "val", "test"}:
         raise ValueError("split must be train, val, or test")
@@ -386,12 +388,15 @@ def build_dataset(
                 frame, labels, meta = result
                 stats["retries"] += int(meta.get("attempt", 0))
 
-                # Training/validation/test are intended to contain visible targets.
-                # A background image is allowed only if explicitly requested via --allow-background.
+                # Backgrounds kept only when explicitly allowed (else retry).
                 if not labels:
-                    if attempt < 2:
+                    want_bg = bool(allow_background) and (float(rng.random()) < float(background_ratio))
+                    if want_bg:
+                        pass  # keep empty label as background sample
+                    elif attempt < 2:
                         continue
-                    raise RuntimeError("no visible beacon after retries")
+                    else:
+                        raise RuntimeError("no visible beacon after retries")
 
                 img_path = image_dir / f"{split}_{idx:06d}.jpg"
                 lbl_path = label_dir / f"{split}_{idx:06d}.txt"
@@ -411,13 +416,17 @@ def build_dataset(
                 )
 
                 ok, reason, box_count = _pair_state(img_path, lbl_path, FOV)
-                if not ok or box_count <= 0:
+                is_bg = len(labels) == 0
+                if not ok or (box_count <= 0 and not (is_bg and allow_background)):
                     img_path.unlink(missing_ok=True)
                     lbl_path.unlink(missing_ok=True)
                     raise RuntimeError(f"post-write validation failed: {reason}")
 
                 stats["saved_new"] += 1
-                stats["labeled_new"] += 1
+                if is_bg:
+                    stats["background_new"] += 1
+                else:
+                    stats["labeled_new"] += 1
                 stats["counts_by_difficulty"][actual_diff] += 1
                 stats["shapes"][str(beacon_cfg.shape)] += 1
                 stats["motions"][str(beacon_cfg.profile)] += 1
@@ -465,6 +474,10 @@ def main():
     parser.add_argument("--train", type=int, default=80000)
     parser.add_argument("--val", type=int, default=10000)
     parser.add_argument("--test", type=int, default=10000)
+    parser.add_argument("--allow-background", action="store_true", default=False,
+                        help="keep background (no visible beacon) images instead of retrying")
+    parser.add_argument("--background-ratio", type=float, default=0.05,
+                        help="target fraction of background images when --allow-background is set")
     args = parser.parse_args()
 
     global _interrupted
@@ -473,13 +486,13 @@ def main():
     root = Path(args.output)
     if args.full:
         # Independent seeds reduce accidental correlation between splits.
-        build_dataset(args.train, str(root), "train", args.difficulty, args.seed, True, args.overwrite, args.validate)
-        build_dataset(args.val, str(root), "val", args.difficulty, args.seed + 100_000, True, args.overwrite, args.validate)
-        build_dataset(args.test, str(root), "test", args.difficulty, args.seed + 200_000, True, args.overwrite, args.validate)
+        build_dataset(args.train, str(root), "train", args.difficulty, args.seed, True, args.overwrite, args.validate, args.allow_background, args.background_ratio)
+        build_dataset(args.val, str(root), "val", args.difficulty, args.seed + 100_000, True, args.overwrite, args.validate, args.allow_background, args.background_ratio)
+        build_dataset(args.test, str(root), "test", args.difficulty, args.seed + 200_000, True, args.overwrite, args.validate, args.allow_background, args.background_ratio)
     else:
         if args.split is None or args.num is None:
             parser.error("either use --full or provide both --split and --num")
-        build_dataset(args.num, str(root), args.split, args.difficulty, args.seed, args.resume, args.overwrite, args.validate)
+        build_dataset(args.num, str(root), args.split, args.difficulty, args.seed, args.resume, args.overwrite, args.validate, args.allow_background, args.background_ratio)
 
 
 if __name__ == "__main__":

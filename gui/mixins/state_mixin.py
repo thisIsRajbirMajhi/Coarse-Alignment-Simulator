@@ -318,8 +318,27 @@ class StateMixin:
         if old is not None:
             try: old.stop()
             except Exception: pass
+            try: old.deleteLater()
+            except Exception: pass
         t = QTimer(self)
         t.setSingleShot(True)
-        t.timeout.connect(lambda: func())
+        try:
+            t.timeout.connect(lambda: func())
+        except Exception:
+            pass
+        def _cleanup():
+            try:
+                t.deleteLater()
+            except Exception:
+                pass
+            try:
+                if self._auto_timers.get(section) is t:
+                    del self._auto_timers[section]
+            except Exception:
+                pass
+        try:
+            t.timeout.connect(_cleanup)
+        except Exception:
+            pass
         self._auto_timers[section] = t
         t.start(delay)

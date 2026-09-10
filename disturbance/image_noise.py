@@ -23,10 +23,14 @@ def clear_hot_pixel_cache() -> None:
     _HOT_PIXEL_CACHE.clear()
 
 
-def _get_persistent_hot_pixels(h: int, w: int, density: float, salt_vs_pepper: float, rng: np.random.Generator | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Get or create persistent hot pixel map for given frame size."""
-    _rng = get_rng(rng)
-    key = (h, w)
+def _get_persistent_hot_pixels(h: int, w: int, density: float, salt_vs_pepper: float, rng: np.random.Generator | None = None, seed: int | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Get or create persistent hot pixel map (keyed by size+density+seed)."""
+    _rng = get_rng(rng, seed)
+    try:
+        seed_tok = int(seed) if seed is not None else int(getattr(getattr(_rng, "bit_generator", None), "_seed_seq", None).entropy) if getattr(getattr(_rng, "bit_generator", None), "_seed_seq", None) is not None and getattr(getattr(_rng, "bit_generator", None)._seed_seq, "entropy", None) is not None else -1
+    except Exception:
+        seed_tok = -1
+    key = (h, w, round(float(density), 5), round(float(salt_vs_pepper), 3), seed_tok)
     if key not in _HOT_PIXEL_CACHE:
         # Use 0.8 * density as persistent pool (slightly fewer than transient total)
         persist_density = float(density) * _HOT_PIXEL_PERSISTENT_RATIO * 0.5

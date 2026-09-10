@@ -101,6 +101,17 @@ class KalmanTracker:
             dtype=float,
         )
 
+    # Shared coast cap so uncertainty_radius (and search radius) cannot explode.
+    P_MAX = 5000.0
+
+    def _cap_cov(self) -> None:
+        try:
+            if float(np.trace(self.P)) > float(self.P_MAX):
+                self.P = self.P * (float(self.P_MAX) / max(float(np.trace(self.P)), 1e-9))
+                self.P = np.clip(self.P, -1e4, 1e4)
+        except Exception:
+            pass
+
     def predict(self, dt: float | None = None) -> tuple[float, float, float, float]:
         dt = float(np.clip(float(dt if dt is not None else self.last_dt), 1e-4, 0.2))
         self.last_dt = dt
@@ -108,6 +119,7 @@ class KalmanTracker:
         Q = self._process_noise(dt)
         self.x = F @ self.x
         self.P = F @ self.P @ F.T + Q
+        self._cap_cov()
         return self.state
 
     def peek_predict(self, dt: float | None = None) -> tuple[tuple[float, float], np.ndarray]:

@@ -104,6 +104,10 @@ class PTZCamera:
         self._last_dir_y: int = 0
         self._backlash_pending_x: float = 0.0
         self._backlash_pending_y: float = 0.0
+        # Encoder readout bias (OU, zero-mean) — true pan/tilt stay in
+        # self.pan/self.tilt; noise only affects readout, never accumulates.
+        self._enc_bias_x: float = 0.0
+        self._enc_bias_y: float = 0.0
 
         # Keep FOV in sync with config
         self._sync_fov_from_config()
@@ -246,20 +250,16 @@ class PTZCamera:
         self.pan += float(d_pan)
         self.tilt += float(d_tilt)
         self._clamp_to_range()
-        # Encoder noise — small readout error (deterministic via self._rng)
+        # Encoder bias — OU decay so readout stays zero-mean (no random walk).
+        # True pan/tilt untouched; use readout_pan/tilt for noisy telemetry.
         try:
             sigma_enc = float(getattr(self.config, "encoder_sigma_px", 0.04))
-            if sigma_enc > 1e-9 and (abs(d_pan) > 1e-6 or abs(d_tilt) > 1e-6):
-                # Only when moving, add tiny measurement noise to pan/tilt reading (not command)
-                # Store true pan but report noisy via property? Keep simple: add to pan/tilt with small sigma
-                # To keep deterministic for tests with sigma 0.04, use truncated Gaussian ±3σ
+            if sigma_enc > 1e-9:
+                # OU bias: decay 0.9 then inject — zero-mean, no random walk.
                 npx = float(np.clip(self._rng.normal(0, sigma_enc), -sigma_enc*3, sigma_enc*3))
                 npy = float(np.clip(self._rng.normal(0, sigma_enc), -sigma_enc*3, sigma_enc*3))
-                # Apply as measurement bias, not cumulative drift — add then clamp
-                # We model as small random walk bias 0.3×sigma
-                self.pan += npx * 0.3
-                self.tilt += npy * 0.3
-                self._clamp_to_range()
+                self._enc_bias_x = float(0.9 * self._enc_bias_x + 0.3 * npx)
+                self._enc_bias_y = float(0.9 * self._enc_bias_y + 0.3 * npy)
         except Exception:
             pass
 
@@ -325,13 +325,37 @@ class PTZCamera:
                 _, d_pan, d_tilt = item
                 self._apply_delta(d_pan, d_tilt, 0.033)
 
-    def set_position(self, pan: float, tilt: float) -> None:
-        """Set absolute pan/tilt, clamped to effective range (bypasses queue)."""
-        # Clear pending to avoid jump after set
-        self._pending.clear()
+    @property
+    def readout_pan(self) -> float:
+        """Noisy telemetry readout (true pan + zero-mean bias)."""
+        try:
+            return float(self.pan + self._enc_bias_x)
+        except Exception:
+            return float(self.pan)
+
+    @property
+    def readout_tilt(self) -> float:
+        try:
+            return float(self.tilt + self._enc_bias_y)
+        except Exception:
+            return float(self.tilt)
+
+    def set_position(self, pan: float, tilt: float, clear_queue: bool = True) -> None:
+        """Set absolute pan/tilt, clamped to effective range.
+
+        clear_queue=True (default, reset/teleport) drops pending servo moves.
+        Disturbance path must pass clear_queue=False so control latency
+        queue survives the per-tick disturbed teleport.
+        """
+        if clear_queue:
+            self._pending.clear()
         self.pan = float(pan)
         self.tilt = float(tilt)
         self._clamp_to_range()
+
+    def apply_disturbance(self, pan: float, tilt: float) -> None:
+        """Teleport for shake/platform offset — preserves servo queue."""
+        self.set_position(pan, tilt, clear_queue=False)
 
     def go_home(self) -> None:
         """Move to home/centre (configured or scene centre)."""

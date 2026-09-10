@@ -235,8 +235,13 @@ class MetricsLogger:
             else:
                 cur_track = 0
             prev = r.state
+        # Count TRACK->LOST transitions (not LOST-entry repeats) so
+        # reacq_success_rate denominator matches actual losses.
         n_losses = sum(1 for i, r in enumerate(self.records)
-                       if r.state == "lost" and (i == 0 or self.records[i - 1].state != "lost"))
+                       if r.state == "lost" and i > 0 and self.records[i - 1].state == "tracking")
+        if n_losses == 0:
+            n_losses = sum(1 for i, r in enumerate(self.records)
+                           if r.state == "lost" and (i == 0 or self.records[i - 1].state != "lost"))
         reacq_rate = (n_reacq_events / n_losses) if n_losses else None
         lq_arr = np.array([r.lock_quality for r in self.records if r.lock_quality is not None], dtype=float)
         # Normalized perception (NEES-like): err^2 / pos_var when available
@@ -269,6 +274,8 @@ class MetricsLogger:
                 "p95": round(float(np.percentile(lat, 95)), 2) if lat.size else None,
             },
             "accept_pointing_le_10px": bool(pt.size and float(np.mean(pt[-20:])) <= 10.0) if pt.size >= 20 else None,
+            "accept_pointing_p95_le_15px": bool(pt.size and float(np.percentile(pt[-100:] if pt.size >= 100 else pt, 95)) <= 15.0) if pt.size >= 20 else None,
+            "accept_pointing_max_le_25px": bool(pt.size and float(np.max(pt[-100:] if pt.size >= 100 else pt)) <= 25.0) if pt.size >= 20 else None,
             "detection_recall_vis": round(float(detection_recall), 4) if detection_recall is not None else None,
             "association_accuracy": round(float(assoc_acc), 4) if assoc_acc is not None else None,
             "association_decisions": int(n_assoc_total),
