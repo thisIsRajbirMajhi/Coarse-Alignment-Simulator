@@ -224,6 +224,9 @@ class DashboardPanel(QWidget):
             ("Target Loss (%)", "target_loss_pct", "Loss", "Sr.18 target loss =100-retention — spec <5%", True, "target_loss_pct"),
             ("State — Acquired (%)", "state_acquired_pct", "Acquired", "Frames in ACQUIRED (deprecated — always 0)", True, "state_acquired_pct"),
             ("State — Lost (%)", "state_lost_pct", "Lost", "Frames in LOST (deprecated — always 0)", True, "state_lost_pct"),
+            ("Designated Target (#)", "designated_target_id", "Target", "Mission beacon index from Beacons panel — identity to hold", False, None),
+            ("Locked Track (internal #)", "locked_track_id", "Track", "Internal hypothesis track holding the lock — should stay stable", False, None),
+            ("ID Switches (count)", "id_switches", "Switches", "Designated-track identity changes — 0 ideal, lower is better", False, None),
         ])
         self._make_section(metrics_layout, "D. Tracking and Centroiding", [
             ("Average Error (px / mrad)", "avg_tracking_error_px", "Avg Err", "Sr.17 avg tracking error — spec <=10px", True, "avg_tracking_error_px"),
@@ -464,6 +467,22 @@ class DashboardPanel(QWidget):
                     set_val(k, f"{fval:.1f} %", col)
                 except Exception:
                     set_val(k, "0.0 %")
+            try:
+                des = summary.get("designated_target_id")
+                set_val("designated_target_id", f"#{int(des)}" if des is not None else "—", "#0f172a")
+            except Exception:
+                set_val("designated_target_id", "—")
+            try:
+                lt = summary.get("locked_track_id")
+                set_val("locked_track_id", f"#{int(lt)}" if lt is not None else "—", "#0f172a")
+            except Exception:
+                set_val("locked_track_id", "—")
+            try:
+                sw = summary.get("id_switches")
+                nsw = int(sw) if sw is not None else 0
+                set_val("id_switches", f"{nsw}", "#22c55e" if nsw == 0 else ("#eab308" if nsw <= 2 else "#ef4444"))
+            except Exception:
+                set_val("id_switches", "0")
         except Exception:
             pass
 

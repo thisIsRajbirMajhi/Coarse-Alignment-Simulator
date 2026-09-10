@@ -127,20 +127,38 @@ class HeadlessSimulation:
         self._last_tick_time: float | None = None
 
     def enable_closed_loop(self, detector_config=None, assoc_config=None, kalman_config=None,
-                           state_config=None, controller_config=None, model_path: str | None = None):
+                           state_config=None, controller_config=None, model_path: str | None = None,
+                           designated_target_id: int | None = None):
         """Opt-in closed-loop tracking. Control uses image estimates only (no GT)."""
         from tracking.pipeline import TrackingPipeline
 
         fov = getattr(self, "_fov_size", (640, 480))
         ctrl_cfg = controller_config or getattr(self, "controller_config", None)
+        if designated_target_id is None:
+            try:
+                designated_target_id = int(getattr(self, "_target_beacon_id", 0))
+            except Exception:
+                designated_target_id = None
         self._pipeline = TrackingPipeline(
             detector_config=detector_config, assoc_config=assoc_config,
             kalman_config=kalman_config, state_config=state_config,
             controller_config=ctrl_cfg, fov_size=(int(fov[0]), int(fov[1])),
-            model_path=model_path,
+            model_path=model_path, designated_target_id=designated_target_id,
         )
         self._closed_loop = True
         return self._pipeline
+
+    def set_designated_target(self, idx: int | None) -> None:
+        """Retarget mission beacon (operator intent, not GT position)."""
+        try:
+            self._target_beacon_id = int(idx) if idx is not None else self._target_beacon_id
+        except Exception:
+            pass
+        try:
+            if getattr(self, "_pipeline", None) is not None:
+                self._pipeline.set_designated_target(idx)
+        except Exception:
+            pass
 
     def disable_closed_loop(self) -> None:
         self._closed_loop = False
@@ -437,11 +455,22 @@ class HeadlessSimulation:
         except Exception:
             obs["viewport"] = fov_frame
 
+        try:
+            _locked = getattr(pipeline_result, "locked_track_id", None) if pipeline_result is not None else None
+            _des = getattr(pipeline_result, "designated_target_id", getattr(self, "_target_beacon_id", 0)) if pipeline_result is not None else getattr(self, "_target_beacon_id", 0)
+            _nsw = int(getattr(pipeline_result, "id_switches", 0) or 0) if pipeline_result is not None else 0
+            _ntr = int(getattr(pipeline_result, "n_tracks", 0) or 0) if pipeline_result is not None else 0
+        except Exception:
+            _locked, _des, _nsw, _ntr = None, getattr(self, "_target_beacon_id", 0), 0, 0
         info = {
             "detection": detection,
             "estimate": estimate,
             "all_detections": all_dets,
             "fov_origin": (fov_x0, fov_y0),
+            "designated_target_id": _des,
+            "locked_track_id": _locked,
+            "id_switches": _nsw,
+            "n_tracks": _ntr,
         }
         return obs, float(reward), bool(terminated), bool(truncated), info
 

@@ -50,9 +50,12 @@ class Detection:
     source: str = "unknown"  # "yolo" | "classical" | "fused"
     area: float = 0.0  # bbox area px^2
     circularity: float = 1.0  # 1.0 = compact/blob-like, 0 = streak/noise
+    # Multi-beacon identity signature: mean BGR inside bbox (measured from
+    # frame, never GT). Matches renderer's per-ID tint (id%3 warm/cool).
+    color_bgr: tuple[float, float, float] | None = None
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "bbox": tuple(float(v) for v in self.bbox),
             "center": tuple(float(v) for v in self.center),
             "width": float(self.width),
@@ -64,6 +67,92 @@ class Detection:
             "area": float(self.area if self.area else self.width * self.height),
             "circularity": float(self.circularity),
         }
+        try:
+            if self.color_bgr is not None:
+                d["color_bgr"] = tuple(float(v) for v in self.color_bgr)
+        except Exception:
+            pass
+        return d
+
+
+def mean_color_bgr(frame: np.ndarray, bbox: tuple[float, float, float, float]) -> tuple[float, float, float] | None:
+    """Mean BGR inside shrunken bbox (bright core only). Never raises."""
+    try:
+        if frame is None or getattr(frame, "ndim", 0) != 3 or frame.shape[2] < 3:
+            return None
+        h, w = frame.shape[:2]
+        x1, y1, x2, y2 = (float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]))
+        # Shrink 25% to avoid background dilution at edges.
+        cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+        hw, hh = max(1.0, (x2 - x1) * 0.375), max(1.0, (y2 - y1) * 0.375)
+        ix1, iy1 = max(0, int(cx - hw)), max(0, int(cy - hh))
+        ix2, iy2 = min(w, int(cx + hw) + 1), min(h, int(cy + hh) + 1)
+        if ix2 <= ix1 or iy2 <= iy1:
+            return None
+        roi = frame[iy1:iy2, ix1:ix2].reshape(-1, 3).astype(np.float64)
+        if roi.size == 0:
+            return None
+        # Bright-core mean: top-half by intensity (rejects dark halo).
+        lum = roi.mean(axis=1)
+        try:
+            thr = float(np.median(lum))
+        except Exception:
+            thr = 0.0
+        core = roi[lum >= thr] if roi.shape[0] > 2 else roi
+        m = core.mean(axis=0)
+        return (float(m[0]), float(m[1]), float(m[2]))
+    except Exception:
+        return None
+
+
+def attach_color(dets: list[Detection], frame: np.ndarray) -> list[Detection]:
+    """Fill missing color_bgr from frame. Never raises; returns same list."""
+    try:
+        for d in dets:
+            try:
+                if d.color_bgr is None:
+                    c = mean_color_bgr(frame, d.bbox)
+                    if c is not None:
+                        d.color_bgr = c
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return dets
+
+
+def expected_color_for_target(target_index: int | None, brightness: float = 255.0) -> tuple[float, float, float] | None:
+    """Pre-known per-ID tint (mission signature, not per-frame GT).
+
+    Mirrors target.optics.get_beacon_color_bgr(id%3). Used as the designated
+    template anchor; the live latch fine-tunes around it for illumination.
+    """
+    try:
+        if target_index is None:
+            return None
+        from target.optics import get_beacon_color_bgr
+        return tuple(float(v) for v in get_beacon_color_bgr(int(target_index), float(brightness)))
+    except Exception:
+        # Fallback mirrors: 0 neutral, 1 warm, 2 cool.
+        try:
+            k = int(target_index) % 3
+            if k == 1:
+                return (225.0, 235.0, 255.0)
+            if k == 2:
+                return (245.0, 242.0, 255.0)
+            return (235.0, 240.0, 255.0)
+        except Exception:
+            return None
+
+
+def color_distance(c1: tuple[float, float, float] | None, c2: tuple[float, float, float] | None) -> float:
+    """BGR Euclidean distance; +inf-safe. Never raises."""
+    try:
+        if c1 is None or c2 is None:
+            return 1e9
+        return float(np.hypot(np.hypot(float(c1[0]) - float(c2[0]), float(c1[1]) - float(c2[1])), float(c1[2]) - float(c2[2])))
+    except Exception:
+        return 1e9
 
 
 def bbox_to_center(x1: float, y1: float, x2: float, y2: float) -> tuple[float, float]:
@@ -377,6 +466,10 @@ class YOLO26Detector:
             self.last_latency_ms = lat
             for d in dets:
                 d.latency_ms = lat
+            try:
+                attach_color(dets, frame)
+            except Exception:
+                pass
             return dets
         except Exception:
             self.last_latency_ms = (time.perf_counter() - t0) * 1000.0
@@ -475,6 +568,10 @@ class BrightSpotDetector:
             self.last_latency_ms = lat
             for d in dets:
                 d.latency_ms = lat
+            try:
+                attach_color(dets, frame)
+            except Exception:
+                pass
             return dets
         except Exception:
             self.last_latency_ms = (time.perf_counter() - t0) * 1000.0
@@ -529,4 +626,8 @@ class UnifiedDetector:
             return []
         fused.sort(key=lambda d: (d.confidence / max(1.0, d.pos_var ** 0.5)), reverse=True)
         fused = fused[: int(self.config.max_detections)]
+        try:
+            attach_color(fused, frame)
+        except Exception:
+            pass
         return fused

@@ -37,9 +37,19 @@ class BeaconMixin:
                     self.beacon_manager.spin_target_index.blockSignals(False)
             except Exception:
                 pass
+            # Forward mission retarget to the tracker (identity only, no GT).
+            try:
+                if getattr(self, "_pipeline", None) is not None:
+                    self._pipeline.set_designated_target(int(idx))
+            except Exception:
+                pass
             if hasattr(self, "beacons") and 0 <= idx < len(self.beacons):
                 self.target = self.beacons[idx]
-                self.statusBar().showMessage(f"Target -> Beacon #{idx}", 2500)
+                try:
+                    sw = int(getattr(self, "_last_id_switches", 0) or 0)
+                    self.statusBar().showMessage(f"Target -> Beacon #{idx} (tracker re-anchored, switches={sw})", 2500)
+                except Exception:
+                    self.statusBar().showMessage(f"Target -> Beacon #{idx}", 2500)
                 try:
                     if hasattr(self, "beacon_manager"):
                         self.beacon_manager._update_status()

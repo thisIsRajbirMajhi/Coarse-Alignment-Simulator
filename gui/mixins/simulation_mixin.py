@@ -184,11 +184,16 @@ class SimulationMixin:
                     thresh = int(self.beacon_manager.spin_thresh.value())
             except Exception:
                 pass
+            try:
+                _des = int(getattr(self, "_target_beacon_id", 0))
+            except Exception:
+                _des = 0
             self._pipeline = _TP(
                 detector_config=_DC(threshold=int(thresh)),
                 controller_config=ctrl_cfg,
                 fov_size=(int(fov_w), int(fov_h)),
                 use_yolo=False,
+                designated_target_id=_des,
             )
             self._tracking_enabled = bool(getattr(self, "_tracking_enabled", True))
             self._metrics_logger = _ML(fov_size=(int(fov_w), int(fov_h)))

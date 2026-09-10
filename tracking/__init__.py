@@ -1,7 +1,8 @@
 # tracking package — closed-loop perception (Camera -> YOLO -> Association -> Tracker -> State -> Control)
 """Perception and tracking stack. Control path never receives privileged ground truth."""
 
-from tracking.association import AssociationConfig, associate, associate_multi, mahalanobis2, _appearance_score, _pred_bbox
+from tracking.association import AssociationConfig, associate, associate_multi, mahalanobis2, _appearance_score, _color_score, _pred_bbox
+from tracking.multitrack import BeaconTrack, MultiBeaconTracker
 from tracking.imm import IMMConfig, IMMTracker
 from tracking.kalman import KalmanConfig, KalmanTracker
 from tracking.metrics import FrameRecord, MetricsLogger
@@ -27,11 +28,15 @@ from tracking.detector import (
     DetectorConfig,
     UnifiedDetector,
     YOLO26Detector,
+    attach_color,
     bbox_iou,
     bbox_to_center,
     calibrate_classical_conf,
+    color_distance,
+    expected_color_for_target,
     fuse_detections_nms,
     intensity_refined_centroid,
+    mean_color_bgr,
     measurement_noise_for,
     pixel_error,
 )
@@ -42,7 +47,10 @@ __all__ = [
     "associate_multi",
     "mahalanobis2",
     "_appearance_score",
+    "_color_score",
     "_pred_bbox",
+    "BeaconTrack",
+    "MultiBeaconTracker",
     "KalmanConfig",
     "KalmanTracker",
     "IMMConfig",
@@ -75,5 +83,9 @@ __all__ = [
     "measurement_noise_for",
     "calibrate_classical_conf",
     "bbox_iou",
+    "attach_color",
+    "mean_color_bgr",
+    "color_distance",
+    "expected_color_for_target",
     "fuse_detections_nms",
 ]

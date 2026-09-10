@@ -22,6 +22,10 @@ class StatsMixin:
             self._stats_lock_losses = 0
             self._stats_prev_lock = "searching"
             self._stats_detection = deque(maxlen=200)
+            self._stats_last_tick = None
+            self._stats_detect_hits = 0
+            self._stats_center_hits = 0
+            self._stats_search_frames = 0
 
     def _update_stats(self, tracking_error_px):
         self._ensure_stats()
@@ -47,8 +51,21 @@ class StatsMixin:
             if tracking_error_px is not None:
                 self._stats_errors.append(float(tracking_error_px))
             # Keep only recent 200 for p95 etc.
-            # Detection - no tracker, so always 0
-            self._stats_detection.append(0)
+            # Detection hit this frame: real pipeline output (not hardcoded 0).
+            try:
+                dets = getattr(self, "_last_all_detections", []) or []
+                est = getattr(self, "_last_estimate", None)
+                has_det = 1 if (len(dets) > 0 or est is not None) else 0
+            except Exception:
+                has_det = 0
+            self._stats_detection.append(has_det)
+            try:
+                if has_det:
+                    self._stats_detect_hits += 1
+                if lock == "searching":
+                    self._stats_search_frames += 1
+            except Exception:
+                pass
 
             # Build summary dict expected by dashboard
             s = {}
@@ -71,13 +88,61 @@ class StatsMixin:
             else:
                 s["avg_processing_time_ms"] = s["min_processing_time_ms"] = s["max_processing_time_ms"] = s["jitter_ms"] = s["p95_processing_time_ms"] = 0.0
 
-            # Acquisition - no real tracking, so show — (None) to avoid red failure when open-loop
-            s["acquisition_time_s"] = None
-            s["avg_reacquisition_time_s"] = None
-            s["min_reacquisition_time_s"] = None
-            s["max_reacquisition_time_s"] = None
+            # Acquisition / re-acquisition from the real GT-isolated logger.
+            # Falls back to live counters when logger has no records yet.
+            try:
+                logger = getattr(self, "_metrics_logger", None)
+                recs = list(getattr(logger, "records", [])) if logger is not None else []
+            except Exception:
+                logger, recs = None, []
+            try:
+                hb = int(getattr(getattr(self, "target", None), "hitbox_radius", 14))
+            except Exception:
+                hb = 14
+            try:
+                cr = int(getattr(getattr(self, "target", None), "center_radius", 2))
+            except Exception:
+                cr = 2
+            msum = None
+            if logger is not None and recs:
+                try:
+                    msum = logger.summary(hitbox_radius=hb, center_radius=cr)
+                except TypeError:
+                    msum = logger.summary()
+                except Exception:
+                    msum = None
+            if msum:
+                s["acquisition_time_s"] = msum.get("acquisition_time_s")
+                s["avg_reacquisition_time_s"] = msum.get("avg_reacquisition_time_s")
+                s["min_reacquisition_time_s"] = msum.get("min_reacquisition_time_s")
+                s["max_reacquisition_time_s"] = msum.get("max_reacquisition_time_s")
+            else:
+                s["acquisition_time_s"] = None
+                s["avg_reacquisition_time_s"] = None
+                s["min_reacquisition_time_s"] = None
+                s["max_reacquisition_time_s"] = None
             s["acquisitions"] = self._stats_acquisitions
             s["lock_losses"] = self._stats_lock_losses
+            # Multi-beacon identity (C): designated mission target, live locked
+            # internal track, switches, hypothesis count.
+            try:
+                s["designated_target_id"] = int(getattr(self, "_target_beacon_id", 0))
+            except Exception:
+                s["designated_target_id"] = 0
+            try:
+                pipe = getattr(self, "_pipeline", None)
+                s["locked_track_id"] = getattr(pipe, "multi", None).designated_internal_id if pipe is not None and getattr(pipe, "multi", None) is not None else getattr(self, "_last_locked_track_id", None)
+                s["id_switches"] = int(getattr(pipe, "multi", None).id_switches) if pipe is not None and getattr(pipe, "multi", None) is not None else int(getattr(self, "_last_id_switches", 0) or 0)
+                s["n_tracks"] = int(len(getattr(getattr(pipe, "multi", None), "tracks", []) or []))
+            except Exception:
+                s["locked_track_id"] = getattr(self, "_last_locked_track_id", None)
+                s["id_switches"] = int(getattr(self, "_last_id_switches", 0) or 0)
+                s["n_tracks"] = int(getattr(self, "_last_n_tracks", 0) or 0)
+            try:
+                if msum is not None and msum.get("id_switches") is not None:
+                    s["id_switches"] = int(msum.get("id_switches"))
+            except Exception:
+                pass
 
             # Lock / retention - compute from recent window
             if self._stats_lock_retention:
@@ -116,16 +181,37 @@ class StatsMixin:
                 s["std_tracking_error_px"] = 0.0
             s["live_error_px"] = float(tracking_error_px) if tracking_error_px is not None else None
 
-            # Detection - always 0 in open-loop
-            s["detection_rate_pct"] = 0.0
-            s["detection_time_s"] = 0.0
-            s["detection_count"] = 0
-            s["center_hit_rate_pct"] = 0.0
-            s["center_hit_time_s"] = 0.0
-            s["center_hit_count"] = 0
-            s["searching_rate_pct"] = 100.0 if not is_tracking else 0.0
-            s["searching_time_s"] = elapsed if not is_tracking else 0.0
-            s["frame_count"] = self._stats_frames
+            # Detection / center-hit / searching from logger (GT-isolated).
+            if msum:
+                total = max(int(msum.get("frames", 0)), 1)
+                s["detection_rate_pct"] = float(msum.get("detection_rate_pct", 0.0) or 0.0)
+                s["detection_time_s"] = float(msum.get("detection_time_s", 0.0) or 0.0)
+                s["detection_count"] = int(msum.get("detection_count", 0) or 0)
+                s["center_hit_rate_pct"] = float(msum.get("center_hit_rate_pct", 0.0) or 0.0)
+                s["center_hit_time_s"] = float(msum.get("center_hit_time_s", 0.0) or 0.0)
+                s["center_hit_count"] = int(msum.get("center_hit_count", 0) or 0)
+                s["searching_rate_pct"] = float(msum.get("searching_rate_pct", 0.0) or 0.0)
+                s["searching_time_s"] = float(msum.get("searching_time_s", 0.0) or 0.0)
+                s["frame_count"] = max(self._stats_frames, int(msum.get("frames", 0) or 0))
+                # Prefer full-run retention/loss over the 200-frame window.
+                try:
+                    s["lock_retention_rate_pct"] = round(float(msum.get("lock_retention_pct", s.get("lock_retention_rate_pct", 0)) or 0), 1)
+                    s["target_loss_pct"] = round(float(msum.get("target_loss_pct", s.get("target_loss_pct", 0)) or 0), 1)
+                except Exception:
+                    pass
+            else:
+                # No logger records yet: live fallback from pipeline outputs.
+                total = max(self._stats_frames, 1)
+                det_rate = 100.0 * sum(self._stats_detection) / max(len(self._stats_detection), 1) if self._stats_detection else 0.0
+                s["detection_rate_pct"] = round(det_rate, 1)
+                s["detection_count"] = int(self._stats_detect_hits)
+                s["detection_time_s"] = round(self._stats_detect_hits / 30.0, 2)
+                s["center_hit_rate_pct"] = 0.0
+                s["center_hit_time_s"] = 0.0
+                s["center_hit_count"] = 0
+                s["searching_rate_pct"] = round(100.0 * self._stats_search_frames / total, 1)
+                s["searching_time_s"] = round(self._stats_search_frames / 30.0, 2)
+                s["frame_count"] = self._stats_frames
 
         except Exception:
             s = {}
@@ -227,6 +313,6 @@ class StatsMixin:
         except Exception: pass
 
     def _reset_stats(self):
-        for attr in ["_stats_start","_stats_frames","_stats_proc","_stats_errors","_stats_lock_retention","_stats_acq_time","_stats_first_lock","_stats_acquisitions","_stats_lock_losses","_stats_prev_lock","_stats_detection","_stats_last_tick"]:
+        for attr in ["_stats_start","_stats_frames","_stats_proc","_stats_errors","_stats_lock_retention","_stats_acq_time","_stats_first_lock","_stats_acquisitions","_stats_lock_losses","_stats_prev_lock","_stats_detection","_stats_last_tick","_stats_detect_hits","_stats_center_hits","_stats_search_frames"]:
             try: delattr(self, attr)
             except Exception: pass

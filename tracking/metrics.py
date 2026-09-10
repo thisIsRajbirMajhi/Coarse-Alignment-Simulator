@@ -49,6 +49,9 @@ class FrameRecord:
     # (GT invisible or no candidates).
     assoc_correct: bool | None = None
     assoc_candidates: int = 0
+    # Multi-beacon identity: internal track id holding the lock this frame.
+    track_id: int | None = None
+    designated_target_id: int | None = None
 
 
 class MetricsLogger:
@@ -106,6 +109,8 @@ class MetricsLogger:
         lock_quality: float | None = None,
         detection_pos_var: float | None = None,
         all_detections=None,
+        track_id: int | None = None,
+        designated_target_id: int | None = None,
     ) -> FrameRecord:
         ts = float(timestamp if timestamp is not None else time.perf_counter())
         if self._t0 is None:
@@ -174,6 +179,14 @@ class MetricsLogger:
                 assoc_correct = None
         except Exception:
             assoc_correct = None
+        try:
+            tid = int(track_id) if track_id is not None else None
+        except Exception:
+            tid = None
+        try:
+            did = int(designated_target_id) if designated_target_id is not None else None
+        except Exception:
+            did = None
         rec = FrameRecord(
             timestamp=ts, frame_id=int(frame_id),
             gt_x=gx, gt_y=gy, gt_visible=bool(gt_visible),
@@ -184,12 +197,103 @@ class MetricsLogger:
             perception_px=perc, state=str(state), latency_ms=float(latency_ms),
             lock_quality=lq, detection_pos_var=pv,
             assoc_correct=assoc_correct, assoc_candidates=int(n_cands),
+            track_id=tid, designated_target_id=did,
         )
         self.records.append(rec)
         return rec
 
+    def id_switches(self) -> int:
+        """Count designated-track identity changes (multi-beacon stability)."""
+        try:
+            n = 0
+            prev = None
+            for r in self.records:
+                if r.track_id is None:
+                    continue
+                if prev is not None and int(r.track_id) != int(prev):
+                    n += 1
+                prev = int(r.track_id)
+            return int(n)
+        except Exception:
+            return 0
+
     # -- aggregates ---------------------------------------------------------
-    def summary(self) -> dict:
+    def reacquisition_times(self) -> list[float]:
+        """All LOST(/REACQUIRING)->TRACKING durations (s). Empty if none."""
+        times: list[float] = []
+        try:
+            lost_t: float | None = None
+            for r in self.records:
+                if r.state in ("lost", "reacquiring"):
+                    if lost_t is None:
+                        lost_t = float(r.timestamp)
+                elif r.state == "tracking":
+                    if lost_t is not None:
+                        times.append(float(r.timestamp) - lost_t)
+                        lost_t = None
+        except Exception:
+            pass
+        return times
+
+    def detection_stats(self, hitbox_radius: float = 14.0, center_radius: float = 2.0) -> dict:
+        """Hitbox/center-hit aggregates from GT + selected detection.
+
+        detection hit = GT visible, detection present, dist <= hitbox_radius.
+        center hit    = same with dist <= center_radius (<=2px precise).
+        Rates are over total logged frames (dashboard definition).
+        Times use mean frame dt from record timestamps.
+        """
+        try:
+            n = len(self.records)
+            if n == 0:
+                return {"detection_count": 0, "detection_rate_pct": None,
+                        "detection_time_s": None, "center_hit_count": 0,
+                        "center_hit_rate_pct": None, "center_hit_time_s": None,
+                        "searching_count": 0, "searching_rate_pct": None,
+                        "searching_time_s": None}
+            hb = max(1.0, float(hitbox_radius))
+            cr = max(0.5, float(center_radius))
+            det = 0
+            cen = 0
+            sea = 0
+            for r in self.records:
+                try:
+                    if str(r.state) == "searching":
+                        sea += 1
+                    if (r.gt_visible and r.gt_x is not None and r.gt_y is not None
+                            and r.detected_x is not None and r.detected_y is not None):
+                        d = float(np.hypot(float(r.detected_x) - float(r.gt_x),
+                                           float(r.detected_y) - float(r.gt_y)))
+                        if d <= hb:
+                            det += 1
+                        if d <= cr:
+                            cen += 1
+                except Exception:
+                    continue
+            try:
+                elapsed = float(self.records[-1].timestamp - self.records[0].timestamp) if n > 1 else 0.0
+                dt_mean = (elapsed / max(n - 1, 1)) if elapsed > 1e-9 else 1.0 / 30.0
+            except Exception:
+                dt_mean = 1.0 / 30.0
+            return {
+                "detection_count": int(det),
+                "detection_rate_pct": round(100.0 * det / max(n, 1), 2),
+                "detection_time_s": round(float(det * dt_mean), 3),
+                "center_hit_count": int(cen),
+                "center_hit_rate_pct": round(100.0 * cen / max(n, 1), 2),
+                "center_hit_time_s": round(float(cen * dt_mean), 3),
+                "searching_count": int(sea),
+                "searching_rate_pct": round(100.0 * sea / max(n, 1), 2),
+                "searching_time_s": round(float(sea * dt_mean), 3),
+            }
+        except Exception:
+            return {"detection_count": 0, "detection_rate_pct": 0.0,
+                    "detection_time_s": 0.0, "center_hit_count": 0,
+                    "center_hit_rate_pct": 0.0, "center_hit_time_s": 0.0,
+                    "searching_count": 0, "searching_rate_pct": 0.0,
+                    "searching_time_s": 0.0}
+
+    def summary(self, hitbox_radius: float = 14.0, center_radius: float = 2.0) -> dict:
         n = len(self.records)
         if n == 0:
             return {"frames": 0}
@@ -258,6 +362,19 @@ class MetricsLogger:
         n_assoc_total = len(assoc_judged)
         n_assoc_correct = sum(1 for r in assoc_judged if r.assoc_correct)
         assoc_acc = (n_assoc_correct / n_assoc_total) if n_assoc_total else None
+        # Re-acquisition distribution (all events, not just first).
+        reacq_times = self.reacquisition_times()
+        if reacq_times:
+            reacq_avg = float(sum(reacq_times) / len(reacq_times))
+            reacq_min = float(min(reacq_times))
+            reacq_max = float(max(reacq_times))
+        else:
+            reacq_avg = reacq_min = reacq_max = None
+        # Detection / center-hit / searching aggregates (dashboard section E).
+        try:
+            det_stats = self.detection_stats(hitbox_radius=hitbox_radius, center_radius=center_radius)
+        except Exception:
+            det_stats = {}
         return {
             "frames": n,
             "elapsed_s": round(float(elapsed), 3),
@@ -283,6 +400,20 @@ class MetricsLogger:
             "reacq_events": int(n_reacq_events),
             "loss_events": int(n_losses),
             "reacq_success_rate": round(float(reacq_rate), 4) if reacq_rate is not None else None,
+            "id_switches": int(self.id_switches()),
+            "reacq_times_s": [round(float(t), 3) for t in reacq_times],
+            "avg_reacquisition_time_s": None if reacq_avg is None else round(reacq_avg, 3),
+            "min_reacquisition_time_s": None if reacq_min is None else round(reacq_min, 3),
+            "max_reacquisition_time_s": None if reacq_max is None else round(reacq_max, 3),
+            "detection_count": int(det_stats.get("detection_count", 0)),
+            "detection_rate_pct": det_stats.get("detection_rate_pct"),
+            "detection_time_s": det_stats.get("detection_time_s"),
+            "center_hit_count": int(det_stats.get("center_hit_count", 0)),
+            "center_hit_rate_pct": det_stats.get("center_hit_rate_pct"),
+            "center_hit_time_s": det_stats.get("center_hit_time_s"),
+            "searching_count": int(det_stats.get("searching_count", 0)),
+            "searching_rate_pct": det_stats.get("searching_rate_pct"),
+            "searching_time_s": det_stats.get("searching_time_s"),
             "longest_track_streak": int(longest_track),
             "lock_quality_mean": round(float(np.mean(lq_arr)), 4) if lq_arr.size else None,
             "perception_nees_mean": round(float(np.mean(normed)), 4) if normed.size else None,

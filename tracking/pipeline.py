@@ -15,9 +15,10 @@ import numpy as np
 from control.config import ControllerConfig
 from control.controller import PIDController
 from tracking.association import AssociationConfig, associate
-from tracking.detector import Detection, DetectorConfig, UnifiedDetector, pixel_error
+from tracking.detector import Detection, DetectorConfig, UnifiedDetector, expected_color_for_target, pixel_error
 from tracking.imm import IMMConfig, IMMTracker
 from tracking.kalman import KalmanConfig, KalmanTracker
+from tracking.multitrack import MultiBeaconTracker
 from tracking.search import SearchPattern
 from tracking.state_machine import (
     LOST,
@@ -47,6 +48,11 @@ class PipelineResult:
     model_probs: tuple[float, ...] = field(default_factory=tuple)
     search_active: bool = False
     predicted_next: tuple[float, float] | None = None
+    # Multi-beacon identity (B+C):
+    designated_target_id: int | None = None
+    locked_track_id: int | None = None
+    id_switches: int = 0
+    n_tracks: int = 0
 
 
 class TrackingPipeline:
@@ -66,6 +72,8 @@ class TrackingPipeline:
         imm_config: IMMConfig | None = None,
         search_enabled: bool = True,
         search_mode: str = "adaptive",
+        designated_target_id: int | None = None,
+        max_tracks: int = 5,
     ):
         self.detector_config = (detector_config or DetectorConfig()).validate()
         self.assoc_config = (assoc_config or AssociationConfig()).validate()
@@ -101,6 +109,36 @@ class TrackingPipeline:
         self._last_size: float | None = None
         self._last_area: float | None = None
         self._last_circ: float | None = None
+        # B: designated mission target (mission intent, not per-frame GT).
+        self.designated_target_id: int | None = int(designated_target_id) if designated_target_id is not None else None
+        self.expected_color = expected_color_for_target(self.designated_target_id)
+        self._latched_color: tuple[float, float, float] | None = None
+        self._prev_center: tuple[float, float] | None = None
+        # C: persistent hypothesis tracks (distractors keep their own tracks).
+        self.multi = MultiBeaconTracker(
+            max_tracks=int(max_tracks), use_imm=bool(use_imm),
+            imm_config=self.imm_config, kalman_config=self.kalman_config,
+            assoc_config=self.assoc_config,
+        )
+        self.multi.set_expected_color(self.expected_color)
+
+    def set_designated_target(self, idx: int | None) -> None:
+        """Mission retarget (operator/GUI): latch new expected tint, keep filters.
+
+        Does NOT use GT position — only the pre-known per-ID color signature.
+        Identity re-resolves over the next frames via color + continuity.
+        """
+        try:
+            self.designated_target_id = int(idx) if idx is not None else None
+        except Exception:
+            self.designated_target_id = None
+        try:
+            self.expected_color = expected_color_for_target(self.designated_target_id)
+            self.multi.set_expected_color(self.expected_color)
+            # Re-anchor latch to expected (observed latch re-tunes after lock).
+            self._latched_color = self.expected_color
+        except Exception:
+            pass
 
     def reset(self) -> None:
         if self.use_imm:
@@ -113,6 +151,13 @@ class TrackingPipeline:
         self._last_size = None
         self._last_area = None
         self._last_circ = None
+        self._latched_color = self.expected_color
+        self._prev_center = None
+        try:
+            self.multi.reset()
+            self.multi.set_expected_color(self.expected_color)
+        except Exception:
+            pass
 
     def _tracker_cov(self):
         try:
@@ -133,7 +178,26 @@ class TrackingPipeline:
         all_dets = self.detector.detect(frame)
         latency = float(getattr(self.detector, "last_latency_ms", 0.0))
 
-        # 2. Associate against tracker *predicted* position (§18 Expected
+        # 2. Multi-hypothesis identity (C) + designated associate (B).
+        # multi keeps one filter per visible beacon; designated track wins
+        # ties via expected/latched color + continuity. The single control
+        # filter below is then stepped with the designated detection only,
+        # so distractors can no longer drag the servo state.
+        designated_det: Detection | None = None
+        try:
+            _des_track, _assign = self.multi.step(all_dets, dt)
+            if _des_track is not None:
+                # Find the box assigned to the designated internal track.
+                try:
+                    idx = next(i for i, t in enumerate(self.multi.tracks) if t.internal_id == _des_track.internal_id)
+                    designated_det = _assign.get(idx)
+                except Exception:
+                    designated_det = None
+        except Exception:
+            designated_det = None
+        # Template: latched observation anchored to expected mission tint.
+        template = self._latched_color if self._latched_color is not None else self.expected_color
+        # 2b. Associate against tracker *predicted* position (§18 Expected
         # Target Position): non-mutating peek forward by dt so the anchor
         # leads the target instead of lagging one frame behind.
         if self.tracker.initialized:
@@ -151,13 +215,17 @@ class TrackingPipeline:
             last_pos = None
             last_vel = None
             pred_cov = None
-        selected = associate(
+        single = associate(
             all_dets, predicted=pred, last_position=last_pos,
             last_velocity=last_vel, dt=dt, config=self.assoc_config,
             pred_cov=pred_cov, last_size=self._last_size,
             last_area=self._last_area, last_circ=self._last_circ,
             boresight=(self.fov_w / 2.0, self.fov_h / 2.0),
+            template_color=template, prev_center=self._prev_center,
         )
+        # Prefer multi-track designated identity when available; fall back to
+        # single-frame associate (first frames / single beacon).
+        selected = designated_det if designated_det is not None else single
 
         # 3. Fuse into tracker with per-detection measurement noise
         meas = selected.center if selected is not None else None
@@ -182,6 +250,24 @@ class TrackingPipeline:
             try:
                 ci = float(getattr(selected, "circularity", 1.0))
                 self._last_circ = ci if self._last_circ is None else 0.9 * self._last_circ + 0.1 * ci
+            except Exception:
+                pass
+            try:
+                dc = getattr(selected, "color_bgr", None)
+                if dc is not None:
+                    dc = (float(dc[0]), float(dc[1]), float(dc[2]))
+                    base = self._latched_color if self._latched_color is not None else self.expected_color
+                    if base is None:
+                        self._latched_color = dc
+                    else:
+                        # Latch follows observations slowly, anchored to expected.
+                        obs = (0.85 * base[0] + 0.15 * dc[0], 0.85 * base[1] + 0.15 * dc[1], 0.85 * base[2] + 0.15 * dc[2])
+                        exp = self.expected_color
+                        if exp is not None:
+                            self._latched_color = (0.7 * obs[0] + 0.3 * exp[0], 0.7 * obs[1] + 0.3 * exp[1], 0.7 * obs[2] + 0.3 * exp[2])
+                        else:
+                            self._latched_color = obs
+                self._prev_center = (float(selected.center[0]), float(selected.center[1]))
             except Exception:
                 pass
 
@@ -285,6 +371,18 @@ class TrackingPipeline:
         else:
             d_pan, d_tilt = 0.0, 0.0
 
+        try:
+            locked_id = self.multi.designated_internal_id
+        except Exception:
+            locked_id = None
+        try:
+            ntr = len(self.multi.tracks)
+        except Exception:
+            ntr = 0
+        try:
+            nsw = int(self.multi.id_switches)
+        except Exception:
+            nsw = 0
         return PipelineResult(
             all_detections=all_dets,
             selected=selected,
@@ -301,4 +399,8 @@ class TrackingPipeline:
             model_probs=model_probs,
             search_active=bool(search_active),
             predicted_next=predicted_next,
+            designated_target_id=self.designated_target_id,
+            locked_track_id=locked_id,
+            id_switches=nsw,
+            n_tracks=int(ntr),
         )

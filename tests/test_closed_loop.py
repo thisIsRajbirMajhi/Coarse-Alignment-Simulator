@@ -62,6 +62,58 @@ def test_metrics_assoc_and_accept():
     assert s["association_accuracy"] == 0.5
 
 
+def test_designated_color_beats_brighter_distractor():
+    from tracking.detector import Detection, expected_color_for_target
+    from tracking.association import associate, AssociationConfig
+    warm = expected_color_for_target(1)
+    cool = expected_color_for_target(2)
+    true = Detection(bbox=(90, 90, 110, 110), center=(100, 100), width=20, height=20,
+                     confidence=0.6, pos_var=4.0, area=400, circularity=0.9, color_bgr=warm)
+    false = Detection(bbox=(140, 140, 160, 160), center=(150, 150), width=20, height=20,
+                      confidence=0.99, pos_var=4.0, area=400, circularity=0.9, color_bgr=cool)
+    sel = associate([false, true], predicted=(102, 101), last_position=(100, 100),
+                    last_velocity=(0, 0), dt=1 / 30, config=AssociationConfig(),
+                    last_size=20, template_color=warm, prev_center=(100, 100))
+    assert sel is not None and sel.center == (100, 100)
+
+
+def test_switch_hysteresis_holds_incumbent():
+    from tracking.detector import Detection, expected_color_for_target
+    from tracking.association import associate, AssociationConfig
+    warm = expected_color_for_target(1)
+    inc = Detection(bbox=(90, 90, 110, 110), center=(100, 100), width=20, height=20,
+                    confidence=0.6, pos_var=4.0, area=400, circularity=0.9, color_bgr=warm)
+    chal = Detection(bbox=(95, 95, 115, 115), center=(105, 105), width=20, height=20,
+                     confidence=0.99, pos_var=4.0, area=400, circularity=0.9, color_bgr=warm)
+    sel = associate([chal, inc], predicted=(100, 100), last_position=(100, 100),
+                    last_velocity=(0, 0), dt=1 / 30, config=AssociationConfig(),
+                    last_size=20, template_color=warm, prev_center=(100, 100))
+    assert sel is not None and sel.center == (100, 100)
+
+
+def test_multitrack_designated_identity():
+    from tracking.detector import Detection, expected_color_for_target
+    from tracking.multitrack import MultiBeaconTracker
+    warm = expected_color_for_target(1)
+    mt = MultiBeaconTracker(max_tracks=5)
+    mt.set_expected_color(warm)
+    d1 = Detection(bbox=(90, 90, 110, 110), center=(100, 100), width=20, height=20,
+                   confidence=0.8, pos_var=4.0, area=400, circularity=0.9, color_bgr=warm)
+    d2 = Detection(bbox=(300, 300, 320, 320), center=(310, 310), width=20, height=20,
+                   confidence=0.9, pos_var=4.0, area=400, circularity=0.9, color_bgr=expected_color_for_target(2))
+    des, _ = mt.step([d1, d2], 1 / 30)
+    assert des is not None
+    first_id = mt.designated_internal_id
+    # Move both; designated should persist, no switch.
+    d1b = Detection(bbox=(95, 95, 115, 115), center=(105, 105), width=20, height=20,
+                    confidence=0.8, pos_var=4.0, area=400, circularity=0.9, color_bgr=warm)
+    d2b = Detection(bbox=(305, 305, 325, 325), center=(315, 315), width=20, height=20,
+                    confidence=0.9, pos_var=4.0, area=400, circularity=0.9, color_bgr=expected_color_for_target(2))
+    mt.step([d1b, d2b], 1 / 30)
+    assert mt.designated_internal_id == first_id
+    assert mt.id_switches == 0
+
+
 def test_headless_closed_loop_search_and_estimator_vel():
     from simulation.headless import HeadlessSimulation
     sim = HeadlessSimulation(seed=1)

@@ -16,7 +16,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from common.config_base import BaseValidatedConfig, clip_field
-from tracking.detector import Detection, bbox_iou
+from tracking.detector import Detection, bbox_iou, color_distance
 
 ASSOC_LIMITS = {
     "w_pred": (0.0, 5.0),
@@ -26,23 +26,27 @@ ASSOC_LIMITS = {
     "w_size": (0.0, 5.0),
     "w_iou": (0.0, 5.0),
     "w_appear": (0.0, 5.0),
+    "w_color": (0.0, 5.0),
     "gate_px": (20.0, 1000.0),
     "max_jump_px": (20.0, 1000.0),
     "mahalanobis_gate": (2.0, 20.0),
+    "switch_margin": (0.0, 2.0),
 }
 
 ASSOC_DEFAULTS = {
     "w_pred": 2.0,
-    "w_conf": 0.8,
+    "w_conf": 0.5,
     "w_hist": 0.6,
-    "w_motion": 0.5,
+    "w_motion": 0.7,
     "w_size": 0.4,
     "w_iou": 0.6,
     "w_appear": 0.4,
-    "gate_px": 300.0,
-    "max_jump_px": 150.0,
+    "w_color": 1.2,
+    "gate_px": 120.0,
+    "max_jump_px": 80.0,
     "mahalanobis_gate": 9.21,  # chi2 2-dof 99%: statistically principled gate
     "use_mahalanobis": True,
+    "switch_margin": 0.35,
 }
 
 
@@ -58,10 +62,12 @@ class AssociationConfig(BaseValidatedConfig):
     w_size: float = ASSOC_DEFAULTS["w_size"]
     w_iou: float = ASSOC_DEFAULTS["w_iou"]
     w_appear: float = ASSOC_DEFAULTS["w_appear"]
+    w_color: float = ASSOC_DEFAULTS["w_color"]
     gate_px: float = ASSOC_DEFAULTS["gate_px"]
     max_jump_px: float = ASSOC_DEFAULTS["max_jump_px"]
     mahalanobis_gate: float = ASSOC_DEFAULTS["mahalanobis_gate"]
     use_mahalanobis: bool = ASSOC_DEFAULTS["use_mahalanobis"]
+    switch_margin: float = ASSOC_DEFAULTS["switch_margin"]
 
     def validate(self) -> "AssociationConfig":
         self.w_pred = float(clip_field(self.w_pred, *self.LIMITS["w_pred"]))
@@ -71,6 +77,8 @@ class AssociationConfig(BaseValidatedConfig):
         self.w_size = float(clip_field(self.w_size, *self.LIMITS["w_size"]))
         self.w_iou = float(clip_field(self.w_iou, *self.LIMITS["w_iou"]))
         self.w_appear = float(clip_field(self.w_appear, *self.LIMITS["w_appear"]))
+        self.w_color = float(clip_field(self.w_color, *self.LIMITS["w_color"]))
+        self.switch_margin = float(clip_field(self.switch_margin, *self.LIMITS["switch_margin"]))
         self.gate_px = float(clip_field(self.gate_px, *self.LIMITS["gate_px"]))
         self.max_jump_px = float(clip_field(self.max_jump_px, *self.LIMITS["max_jump_px"]))
         self.mahalanobis_gate = float(clip_field(self.mahalanobis_gate, *self.LIMITS["mahalanobis_gate"]))
@@ -166,6 +174,25 @@ def _appearance_score(
         return 0.5
 
 
+def _color_score(
+    d: Detection,
+    template_color: tuple[float, float, float] | None,
+) -> float:
+    """Color similarity to designated template in [0,1]. Neutral 0.5 if unknown."""
+    try:
+        if template_color is None:
+            return 0.5
+        dc = getattr(d, "color_bgr", None)
+        if dc is None:
+            return 0.5
+        dist = color_distance(tuple(dc), tuple(template_color))
+        if not np.isfinite(dist):
+            return 0.5
+        return float(1.0 / (1.0 + float(dist) / 40.0))
+    except Exception:
+        return 0.5
+
+
 def _score_candidate(
     d: Detection,
     anchor: tuple[float, float],
@@ -177,6 +204,7 @@ def _score_candidate(
     cfg: AssociationConfig,
     last_area: float | None = None,
     last_circ: float | None = None,
+    template_color: tuple[float, float, float] | None = None,
 ) -> tuple[float, bool, float]:
     """Return (score, gated_out, mahalanobis_d2). Never raises."""
     try:
@@ -236,6 +264,8 @@ def _score_candidate(
 
         # Appearance / shape similarity (§17.3).
         s_appear = _appearance_score(d, last_area, last_circ)
+        # Designated-target color signature (per-ID tint, measured BGR).
+        s_color = _color_score(d, template_color)
 
         score = (
             float(cfg.w_pred) * s_pred
@@ -245,6 +275,7 @@ def _score_candidate(
             + float(cfg.w_size) * s_size
             + float(getattr(cfg, "w_iou", 0.0)) * s_iou
             + float(getattr(cfg, "w_appear", 0.0)) * s_appear
+            + float(getattr(cfg, "w_color", 0.0)) * s_color
         )
         # Down-weight very uncertain measurements slightly
         try:
@@ -268,12 +299,14 @@ def associate(
     last_area: float | None = None,
     last_circ: float | None = None,
     boresight: tuple[float, float] | None = None,
+    template_color: tuple[float, float, float] | None = None,
+    prev_center: tuple[float, float] | None = None,
 ) -> Detection | None:
     """Select designated target. Returns None if no valid candidate.
 
     Never uses ground truth — only prediction, confidence, history, motion,
-    IoU and appearance. boresight (fov center) fixes the no-prior tie-break
-    to prefer near-center over near-origin.
+    IoU, appearance and designated color template. prev_center enables
+    switch hysteresis: the incumbent wins ties unless beaten by margin.
     """
     cfg = (config or AssociationConfig()).validate()
     if not detections:
@@ -303,7 +336,7 @@ def associate(
         d = cands[0]
         anchor1 = predicted if predicted is not None else last_position
         assert anchor1 is not None
-        _, gated, _ = _score_candidate(d, anchor1, last_position, last_velocity, last_size, dt, pred_cov, cfg, last_area, last_circ)
+        _, gated, _ = _score_candidate(d, anchor1, last_position, last_velocity, last_size, dt, pred_cov, cfg, last_area, last_circ, template_color)
         if gated:
             return None
         return d
@@ -311,19 +344,29 @@ def associate(
     anchor = predicted if predicted is not None else last_position
     assert anchor is not None
 
-    best: Detection | None = None
-    best_score = -1e18
+    scored: list[tuple[float, Detection]] = []
     for d in cands:
-        score, gated, _ = _score_candidate(d, anchor, last_position, last_velocity, last_size, dt, pred_cov, cfg, last_area, last_circ)
+        score, gated, _ = _score_candidate(d, anchor, last_position, last_velocity, last_size, dt, pred_cov, cfg, last_area, last_circ, template_color)
         if gated:
             continue
-        if score > best_score:
-            best_score = score
-            best = d
-    if best is None:
+        scored.append((score, d))
+    if not scored:
         # All gated: no trustworthy match -> return None (coast) instead of
         # forcing closest-distractor lock.
         return None
+    scored.sort(key=lambda t: t[0], reverse=True)
+    best_score, best = scored[0]
+    # Switch hysteresis: incumbent (nearest to prev_center) keeps lock unless
+    # the challenger beats it by switch_margin. Prevents flicker on crossings.
+    try:
+        if prev_center is not None and len(scored) > 1:
+            incumbent = min(scored, key=lambda t: float(np.hypot(float(t[1].center[0]) - float(prev_center[0]), float(t[1].center[1]) - float(prev_center[1]))))
+            if incumbent[1] is not best:
+                margin = float(getattr(cfg, "switch_margin", 0.0) or 0.0)
+                if float(best_score) - float(incumbent[0]) < margin:
+                    return incumbent[1]
+    except Exception:
+        pass
     return best
 
 
@@ -338,7 +381,8 @@ def associate_multi(
     Args:
       detections: candidate boxes this frame.
       tracks: list of dicts with keys: predicted (x,y), pred_cov (2x2|None),
-        last_position, last_velocity, last_size, last_area, last_circ.
+        last_position, last_velocity, last_size, last_area, last_circ,
+        template_color (per-track designated tint or None).
     Returns:
       {track_idx: Detection|None}. Each detection used at most once.
       Prevents two tracks stealing the same box (identity switch).
@@ -360,6 +404,7 @@ def associate_multi(
                     tr.get("last_position"), tr.get("last_velocity"),
                     tr.get("last_size"), dt, tr.get("pred_cov"), cfg,
                     tr.get("last_area"), tr.get("last_circ"),
+                    tr.get("template_color"),
                 )
             except Exception:
                 continue

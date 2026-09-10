@@ -319,6 +319,13 @@ class TickMixin:
                             self._last_lock_quality = float(getattr(res, "lock_quality", 0.0) or 0.0)
                         except Exception:
                             pass
+                        try:
+                            self._last_locked_track_id = getattr(res, "locked_track_id", None)
+                            self._last_id_switches = int(getattr(res, "id_switches", 0) or 0)
+                            self._last_n_tracks = int(getattr(res, "n_tracks", 0) or 0)
+                            self._last_designated_target_id = getattr(res, "designated_target_id", getattr(self, "_target_beacon_id", 0))
+                        except Exception:
+                            pass
                         # Single source: pipeline owns PID + focus-aware search.
                         # Legacy GUI-side _search_pattern bypass removed.
                         move_pan = float(res.d_pan)
@@ -398,6 +405,8 @@ class TickMixin:
                             lock_quality=float(getattr(self, "_last_lock_quality", 0.0) or 0.0),
                             detection_pos_var=det_pos_var,
                             all_detections=all_dets,
+                            track_id=getattr(self, "_last_locked_track_id", None),
+                            designated_target_id=int(getattr(self, "_target_beacon_id", 0)),
                         )
             except Exception:
                 pass
