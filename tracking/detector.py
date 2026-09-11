@@ -11,10 +11,6 @@
 from __future__ import annotations
 
 import os as _os
-
-# Fix for Windows DLL clash: image lib loads its own OpenMP runtime which can
-# break the model lib (c10.dll 1114) if image lib is imported first.
-# Setting this before any heavy import allows both to coexist.
 _os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 _os.environ.setdefault("KMP_BLOCKTIME", "0")
 _os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -44,7 +40,7 @@ class Detection:
     height: float
     confidence: float  # [0, 1] calibrated where possible
     class_id: int = 0  # 0 = beacon (single class)
-    latency_ms: float = 0.0  # detector time for this frame (diagnostics)
+    latency_ms: float = 0.0  # detector time for this frame     (diagnostics)
     # Phase-1 robustness fields (optional, backward compatible):
     pos_var: float = 9.0  # measurement variance px^2 for KF R (from conf/size)
     source: str = "unknown"  # "yolo" | "classical" | "fused"
