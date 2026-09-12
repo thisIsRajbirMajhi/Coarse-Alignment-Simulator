@@ -10,8 +10,8 @@ import numpy as np
 
 from common.rng import get_rng
 
-from disturbance.constants import CAMERA_JITTER_LIMITS
-from disturbance.dt_provider import DtProvider
+from disturbance.core.constants import CAMERA_JITTER_LIMITS
+from disturbance.core.dt_provider import DtProvider
 
 
 def _resolve_jitter_amp(intensity: float | None, jitter_px: float | None) -> float | None:

@@ -6,9 +6,9 @@ import numpy as np
 
 from common.rng import get_rng
 
-from disturbance.constants import CAMERA_TAU
-from disturbance.dt_provider import DtProvider
-from disturbance.state import _cam_motion_state_global
+from disturbance.core.constants import CAMERA_TAU
+from disturbance.core.dt_provider import DtProvider
+from disturbance.core.state import _cam_motion_state_global
 
 def apply_camera_motion(pan: float, tilt: float, intensity: float, dt: float | None = None, rng: np.random.Generator | None = None) -> tuple[float, float]:
     """

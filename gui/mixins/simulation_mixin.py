@@ -44,9 +44,9 @@ class SimulationMixin:
             seed_global(int(cfg.seed) if cfg.seed is not None else None)
             self.rng = get_rng(None, int(cfg.seed) if cfg.seed is not None else None)
             try:
-                from disturbance.state import reset_disturbance_state
+                from disturbance.core.state import reset_disturbance_state
                 reset_disturbance_state()
-                from disturbance.image_noise import clear_hot_pixel_cache
+                from disturbance.sensor.image_noise import clear_hot_pixel_cache
                 clear_hot_pixel_cache()
             except Exception:
                 pass

@@ -166,7 +166,7 @@ class StateMixin:
                             w.blockSignals(False)
             elif section == "disturbances" and snap and ("turbulence" in snap or "platform_profile" in snap):
                 try:
-                    from disturbance.config import DisturbanceConfig as _DCsnap
+                    from disturbance.core.config import DisturbanceConfig as _DCsnap
                     cfg = _DCsnap.from_dict(snap).validate()
                     self.disturbance_config = cfg
                     if hasattr(self, "disturbances_panel"):

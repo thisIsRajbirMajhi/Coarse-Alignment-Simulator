@@ -20,7 +20,7 @@ from PyQt5.QtWidgets import QMainWindow, QStatusBar
 
 from camera.config import CameraConfig
 from control.config import ControllerConfig
-from disturbance.config import DisturbanceConfig
+from disturbance.core.config import DisturbanceConfig
 from environment.config import EnvironmentConfig
 from gui.styles import APP_STYLE, FOV_SIZE, SCENE_SIZE, TICK_MS
 from target.config import MultiBeaconConfig

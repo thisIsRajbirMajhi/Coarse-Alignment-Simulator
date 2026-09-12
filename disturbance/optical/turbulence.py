@@ -7,10 +7,10 @@ import numpy as np
 
 from common.rng import get_rng
 
-from disturbance.constants import INNER_SCALE, OUTER_SCALE, RYTOV_CAP, TILT_TAU, WAVELENGTH
-from disturbance.dt_provider import DtProvider
-from disturbance.helpers import r0_from_intensity, rytov_variance
-from disturbance.state import _turb_state
+from disturbance.core.constants import INNER_SCALE, OUTER_SCALE, RYTOV_CAP, TILT_TAU, WAVELENGTH
+from disturbance.core.dt_provider import DtProvider
+from disturbance.core.helpers import r0_from_intensity, rytov_variance
+from disturbance.core.state import _turb_state
 
 def _kolmogorov_displacement(
     h: int,
@@ -62,6 +62,7 @@ def apply_turbulence(
     wavelength: float = WAVELENGTH,
     dt: float | None = None,
     rng: np.random.Generator | None = None,
+    state=None,
 ) -> np.ndarray:
     """
     Kolmogorov + Rytov turbulence — now dt-aware.
@@ -86,7 +87,8 @@ def apply_turbulence(
     h, w = frame.shape[:2]
 
     # dt — single source via DtProvider (was 3× duplicated)
-    dt = DtProvider.resolve(_turb_state, dt)
+    state = _turb_state if state is None else state
+    dt = DtProvider.resolve(state, dt)
 
     r0 = r0_from_intensity(float(intensity), float(wavelength))
     sigma_R2 = rytov_variance(float(intensity))
@@ -100,8 +102,8 @@ def apply_turbulence(
     blurred = cv2.GaussianBlur(frame, (ksize, ksize), sigmaX=sigma_blur)
 
     # 2) Warp field
-    prev_dx = _turb_state.get("dx")
-    prev_dy = _turb_state.get("dy")
+    prev_dx = state.get("dx")
+    prev_dy = state.get("dy")
     _rng = get_rng(rng)
     if h * w > 250_000:
         h2, w2 = max(32, h // 2), max(32, w // 2)
@@ -121,7 +123,7 @@ def apply_turbulence(
         dy = alpha * dy_shifted + (1 - alpha) * dy_new
     else:
         dx, dy = dx_new, dy_new
-    _turb_state["dx"], _turb_state["dy"] = dx, dy
+    state["dx"], state["dy"] = dx, dy
 
     xs, ys = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
     map_x = xs + dx

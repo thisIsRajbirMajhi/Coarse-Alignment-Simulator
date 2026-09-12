@@ -17,7 +17,8 @@ from common.rng import get_rng, seed_global
 from control.config import ControllerConfig
 from control.controller import PIDController
 from disturbance import disturbances as dist
-from disturbance.config import DisturbanceConfig
+from disturbance.core.config import DisturbanceConfig
+from disturbance.core import DisturbanceContext, DisturbancePipeline
 from environment.config import EnvironmentConfig
 from environment.scene import Scene
 from target.config import MultiBeaconConfig
@@ -122,6 +123,10 @@ class HeadlessSimulation:
         self._last_pipeline_vel: tuple[float, float] = (0.0, 0.0)
 
         self._build_simulation()
+        self._disturbance_pipeline = DisturbancePipeline(
+            DisturbanceContext(self.disturbance_config, rng=self.rng, dt=self.dt),
+            bounds=self._scene_size,
+        )
 
         self._start_time = None
         self._last_tick_time: float | None = None
@@ -233,10 +238,13 @@ class HeadlessSimulation:
         self._platform_motion_state.clear()
         self._jitter_state.clear()
         try:
-            from disturbance.state import reset_disturbance_state
+            from disturbance.core.state import reset_disturbance_state
             reset_disturbance_state()
         except Exception: pass
         self._build_simulation()
+        self._disturbance_pipeline.reset()
+        self._disturbance_pipeline.context.config = self.disturbance_config
+        self._disturbance_pipeline.context.rng = self.rng
         self._last_tick_time = None
         return self.get_observation()
 
@@ -303,26 +311,11 @@ class HeadlessSimulation:
                 return full, None
 
         scene_frame = None
-        pan_a, tilt_a = dist.apply_platform_vibration(self.camera.pan, self.camera.tilt, int(getattr(dc, "vibration", 0)), dt=dt_eff, rng=self.rng)
-        if float(getattr(dc, "platform_speed", 0.0)) > 1e-9:
-            pan_b, tilt_b = dist.apply_platform_motion(
-                pan_a, tilt_a,
-                profile=str(getattr(dc, "platform_profile", "Linear")),
-                speed_px_per_frame=float(getattr(dc, "platform_speed", 0.0)),
-                dt=dt_eff,
-                state=self._platform_motion_state,
-                bounds=self._scene_size,
-                rng=self.rng,
-            )
-        else:
-            pan_b, tilt_b = pan_a, tilt_a
-        if float(getattr(dc, "camera_jitter", 0.0)) > 1e-9:
-            if not hasattr(self, "_jitter_state") or not isinstance(getattr(self, "_jitter_state", None), dict):
-                self._jitter_state = {}
-            pan_c, tilt_c = dist.apply_camera_jitter_with_state(pan_b, tilt_b, jitter_px=float(getattr(dc, "camera_jitter")), state=self._jitter_state, dt=dt_eff, rng=self.rng)
-        else:
-            pan_c, tilt_c = pan_b, tilt_b
-        pan_dist, tilt_dist = dist.apply_camera_motion_with_state(pan_c, tilt_c, int(getattr(dc, "camera_motion", 0)), self._camera_drift_state, dt=dt_eff, rng=self.rng)
+        self._disturbance_pipeline.context.config = dc
+        self._disturbance_pipeline.context.rng = self.rng
+        pan_dist, tilt_dist = self._disturbance_pipeline.disturb_camera_pose(
+            self.camera.pan, self.camera.tilt, dt_eff,
+        )
 
         # Apply disturbed position — preserve servo latency queue (no wipe).
         try:
@@ -356,7 +349,7 @@ class HeadlessSimulation:
 
         try:
             from simulation.fov_pipeline import apply_post_noise as _post
-            fov_frame = _post(fov_frame, dc, dt_eff, self.rng)
+            fov_frame = _post(fov_frame, dc, dt_eff, self.rng, self._disturbance_pipeline)
         except Exception:
             fov_frame = dist.apply_turbulence(fov_frame, int(getattr(dc, "turbulence", 0)), dt=dt_eff, rng=self.rng)
 

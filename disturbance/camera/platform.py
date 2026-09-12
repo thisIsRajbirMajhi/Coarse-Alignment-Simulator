@@ -8,8 +8,8 @@ import numpy as np
 
 from common.rng import get_rng
 
-from disturbance.constants import PLATFORM_MAX_PX_PER_FRAME, PLATFORM_PROFILE_MAP
-from disturbance.dt_provider import DtProvider
+from disturbance.core.constants import PLATFORM_MAX_PX_PER_FRAME, PLATFORM_PROFILE_MAP
+from disturbance.core.dt_provider import DtProvider
 
 # Internal defaults for profile geometry
 _DEFAULT_ORBIT_RADIUS = 90.0

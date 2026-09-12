@@ -402,7 +402,7 @@ class UIMixin:
         # ── Disturbances Tab — Modular (DisturbancesPanel, full spec) ──
         # Image Noise (S&P 10%, Gaussian, Poisson multi) + Max StdDev 20+User + Jitter ±20 + Atmosphere 4 presets + Platform 7 profiles
         try:
-            from disturbance.config import DisturbanceConfig as _DC2
+            from disturbance.core.config import DisturbanceConfig as _DC2
             init_dc = getattr(self, "disturbance_config", _DC2().validate())
         except Exception:
             init_dc = None

@@ -6,7 +6,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from disturbance.constants import ATMOSPHERIC_PRESET_MAP, ATMOSPHERIC_PRESETS
+from disturbance.core.constants import ATMOSPHERIC_PRESET_MAP, ATMOSPHERIC_PRESETS
 
 # Depth weighting for fog/haze — bottom (horizon) 1.6x denser than top (zenith)
 _FOG_DEPTH_GAIN_BOTTOM = 1.60
@@ -145,6 +145,11 @@ def _apply_rain_streaks(frame: np.ndarray, intensity: float = 0.22, rng: np.rand
     # Light overall blend to make streaks translucent
     out = cv2.addWeighted(frame, 1 - intensity * 0.35, out, intensity * 0.35, 0)
     return out
+
+
+def apply_atmospheric(frame, **kwargs):
+    """Canonical environment entry point for atmospheric image effects."""
+    return apply_atmospheric_disturbance(frame, **kwargs)
 
 
 def apply_atmospheric_disturbance(

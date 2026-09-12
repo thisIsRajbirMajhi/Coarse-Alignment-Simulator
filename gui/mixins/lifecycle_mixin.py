@@ -64,7 +64,7 @@ class LifecycleMixin:
                 except Exception: pass
             # Disturbances to 0 — full spec reset (all new modules to Clear/Off)
             try:
-                from disturbance.config import DisturbanceConfig as _DCReset
+                from disturbance.core.config import DisturbanceConfig as _DCReset
                 _dc_default = _DCReset().validate()
                 self.disturbance_config = _dc_default
                 if hasattr(self, "disturbances_panel") and hasattr(self.disturbances_panel, "set_config"):

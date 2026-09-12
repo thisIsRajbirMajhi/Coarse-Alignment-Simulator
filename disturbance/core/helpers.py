@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from disturbance.constants import R0_0, R0_BETA, R0_MAX, R0_MIN
+from disturbance.core.constants import R0_0, R0_BETA, R0_MAX, R0_MIN
 
 def r0_from_intensity(intensity: float, wavelength: float = 1.55e-6) -> float:
     """

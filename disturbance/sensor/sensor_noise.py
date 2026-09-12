@@ -4,7 +4,7 @@ import numpy as np
 
 from common.rng import get_rng
 
-from disturbance.constants import ELECTRONS_PER_DN, READ_SIGMA_BASE, T_EXP
+from disturbance.core.constants import ELECTRONS_PER_DN, READ_SIGMA_BASE, T_EXP
 
 def apply_sensor_noise(
     frame: np.ndarray,

@@ -16,8 +16,8 @@ from PyQt5.QtWidgets import (
     QSlider,
 )
 
-from disturbance.config import DisturbanceConfig
-from disturbance.constants import (
+from disturbance.core.config import DisturbanceConfig
+from disturbance.core.constants import (
     ATMOSPHERIC_PRESETS,
     PLATFORM_PROFILES,
 )
@@ -344,7 +344,7 @@ class DisturbancesPanel(BaseConfigPanel):
         self.slider_atmo_brightness.setToolTip("User Defined only" if not is_user else "Brightness reduction 0..100%")
 
     def _on_atmo_preset_changed(self, preset: str):
-        from disturbance.constants import ATMOSPHERIC_PRESET_MAP
+        from disturbance.core.constants import ATMOSPHERIC_PRESET_MAP
         if preset in ATMOSPHERIC_PRESET_MAP:
             mp = ATMOSPHERIC_PRESET_MAP[preset]
             if preset != "User Defined":
@@ -427,7 +427,7 @@ class DisturbancesPanel(BaseConfigPanel):
             else:
                 self.combo_atmospheric.setCurrentText(str(cfg.atmospheric_preset))
             if str(cfg.atmospheric_preset) != "User Defined":
-                from disturbance.constants import ATMOSPHERIC_PRESET_MAP as _AMap
+                from disturbance.core.constants import ATMOSPHERIC_PRESET_MAP as _AMap
                 mp = _AMap.get(str(cfg.atmospheric_preset), {})
                 self.slider_atmo_contrast.setValue(int(mp.get("contrast", int(cfg.atmospheric_contrast))))
                 self.label_atmo_contrast_val.setText(f"{int(mp.get('contrast', int(cfg.atmospheric_contrast)))}%")

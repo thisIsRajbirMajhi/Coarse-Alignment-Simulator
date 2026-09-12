@@ -4,13 +4,26 @@ import time
 import numpy as np
 import cv2  # noqa
 from PyQt5.QtCore import Qt  # noqa
-from disturbance import disturbances as dist  # noqa
+from disturbance.core import DisturbanceContext, DisturbancePipeline
 from gui.core.renderer import Renderer, ScreenSpec  # noqa
 from gui.styles import TICK_MS  # noqa
 
 
 class TickMixin:
     """Mixin: Tick pipeline (beacon_tracker removed — open-loop)."""
+
+    def _get_disturbance_pipeline(self, config, dt: float, rng):
+        pipeline = getattr(self, "_disturbance_pipeline", None)
+        if pipeline is None:
+            pipeline = DisturbancePipeline(
+                DisturbanceContext(config, rng=rng, dt=dt),
+                bounds=getattr(self, "_scene_size", None),
+            )
+            self._disturbance_pipeline = pipeline
+        pipeline.context.config = config
+        pipeline.context.rng = rng
+        pipeline.context.dt = dt
+        return pipeline
 
     def _tick(self):
         frame_start=time.time()
@@ -66,7 +79,7 @@ class TickMixin:
             dc = None
         if dc is None and hasattr(self, "sliders") and self.sliders:
             try:
-                from disturbance.config import DisturbanceConfig as _FallbackDC
+                from disturbance.core.config import DisturbanceConfig as _FallbackDC
                 dc = _FallbackDC(
                     turbulence=int(self.sliders["Turbulence"].value()) if "Turbulence" in self.sliders else 0,
                     vibration=int(self.sliders["Vibration"].value()) if "Vibration" in self.sliders else 0,
@@ -108,31 +121,9 @@ class TickMixin:
 
         _rng = getattr(self, "rng", None)
         if dc is not None:
-            if not hasattr(self, "_platform_motion_state") or self._platform_motion_state is None:
-                self._platform_motion_state = {}
-            if not hasattr(self, "_camera_drift_state") or self._camera_drift_state is None:
-                self._camera_drift_state = {}
-            if not hasattr(self, "_jitter_state") or self._jitter_state is None:
-                self._jitter_state = {}
-            pan_a, tilt_a = dist.apply_platform_vibration(self.camera.pan, self.camera.tilt, int(getattr(dc, "vibration", 0)), dt=dt_eff, rng=_rng)
-            if float(getattr(dc, "platform_speed", 0.0)) > 1e-9:
-                pan_b, tilt_b = dist.apply_platform_motion(
-                    pan_a, tilt_a,
-                    profile=str(getattr(dc, "platform_profile", "Linear")),
-                    speed_px_per_frame=float(getattr(dc, "platform_speed", 0.0)),
-                    dt=dt_eff,
-                    state=self._platform_motion_state,
-                    bounds=self._scene_size,
-                    rng=_rng,
-                )
-            else:
-                pan_b, tilt_b = pan_a, tilt_a
-            if float(getattr(dc, "camera_jitter", 0.0)) > 1e-9:
-                pan_c, tilt_c = dist.apply_camera_jitter_with_state(pan_b, tilt_b, float(getattr(dc, "camera_jitter")), state=getattr(self, "_jitter_state", None), dt=dt_eff, rng=_rng)
-            else:
-                pan_c, tilt_c = pan_b, tilt_b
-            pan_dist, tilt_dist = dist.apply_camera_motion_with_state(
-                pan_c, tilt_c, int(getattr(dc, "camera_motion", 0)), self._camera_drift_state, dt=dt_eff, rng=_rng
+            disturbance_pipeline = self._get_disturbance_pipeline(dc, dt_eff, _rng)
+            pan_dist, tilt_dist = disturbance_pipeline.disturb_camera_pose(
+                self.camera.pan, self.camera.tilt, dt_eff,
             )
             # Apply disturbed pan/tilt to camera — respects all camera params and scene bounds
             try:
@@ -163,37 +154,19 @@ class TickMixin:
             else:
                 fov_frame = self.camera.capture(scene_frame)
                 fov_capture_x0, fov_capture_y0 = None, None
-            fov_frame = dist.apply_turbulence(fov_frame, int(getattr(dc, "turbulence", 0)), dt=dt_eff, rng=_rng)
-            preset = str(getattr(dc, "atmospheric_preset", "Clear"))
-            contrast = float(getattr(dc, "atmospheric_contrast", 0.0))
-            brightness = float(getattr(dc, "atmospheric_brightness", 0.0))
-            if preset != "Clear" or contrast > 1e-9 or brightness > 1e-9:
-                fov_frame = dist.apply_atmospheric_disturbance(
-                    fov_frame, preset=preset, contrast_reduction=contrast, brightness_reduction=brightness, rng=_rng
-                )
-            _sensor_on = int(getattr(dc, "noise", 0)) > 0
-            if _sensor_on:
-                fov_frame = dist.apply_sensor_noise(fov_frame, int(getattr(dc, "noise")), rng=_rng)
-            if bool(getattr(dc, "enable_salt_pepper", False) or getattr(dc, "enable_gaussian", False) or getattr(dc, "enable_poisson", False)):
-                _img_p = bool(getattr(dc, "enable_poisson", False)) and not _sensor_on
-                _img_g = bool(getattr(dc, "enable_gaussian", False)) and not _sensor_on
-                if bool(getattr(dc, "enable_salt_pepper", False)) or _img_g or _img_p:
-                    fov_frame = dist.apply_image_noise(
-                        fov_frame,
-                        enable_salt_pepper=bool(getattr(dc, "enable_salt_pepper", False)),
-                        enable_gaussian=_img_g,
-                        enable_poisson=_img_p,
-                        salt_pepper_density=float(getattr(dc, "salt_pepper_density", 0.10)),
-                        salt_pepper_ratio=float(getattr(dc, "salt_pepper_ratio", 0.50)),
-                        gaussian_sigma=float(getattr(dc, "gaussian_sigma", 8.0)),
-                        gaussian_sigma_max=float(getattr(dc, "gaussian_sigma_max", 20.0)),
-                        poisson_scale=float(getattr(dc, "poisson_scale", 1.0)),
-                        poisson_peak=float(getattr(dc, "poisson_peak", 100.0)),
-                        rng=_rng,
-                    )
+            fov_frame = disturbance_pipeline.apply_frame(fov_frame)
         else:
-            pan_vib, tilt_vib = dist.apply_platform_vibration(self.camera.pan, self.camera.tilt, self.sliders["Vibration"].value(), dt=dt_eff, rng=_rng)
-            pan_dist, tilt_dist = dist.apply_camera_motion_with_state(pan_vib, tilt_vib, self.sliders["Camera Motion"].value(), self._camera_drift_state, dt=dt_eff, rng=_rng)
+            from disturbance.core.config import DisturbanceConfig as _FallbackDC
+            dc = _FallbackDC(
+                vibration=self.sliders["Vibration"].value(),
+                camera_motion=self.sliders["Camera Motion"].value(),
+                turbulence=self.sliders["Turbulence"].value(),
+                noise=self.sliders["Noise"].value(),
+            ).validate()
+            disturbance_pipeline = self._get_disturbance_pipeline(dc, dt_eff, _rng)
+            pan_dist, tilt_dist = disturbance_pipeline.disturb_camera_pose(
+                self.camera.pan, self.camera.tilt, dt_eff,
+            )
             try:
                 try:
                     self.camera.apply_disturbance(float(pan_dist), float(tilt_dist))
@@ -222,8 +195,7 @@ class TickMixin:
             else:
                 fov_frame = self.camera.capture(scene_frame)
                 fov_capture_x0, fov_capture_y0 = None, None
-            fov_frame = dist.apply_turbulence(fov_frame, self.sliders["Turbulence"].value(), dt=dt_eff, rng=_rng)
-            fov_frame = dist.apply_sensor_noise(fov_frame, self.sliders["Noise"].value(), rng=_rng)
+            fov_frame = disturbance_pipeline.apply_frame(fov_frame)
         # Closed-loop tracking (Phase 7) + Benchmark-2 video mode + metrics log.
         # GT is used ONLY for logger scoring, never for control.
         all_dets: list[dict] = []

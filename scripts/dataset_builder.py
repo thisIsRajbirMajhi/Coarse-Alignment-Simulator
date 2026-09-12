@@ -25,7 +25,7 @@ import cv2
 import numpy as np
 
 from camera.config import CameraConfig
-from disturbance.config import DisturbanceConfig
+from disturbance.core.config import DisturbanceConfig
 from environment.config import EnvironmentConfig
 from simulation.headless import HeadlessSimulation
 from target.config import MultiBeaconConfig

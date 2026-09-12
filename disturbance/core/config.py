@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 from common.config_base import BaseValidatedConfig, clip_field
-from disturbance.constants import (
+from disturbance.core.constants import (
     ATMOSPHERIC_BRIGHTNESS_LIMITS,
     ATMOSPHERIC_CONTRAST_LIMITS,
     ATMOSPHERIC_DEFAULT_PRESET,
@@ -83,6 +83,53 @@ DISTURBANCE_DEFAULTS: dict = {
 
 
 @dataclass
+class GlobalDisturbanceConfig:
+    enabled: bool = True
+    seed: int | None = None
+
+
+@dataclass
+class EnvironmentDisturbanceConfig:
+    atmospheric_preset: str = ATMOSPHERIC_DEFAULT_PRESET
+    atmospheric_contrast: float = 0.0
+    atmospheric_brightness: float = 0.0
+
+
+@dataclass
+class TargetDisturbanceConfig:
+    enabled: bool = True
+
+
+@dataclass
+class CameraDisturbanceConfig:
+    vibration: int = 0
+    camera_motion: int = 0
+    camera_jitter: float = 0.0
+    platform_profile: str = PLATFORM_DEFAULT_PROFILE
+    platform_speed: float = 0.0
+
+
+@dataclass
+class OpticalDisturbanceConfig:
+    turbulence: int = 0
+
+
+@dataclass
+class SensorDisturbanceConfig:
+    noise: int = 0
+    enable_salt_pepper: bool = False
+    enable_gaussian: bool = False
+    enable_poisson: bool = False
+    salt_pepper_density: float = SALT_PEPPER_DEFAULT_DENSITY
+    salt_pepper_ratio: float = SALT_PEPPER_RATIO_DEFAULT
+    gaussian_sigma: float = 8.0
+    gaussian_sigma_max: float = 20.0
+    poisson_scale: float = POISSON_SCALE_DEFAULT
+    poisson_peak: float = POISSON_PEAK_DEFAULT
+    max_noise_std: float = 20.0
+
+
+@dataclass
 class DisturbanceConfig(BaseValidatedConfig):
     """
     Unified config for Disturbance & Noise panel.
@@ -99,6 +146,15 @@ class DisturbanceConfig(BaseValidatedConfig):
 
     LIMITS = DISTURBANCE_LIMITS
     DEFAULTS = DISTURBANCE_DEFAULTS
+
+    # Ownership-aligned configuration. Legacy scalar fields below remain the
+    # serialization and GUI compatibility surface during migration.
+    global_: GlobalDisturbanceConfig = field(default_factory=GlobalDisturbanceConfig)
+    environment: EnvironmentDisturbanceConfig = field(default_factory=EnvironmentDisturbanceConfig)
+    target: TargetDisturbanceConfig = field(default_factory=TargetDisturbanceConfig)
+    camera: CameraDisturbanceConfig = field(default_factory=CameraDisturbanceConfig)
+    optical: OpticalDisturbanceConfig = field(default_factory=OpticalDisturbanceConfig)
+    sensor: SensorDisturbanceConfig = field(default_factory=SensorDisturbanceConfig)
 
     # Legacy sliders 0..10
     turbulence: int = DISTURBANCE_DEFAULTS["turbulence"]
@@ -131,6 +187,30 @@ class DisturbanceConfig(BaseValidatedConfig):
     platform_speed: float = DISTURBANCE_DEFAULTS["platform_speed"]
 
     def validate(self) -> "DisturbanceConfig":
+        # Accept ownership-aligned construction while retaining legacy keyword
+        # compatibility. Explicit nested values override untouched old defaults.
+        if self.turbulence == DISTURBANCE_DEFAULTS["turbulence"]:
+            self.turbulence = self.optical.turbulence
+        if self.vibration == DISTURBANCE_DEFAULTS["vibration"]:
+            self.vibration = self.camera.vibration
+        if self.camera_motion == DISTURBANCE_DEFAULTS["camera_motion"]:
+            self.camera_motion = self.camera.camera_motion
+        if self.camera_jitter == DISTURBANCE_DEFAULTS["camera_jitter"]:
+            self.camera_jitter = self.camera.camera_jitter
+        if self.platform_profile == DISTURBANCE_DEFAULTS["platform_profile"]:
+            self.platform_profile = self.camera.platform_profile
+        if self.platform_speed == DISTURBANCE_DEFAULTS["platform_speed"]:
+            self.platform_speed = self.camera.platform_speed
+        if self.atmospheric_preset == DISTURBANCE_DEFAULTS["atmospheric_preset"]:
+            self.atmospheric_preset = self.environment.atmospheric_preset
+        if self.atmospheric_contrast == DISTURBANCE_DEFAULTS["atmospheric_contrast"]:
+            self.atmospheric_contrast = self.environment.atmospheric_contrast
+        if self.atmospheric_brightness == DISTURBANCE_DEFAULTS["atmospheric_brightness"]:
+            self.atmospheric_brightness = self.environment.atmospheric_brightness
+        for name in ("noise", "enable_salt_pepper", "enable_gaussian", "enable_poisson", "salt_pepper_density", "salt_pepper_ratio", "gaussian_sigma", "gaussian_sigma_max", "poisson_scale", "poisson_peak", "max_noise_std"):
+            if getattr(self, name) == DISTURBANCE_DEFAULTS[name]:
+                setattr(self, name, getattr(self.sensor, name))
+
         # legacy 0..10 ints
         self.turbulence = int(clip_field(self.turbulence, *DISTURBANCE_LIMITS["turbulence"]))
         self.vibration = int(clip_field(self.vibration, *DISTURBANCE_LIMITS["vibration"]))
@@ -185,7 +265,7 @@ class DisturbanceConfig(BaseValidatedConfig):
         # (User Defined keeps user values)
         if self.atmospheric_preset != "User Defined":
             try:
-                from disturbance.constants import ATMOSPHERIC_PRESET_MAP as _AMap2
+                from disturbance.core.constants import ATMOSPHERIC_PRESET_MAP as _AMap2
                 mp = _AMap2.get(self.atmospheric_preset, {})
                 preset_c = float(mp.get("contrast", 0.0))
                 preset_b = float(mp.get("brightness", 0.0))
@@ -221,7 +301,7 @@ class DisturbanceConfig(BaseValidatedConfig):
                     break
         if found_prof is None:
             # try internal map
-            from disturbance.constants import PLATFORM_PROFILE_MAP as _map
+            from disturbance.core.constants import PLATFORM_PROFILE_MAP as _map
             if prof.lower() in _map.values():
                 # reverse lookup
                 for k, v in _map.items():
@@ -230,6 +310,28 @@ class DisturbanceConfig(BaseValidatedConfig):
                         break
         self.platform_profile = found_prof if found_prof is not None else PLATFORM_DEFAULT_PROFILE
         self.platform_speed = float(clip_field(self.platform_speed, 0.0, 20.0))
+
+        # Keep the ownership-aligned view synchronized with the legacy view.
+        self.optical.turbulence = self.turbulence
+        self.camera.vibration = self.vibration
+        self.camera.camera_motion = self.camera_motion
+        self.camera.camera_jitter = self.camera_jitter
+        self.camera.platform_profile = self.platform_profile
+        self.camera.platform_speed = self.platform_speed
+        self.environment.atmospheric_preset = self.atmospheric_preset
+        self.environment.atmospheric_contrast = self.atmospheric_contrast
+        self.environment.atmospheric_brightness = self.atmospheric_brightness
+        self.sensor.noise = self.noise
+        self.sensor.enable_salt_pepper = self.enable_salt_pepper
+        self.sensor.enable_gaussian = self.enable_gaussian
+        self.sensor.enable_poisson = self.enable_poisson
+        self.sensor.salt_pepper_density = self.salt_pepper_density
+        self.sensor.salt_pepper_ratio = self.salt_pepper_ratio
+        self.sensor.gaussian_sigma = self.gaussian_sigma
+        self.sensor.gaussian_sigma_max = self.gaussian_sigma_max
+        self.sensor.poisson_scale = self.poisson_scale
+        self.sensor.poisson_peak = self.poisson_peak
+        self.sensor.max_noise_std = self.max_noise_std
         return self
 
     def to_dict(self) -> dict:
@@ -237,13 +339,22 @@ class DisturbanceConfig(BaseValidatedConfig):
 
     @classmethod
     def from_dict(cls, data: dict) -> "DisturbanceConfig":
+        data = dict(data)
+        nested = {
+            "global_": GlobalDisturbanceConfig(**data.pop("global_", {})),
+            "environment": EnvironmentDisturbanceConfig(**data.pop("environment", {})),
+            "target": TargetDisturbanceConfig(**data.pop("target", {})),
+            "camera": CameraDisturbanceConfig(**data.pop("camera", {})),
+            "optical": OpticalDisturbanceConfig(**data.pop("optical", {})),
+            "sensor": SensorDisturbanceConfig(**data.pop("sensor", {})),
+        }
         allowed = set(DISTURBANCE_DEFAULTS.keys()) | set(DISTURBANCE_LIMITS.keys()) | {"atmospheric_preset", "platform_profile", "enable_salt_pepper", "enable_gaussian", "enable_poisson"}
         unknown = [k for k in data.keys() if k not in allowed]
         if unknown:
             import logging
             logging.getLogger("disturbance").warning(f"Ignoring unknown disturbance keys: {unknown}")
         known = {k: v for k, v in data.items() if k in allowed}
-        merged = {**DISTURBANCE_DEFAULTS, **known}
+        merged = {**DISTURBANCE_DEFAULTS, **known, **nested}
         # ensure all dataclass fields covered
         allowed = set(cls.__dataclass_fields__.keys())
         filtered = {k: v for k, v in merged.items() if k in allowed}

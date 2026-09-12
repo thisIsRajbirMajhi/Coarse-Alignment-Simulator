@@ -8,7 +8,7 @@ import numpy as np
 
 from common.rng import get_rng
 
-from disturbance.constants import (
+from disturbance.core.constants import (
     GAUSSIAN_SIGMA_MAX_USER,
     SALT_PEPPER_LIMITS,
 )
@@ -23,7 +23,7 @@ def clear_hot_pixel_cache() -> None:
     _HOT_PIXEL_CACHE.clear()
 
 
-def _get_persistent_hot_pixels(h: int, w: int, density: float, salt_vs_pepper: float, rng: np.random.Generator | None = None, seed: int | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _get_persistent_hot_pixels(h: int, w: int, density: float, salt_vs_pepper: float, rng: np.random.Generator | None = None, seed: int | None = None, defect_state: dict | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Get or create persistent hot pixel map (keyed by size+density+seed)."""
     _rng = get_rng(rng, seed)
     try:
@@ -31,7 +31,8 @@ def _get_persistent_hot_pixels(h: int, w: int, density: float, salt_vs_pepper: f
     except Exception:
         seed_tok = -1
     key = (h, w, round(float(density), 5), round(float(salt_vs_pepper), 3), seed_tok)
-    if key not in _HOT_PIXEL_CACHE:
+    cache = _HOT_PIXEL_CACHE if defect_state is None else defect_state
+    if key not in cache:
         # Use 0.8 * density as persistent pool (slightly fewer than transient total)
         persist_density = float(density) * _HOT_PIXEL_PERSISTENT_RATIO * 0.5
         n = int(h * w * persist_density)
@@ -39,8 +40,8 @@ def _get_persistent_hot_pixels(h: int, w: int, density: float, salt_vs_pepper: f
         ys = _rng.integers(0, h, size=n)
         xs = _rng.integers(0, w, size=n)
         is_salt = _rng.random(n) < float(salt_vs_pepper)
-        _HOT_PIXEL_CACHE[key] = (ys, xs, is_salt)
-    return _HOT_PIXEL_CACHE[key]
+        cache[key] = (ys, xs, is_salt)
+    return cache[key]
 
 
 def _clip_frame(frame: np.ndarray) -> np.ndarray:
@@ -54,6 +55,7 @@ def apply_salt_pepper(
     salt_vs_pepper: float = 0.5,
     persistent: bool | None = None,
     rng: np.random.Generator | None = None,
+    defect_state: dict | None = None,
 ) -> np.ndarray:
     """
     Salt & Pepper — fixed hot pixels + transient speckles.
@@ -91,7 +93,7 @@ def apply_salt_pepper(
     # Persistent hot pixels — same positions for this (h,w)
     if persist_dens > 1e-9:
         # Scale persistent cache to requested density: subsample cache
-        cache_ys, cache_xs, cache_is_salt = _get_persistent_hot_pixels(h, w, density, float(salt_vs_pepper), rng=_rng)
+        cache_ys, cache_xs, cache_is_salt = _get_persistent_hot_pixels(h, w, density, float(salt_vs_pepper), rng=_rng, defect_state=defect_state)
         # Adjust count to persist_dens
         want = int(h * w * float(persist_dens))
         if want > 0:
@@ -244,6 +246,7 @@ def apply_image_noise(
     # Backward-compat intensity-based shortcut (0..10 controls overall mix)
     intensity: float | None = None,
     rng: np.random.Generator | None = None,
+    defect_state: dict | None = None,
 ) -> np.ndarray:
     """
     Unified image noise — physical order: Poisson (shot) -> Gaussian (read) -> S&P (defects).
@@ -296,5 +299,5 @@ def apply_image_noise(
     if enable_gaussian:
         out = apply_gaussian_noise(out, sigma=float(gaussian_sigma), max_sigma=float(gaussian_sigma_max), rng=_rng)
     if enable_salt_pepper:
-        out = apply_salt_pepper(out, density=float(salt_pepper_density), salt_vs_pepper=float(salt_pepper_ratio), rng=_rng)
+        out = apply_salt_pepper(out, density=float(salt_pepper_density), salt_vs_pepper=float(salt_pepper_ratio), rng=_rng, defect_state=defect_state)
     return out
