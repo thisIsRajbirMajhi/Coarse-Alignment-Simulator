@@ -1,6 +1,6 @@
-# Core simulator (GUI + synthesis)
-numpy>=1.26,<2.3
-opencv-python>=4.8,<4.13
+# Core simulator (GUI + synthesis) — pins verified against test env (Python 3.14, 97 passed)
+numpy>=1.26,<2.6
+opencv-python>=4.8,<5.1
 PyQt5==5.15.11
 
 # Dataset inspection / training (scripts/train.py, scripts/visualize_labels.py)

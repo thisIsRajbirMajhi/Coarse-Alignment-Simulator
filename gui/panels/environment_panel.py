@@ -143,8 +143,13 @@ class EnvironmentPanel(BaseConfigPanel):
         self.slider_star_count.valueChanged.connect(lambda v: self._sync_int(v, self.env_star_count_spin, self.label_star_count_val))
         self.slider_star_brightness.valueChanged.connect(lambda v: self._sync_float(v, self.env_star_brightness_spin, self.label_star_brightness_val, self.star_brightness_factor, 1))
 
-        self.random_seed_btn.clicked.connect(self.randomizeRequested.emit)
+        self.random_seed_btn.clicked.connect(self._randomize_seed)
         self.btn_reset.clicked.connect(self._on_reset)
+
+    def _randomize_seed(self):
+        """Random seed 0..999999 (widget updates, config emitted)."""
+        import random
+        self.slider_seed.setValue(random.randint(0, 999999))
 
     def _sync_int(self, val: int, spin, label):
         spin.blockSignals(True)

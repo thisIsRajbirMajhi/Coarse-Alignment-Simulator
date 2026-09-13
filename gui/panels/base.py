@@ -44,7 +44,15 @@ class BaseConfigPanel(QWidget):
         grid.setColumnStretch(3, 1)
         return box, grid
 
-    # --- Intuitive slider helpers (light theme, highlighted on interaction) ---
+    # --- Console value pills (match Live Dashboard metricPill) ---
+    _PILL_IDLE = (
+        "color:#111827; font-weight:700; background:#c6c6c6; border:1px solid #9ca3af; "
+        "border-radius:10px; padding:2px 4px; font-family:'Consolas','Courier New',monospace; font-size:11px;"
+    )
+    _PILL_ACTIVE = (
+        "color:#ffffff; font-weight:700; background:#111827; border:1px solid #111827; "
+        "border-radius:10px; padding:2px 4px; font-family:'Consolas','Courier New',monospace; font-size:11px;"
+    )
     def _make_int_slider(
         self,
         min_val: int,
@@ -68,21 +76,12 @@ class BaseConfigPanel(QWidget):
         val_label.setFixedWidth(48)
         val_label.setMinimumHeight(22)
         val_label.setAlignment(Qt.AlignCenter)
-        val_label.setStyleSheet(
-            "color:#111827; font-weight:600; background:#f9fafb; border:1px solid #e5e7eb; "
-            "border-radius:4px; padding:2px 4px; font-family:'Consolas','Courier New',monospace; font-size:11px;"
-        )
-        # Highlight value label when slider is pressed/dragged
+        val_label.setStyleSheet(self._PILL_IDLE)
+        # Highlight value pill while slider is pressed/dragged
         def _on_slider_pressed():
-            val_label.setStyleSheet(
-                "color:#1e40af; font-weight:700; background:#dbeafe; border:2px solid #3b82f6; "
-                "border-radius:4px; padding:2px 4px; font-family:'Consolas','Courier New',monospace; font-size:11px;"
-            )
+            val_label.setStyleSheet(self._PILL_ACTIVE)
         def _on_slider_released():
-            val_label.setStyleSheet(
-                "color:#111827; font-weight:600; background:#f9fafb; border:1px solid #e5e7eb; "
-                "border-radius:4px; padding:2px 4px; font-family:'Consolas','Courier New',monospace; font-size:11px;"
-            )
+            val_label.setStyleSheet(self._PILL_IDLE)
         slider.sliderPressed.connect(_on_slider_pressed)
         slider.sliderReleased.connect(_on_slider_released)
         # Update label on value change
@@ -117,20 +116,11 @@ class BaseConfigPanel(QWidget):
         val_label.setFixedWidth(64)
         val_label.setMinimumHeight(22)
         val_label.setAlignment(Qt.AlignCenter)
-        val_label.setStyleSheet(
-            "color:#111827; font-weight:600; background:#f9fafb; border:1px solid #e5e7eb; "
-            "border-radius:4px; padding:2px 4px; font-family:'Consolas','Courier New',monospace; font-size:11px;"
-        )
+        val_label.setStyleSheet(self._PILL_IDLE)
         def _on_pressed():
-            val_label.setStyleSheet(
-                "color:#1e40af; font-weight:700; background:#dbeafe; border:2px solid #3b82f6; "
-                "border-radius:4px; padding:2px 4px; font-family:'Consolas','Courier New',monospace; font-size:11px;"
-            )
+            val_label.setStyleSheet(self._PILL_ACTIVE)
         def _on_released():
-            val_label.setStyleSheet(
-                "color:#111827; font-weight:600; background:#f9fafb; border:1px solid #e5e7eb; "
-                "border-radius:4px; padding:2px 4px; font-family:'Consolas','Courier New',monospace; font-size:11px;"
-            )
+            val_label.setStyleSheet(self._PILL_IDLE)
         slider.sliderPressed.connect(_on_pressed)
         slider.sliderReleased.connect(_on_released)
         slider.valueChanged.connect(lambda v, lbl=val_label, f=factor, d=decimals, s=suffix: lbl.setText(f"{v/f:.{d}f}{s}"))
@@ -138,14 +128,9 @@ class BaseConfigPanel(QWidget):
 
     def _make_reset_button(self, text: str = "Reset") -> QPushButton:
         btn = QPushButton(text)
+        btn.setObjectName("settingsButton")
         btn.setMinimumHeight(28)
         btn.setToolTip(f"Reset {text.lower()} to defaults")
-        btn.setStyleSheet(
-            "QPushButton { background:#ffffff; color:#374151; font-weight:600; border:1px solid #d1d5db; "
-            "border-radius:6px; padding:6px 12px; font-size:11px; }"
-            "QPushButton:hover { background:#fef2f2; border-color:#fca5a5; color:#dc2626; }"
-            "QPushButton:pressed { background:#fee2e2; border-color:#ef4444; color:#991b1b; }"
-        )
         return btn
 
     @contextmanager

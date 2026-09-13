@@ -43,6 +43,7 @@ class MultiBeaconPanel(BaseConfigPanel):
             initial = MultiBeaconConfig(beacon_count=1, target_index=0, x=rx, y=ry)
         self._config = initial.validate()
         self._build_ui()
+        self.set_world_bounds(world_bounds)
         self.set_config(self._config, emit=False)
 
     def _build_ui(self) -> None:
@@ -130,9 +131,9 @@ class MultiBeaconPanel(BaseConfigPanel):
         self.chk_random_speed = QCheckBox("Random")
         self.chk_random_speed.setToolTip("Randomize speed per beacon")
         grid.addWidget(self.chk_random_speed, 6, 3)
-        # Threshold slider 100-255
-        self.slider_thresh, self.label_thresh_val = self._make_int_slider(100, 255, 200, tooltip="Detector threshold")
-        self.spin_thresh = QSpinBox(); self.spin_thresh.setRange(100, 255); self.spin_thresh.setValue(200); self.spin_thresh.hide()
+        # Threshold slider matches DetectorConfig limits (50-255)
+        self.slider_thresh, self.label_thresh_val = self._make_int_slider(50, 255, 200, tooltip="Detector threshold")
+        self.spin_thresh = QSpinBox(); self.spin_thresh.setRange(50, 255); self.spin_thresh.setValue(200); self.spin_thresh.hide()
         grid.addWidget(self._label("Threshold"), 7, 0)
         grid.addWidget(self.slider_thresh, 7, 1)
         grid.addWidget(self.label_thresh_val, 7, 2)
@@ -176,8 +177,8 @@ class MultiBeaconPanel(BaseConfigPanel):
         self.chk_blinking.toggled.connect(self._emit_multi_config)
         self.slider_thresh.valueChanged.connect(lambda v: self._sync_thresh(v))
         self.btn_random_loc.clicked.connect(self._randomize_location)
-        self.btn_randomize_all.clicked.connect(self.randomizeAllRequested.emit)
-        self.btn_randomize_motion.clicked.connect(self.randomizeMotionRequested.emit)
+        self.btn_randomize_all.clicked.connect(self._randomize_parameters)
+        self.btn_randomize_motion.clicked.connect(self._randomize_motion)
         self.btn_reset.clicked.connect(self._on_reset)
 
         # Also keep spin -> slider sync for set_config path (blocked signals normally, but handle external spin changes)
@@ -234,14 +235,37 @@ class MultiBeaconPanel(BaseConfigPanel):
 
     def _randomize_location(self):
         import random
+        w, h = self._world_bounds
         self.slider_x.blockSignals(True)
         self.slider_y.blockSignals(True)
-        self.slider_x.setValue(random.randint(200, 4800))
-        self.slider_y.setValue(random.randint(200, 4800))
+        self.slider_x.setValue(random.randint(200, max(201, w - 200)))
+        self.slider_y.setValue(random.randint(200, max(201, h - 200)))
         self.slider_x.blockSignals(False)
         self.slider_y.blockSignals(False)
         self._sync_int(self.slider_x.value(), self.spin_x)
         self._sync_int(self.slider_y.value(), self.spin_y)
+
+    def _randomize_motion(self):
+        """Random motion profile + speed (widgets update, config emitted)."""
+        import random
+        self.combo_motion.setCurrentIndex(random.randrange(self.combo_motion.count()))
+        self.slider_speed.setValue(random.randint(20, 150))
+        self._update_status()
+        self._emit_multi_config()
+
+    def _randomize_parameters(self):
+        """Random motion, appearance, speed and location (widgets update, config emitted)."""
+        import random
+        self.combo_motion.setCurrentIndex(random.randrange(self.combo_motion.count()))
+        self.combo_shape.setCurrentIndex(random.randrange(self.combo_shape.count()))
+        self.slider_speed.setValue(random.randint(20, 150))
+        self.slider_size_w.setValue(random.randint(5, 20))
+        self.slider_size_h.setValue(random.randint(5, 20))
+        self.chk_blinking.setChecked(random.random() < 0.5)
+        self.chk_random_speed.setChecked(random.random() < 0.5)
+        self._randomize_location()
+        self._update_status()
+        self._emit_multi_config()
 
     def _on_reset(self):
         import random as _rnd
