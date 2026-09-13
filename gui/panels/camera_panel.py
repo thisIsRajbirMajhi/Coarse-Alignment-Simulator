@@ -43,6 +43,7 @@ class CameraPanel(BaseConfigPanel):
         self._scene_bounds = scene_bounds
         self._initial = (initial or CameraConfig()).validate(scene_bounds)
         self._build_ui()
+        self.set_scene_bounds(scene_bounds)
         self.set_config(self._initial, emit=False)
 
     # --- Build UI ---
@@ -476,6 +477,10 @@ class CameraPanel(BaseConfigPanel):
         self._scene_bounds = bounds
         try:
             w, h = bounds
+            # FOV must fit the scene (10px margin); clamp slider ceilings so the
+            # panel can never request an out-of-scene FOV (spec mins are floors).
+            self.fov_w_slider.setMaximum(max(320, int(w) - 10))
+            self.fov_h_slider.setMaximum(max(240, int(h) - 10))
             self.god_w_slider.blockSignals(True); self.god_h_slider.blockSignals(True)
             self.god_w_slider.setValue(int(w)); self.god_h_slider.setValue(int(h))
             self.god_w_label.setText(str(int(w))); self.god_h_label.setText(str(int(h)))

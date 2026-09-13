@@ -132,7 +132,7 @@ class CameraConfig(BaseValidatedConfig):
             # clamp FOV to scene (leave 10px margin) with warning if needed
             if self.fov_width > sw - 10 or self.fov_height > sh - 10:
                 import logging
-                logging.getLogger("camera").warning(f"FOV {self.fov_width}x{self.fov_height} exceeds scene {sw}x{sh}, clamping to {min(self.fov_width, sw-10)}x{min(self.fov_height, sh-10)}")
+                logging.getLogger("camera").info(f"FOV {self.fov_width}x{self.fov_height} exceeds scene {sw}x{sh}, clamping to {min(self.fov_width, sw-10)}x{min(self.fov_height, sh-10)}")
                 self.fov_width = int(min(self.fov_width, sw - 10))
                 self.fov_height = int(min(self.fov_height, sh - 10))
                 if self.fov_width < 20: self.fov_width = 20

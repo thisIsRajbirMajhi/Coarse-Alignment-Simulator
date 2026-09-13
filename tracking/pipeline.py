@@ -71,7 +71,7 @@ class TrackingPipeline:
         use_imm: bool = False,
         imm_config: IMMConfig | None = None,
         search_enabled: bool = True,
-        search_mode: str = "adaptive",
+        search_mode: str = "auto",
         designated_target_id: int | None = None,
         max_tracks: int = 5,
     ):
@@ -318,6 +318,10 @@ class TrackingPipeline:
             ex, ey, epx = pixel_error(estimate[0], estimate[1], self.fov_w, self.fov_h)
         search_active = False
         if state == TRACKING and estimate is not None:
+            try:
+                self.search.mark_found()  # acquired — fresh search episode next time
+            except Exception:
+                pass
             try:
                 try:
                     spd = float(np.hypot(vel[0], vel[1]))

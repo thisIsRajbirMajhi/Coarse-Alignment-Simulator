@@ -71,6 +71,15 @@ class WindowManager:
             log.debug("drop settings skipped: %s", e)
         self._settings = None
 
+    def sync_dialog(self, session) -> None:
+        """Pull session truth back into open panel widgets (clamped values)."""
+        if self._settings is None:
+            return
+        try:
+            self._settings.sync_from_session(session)
+        except Exception as e:
+            log.debug("dialog sync skipped: %s", e)
+
     def close_all(self) -> None:
         for attr in ("_settings", "_dashboard_window"):
             try:

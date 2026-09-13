@@ -49,7 +49,10 @@ class SettingsDialog(QDialog):
         from gui.panels.environment_panel import EnvironmentPanel
         from gui.panels.multi_beacon_panel import MultiBeaconPanel
 
-        self.camera_panel = CameraPanel(initial=session.camera_config)
+        self.camera_panel = CameraPanel(
+            initial=session.camera_config,
+            scene_bounds=(int(session.env_config.world_width), int(session.env_config.world_height)),
+        )
         self.control_panel = ControlPanel(initial=session.controller_config)
         self.env_panel = EnvironmentPanel(initial=session.env_config)
         self.dist_panel = DisturbancesPanel(initial=session.disturbance_config)
@@ -80,3 +83,41 @@ class SettingsDialog(QDialog):
             self.beacon_panel.threshChanged.connect(self.thresholdChanged.emit)
         except Exception as e:
             log.debug("threshold wiring skipped: %s", e)
+
+    def sync_world_bounds(self, session) -> None:
+        """Push current world size into panels (call after world resize)."""
+        try:
+            bounds = (int(session.env_config.world_width), int(session.env_config.world_height))
+        except Exception as e:
+            log.debug("world bounds sync skipped: %s", e)
+            return
+        for panel, method in ((self.camera_panel, "set_scene_bounds"),
+                              (self.beacon_panel, "set_world_bounds")):
+            try:
+                getattr(panel, method)(bounds)
+            except Exception as e:
+                log.debug("%s sync skipped: %s", method, e)
+
+    def sync_from_session(self, session) -> None:
+        """Pull clamped session values back into widgets (no emit, no loops)."""
+        self.sync_world_bounds(session)
+        try:
+            self.camera_panel.set_config(session.camera_config, emit=False)
+        except Exception as e:
+            log.debug("camera sync skipped: %s", e)
+        try:
+            self.control_panel.set_config(session.controller_config, emit=False)
+        except Exception as e:
+            log.debug("control sync skipped: %s", e)
+        try:
+            self.env_panel.set_config(session.env_config, emit=False)
+        except Exception as e:
+            log.debug("env sync skipped: %s", e)
+        try:
+            self.dist_panel.set_config(session.disturbance_config, emit=False)
+        except Exception as e:
+            log.debug("disturbances sync skipped: %s", e)
+        try:
+            self.beacon_panel.set_config(session.beacon_config, emit=False)
+        except Exception as e:
+            log.debug("beacons sync skipped: %s", e)

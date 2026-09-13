@@ -238,6 +238,7 @@ class MainWindow(QMainWindow):
             self.controller.apply_config(ApplyConfigCommand(section="environment", config=cfg))
             self.sim_view.invalidate_world_cache()
             self.presenter.reset()  # new world = new run for metrics
+            self.windows.sync_dialog(self.session)  # pull clamped FOV/bounds back
         self._schedule_config("environment", _apply)
 
     def _on_disturbances_config(self, cfg) -> None:
@@ -249,6 +250,7 @@ class MainWindow(QMainWindow):
             self.controller.apply_config(ApplyConfigCommand(section="beacons", config=cfg))
             self.sim_view.invalidate_world_cache()
             self.presenter.reset()  # new targets = new run for metrics
+            self.windows.sync_dialog(self.session)
         self._schedule_config("beacons", _apply)
 
     def _on_target_selected(self, idx: int) -> None:

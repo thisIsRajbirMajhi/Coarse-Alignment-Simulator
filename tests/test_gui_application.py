@@ -337,3 +337,31 @@ def test_panel_reset_restores_defaults(window):
     assert window.session.beacon_config.speed == pytest.approx(60)
     assert window.session.beacon_config.beacon_count == 1
     dlg.close()
+
+
+def test_camera_fov_sliders_capped_to_world(window):
+    import logging
+    from gui.views.settings_dialog import SettingsDialog
+    dlg = SettingsDialog(window.session, window)
+    w, h = int(window.session.env_config.world_width), int(window.session.env_config.world_height)
+    assert dlg.camera_panel.fov_w_slider.maximum() == w - 10
+    assert dlg.camera_panel.fov_h_slider.maximum() == h - 10
+    dlg.close()
+
+
+def test_fov_clamp_logs_info_not_warning(caplog):
+    import logging
+    from camera.config import CameraConfig
+    with caplog.at_level(logging.INFO, logger="camera"):
+        cfg = CameraConfig(fov_width=640, fov_height=1008).validate((1000, 1000))
+    assert (cfg.fov_width, cfg.fov_height) == (640, 990)
+    assert not [r for r in caplog.records if r.levelname == "WARNING" and "exceeds scene" in r.message]
+    assert [r for r in caplog.records if "exceeds scene" in r.message]
+
+
+def test_dialog_sync_back_after_world_change(window):
+    from gui.views.settings_dialog import SettingsDialog
+    dlg = SettingsDialog(window.session, window)
+    dlg.sync_from_session(window.session)
+    assert dlg.camera_panel.fov_h_slider.value() == int(window.session.camera_config.fov_height)
+    dlg.close()
