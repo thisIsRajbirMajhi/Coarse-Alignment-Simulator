@@ -152,7 +152,10 @@ class SimulationSession:
         ctrl_cfg = self.controller_config.validate()
         from control.controller import PIDController as _PID
         self.controller = _PID(config=ctrl_cfg)
-        # Tracking pipeline (classical-only, real-time)
+        # Tracking pipeline: classical default (crash-safe, no torch import so
+        # GUI tests stay stable) + IMM for maneuver handling. Call
+        # enable_smart_detector() to switch to fused YOLO + classical with
+        # best.pt when torch works on this machine.
         try:
             from tracking.detector import DetectorConfig as _DC
             from tracking.metrics import MetricsLogger as _ML
@@ -160,7 +163,7 @@ class SimulationSession:
             self.pipeline = _TP(
                 detector_config=_DC(threshold=int(self.detector_threshold)),
                 controller_config=ctrl_cfg, fov_size=(int(cam_cfg.fov_width), int(cam_cfg.fov_height)),
-                use_yolo=False, designated_target_id=tid,
+                use_yolo=False, use_imm=True, designated_target_id=tid,
             )
             self.metrics_logger = _ML(fov_size=(int(cam_cfg.fov_width), int(cam_cfg.fov_height)))
         except Exception as e:
@@ -179,6 +182,35 @@ class SimulationSession:
     def ensure_built(self) -> None:
         if not self._built:
             self.build()
+
+    def enable_smart_detector(self, model_path: str | None = None) -> bool:
+        """Opt-in fused YOLO + classical detection (uses best.pt). Returns True on success.
+
+        Call from GUI after startup when torch is known-good. Falls back to
+        classical on any error. Never raises.
+        """
+        try:
+            self.ensure_built()
+            if self.pipeline is None:
+                return False
+            from tracking.detector import DetectorConfig as _DC, UnifiedDetector
+            cfg = _DC(threshold=int(self.detector_threshold)).validate()
+            det = UnifiedDetector(cfg, model_path=model_path)
+            # Probe load without crashing caller: YOLO load may fail gracefully.
+            try:
+                if not det.yolo.load():
+                    log.warning("smart detector unavailable: %s", det.yolo.load_error)
+                    return False
+            except Exception as e:
+                log.warning("smart detector load failed: %s", e)
+                return False
+            self.pipeline.detector = det
+            self.pipeline.use_yolo = True
+            log.info("smart detector enabled: %s", cfg.model_path if hasattr(cfg, 'model_path') else model_path)
+            return True
+        except Exception as e:
+            log.warning("enable_smart_detector failed: %s", e)
+            return False
 
     # -- lifecycle ----------------------------------------------------
     def reset(self, seed: int | None = None) -> None:

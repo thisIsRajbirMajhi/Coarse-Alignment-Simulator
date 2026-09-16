@@ -67,8 +67,8 @@ class TrackingPipeline:
         controller_config: ControllerConfig | None = None,
         fov_size: tuple[int, int] = (640, 480),
         model_path: str | None = None,
-        use_yolo: bool = True,
-        use_imm: bool = False,
+        use_yolo: bool = False,
+        use_imm: bool = True,
         imm_config: IMMConfig | None = None,
         search_enabled: bool = True,
         search_mode: str = "auto",
@@ -184,9 +184,11 @@ class TrackingPipeline:
         # filter below is then stepped with the designated detection only,
         # so distractors can no longer drag the servo state.
         designated_det: Detection | None = None
+        _has_designated_track = False
         try:
             _des_track, _assign = self.multi.step(all_dets, dt)
             if _des_track is not None:
+                _has_designated_track = True
                 # Find the box assigned to the designated internal track.
                 try:
                     idx = next(i for i, t in enumerate(self.multi.tracks) if t.internal_id == _des_track.internal_id)
@@ -195,6 +197,7 @@ class TrackingPipeline:
                     designated_det = None
         except Exception:
             designated_det = None
+            _has_designated_track = False
         # Template: latched observation anchored to expected mission tint.
         template = self._latched_color if self._latched_color is not None else self.expected_color
         # 2b. Associate against tracker *predicted* position (§18 Expected
@@ -223,9 +226,17 @@ class TrackingPipeline:
             boresight=(self.fov_w / 2.0, self.fov_h / 2.0),
             template_color=template, prev_center=self._prev_center,
         )
-        # Prefer multi-track designated identity when available; fall back to
-        # single-frame associate (first frames / single beacon).
-        selected = designated_det if designated_det is not None else single
+        # Prefer multi-track designated identity when available. Fall back to
+        # single-frame associate ONLY when no designated track exists yet
+        # (first frames / single beacon). When designated exists but coasted
+        # (occlusion/crossing), coast instead of grabbing the nearest
+        # distractor — that fallback was the main wrong-beacon source.
+        if designated_det is not None:
+            selected = designated_det
+        elif not _has_designated_track:
+            selected = single
+        else:
+            selected = None
 
         # 3. Fuse into tracker with per-detection measurement noise
         meas = selected.center if selected is not None else None

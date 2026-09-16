@@ -142,11 +142,28 @@ def expected_color_for_target(target_index: int | None, brightness: float = 255.
 
 
 def color_distance(c1: tuple[float, float, float] | None, c2: tuple[float, float, float] | None) -> float:
-    """BGR Euclidean distance; +inf-safe. Never raises."""
+    """Illumination-invariant BGR distance; +inf-safe. Never raises.
+
+    Beacon tints differ by ~10-20 DN (warm vs cool white) but bloom/haze can
+    shift brightness by ~40 DN. Raw Euclidean would let illumination drown ID.
+    This splits into chromaticity (brightness-normalized BGR, weight 1.0) plus
+    small brightness term (weight 0.15) so ID wins over illumination change.
+    """
     try:
         if c1 is None or c2 is None:
             return 1e9
-        return float(np.hypot(np.hypot(float(c1[0]) - float(c2[0]), float(c1[1]) - float(c2[1])), float(c1[2]) - float(c2[2])))
+        b1, g1, r1 = float(c1[0]), float(c1[1]), float(c1[2])
+        b2, g2, r2 = float(c2[0]), float(c2[1]), float(c2[2])
+        s1 = b1 + g1 + r1
+        s2 = b2 + g2 + r2
+        if s1 < 1e-6 or s2 < 1e-6 or not (np.isfinite(s1) and np.isfinite(s2)):
+            return float(np.hypot(np.hypot(b1 - b2, g1 - g2), r1 - r2))
+        n1 = (b1 / s1, g1 / s1, r1 / s1)
+        n2 = (b2 / s2, g2 / s2, r2 / s2)
+        d_chroma = float(np.hypot(np.hypot(n1[0] - n2[0], n1[1] - n2[1]), n1[2] - n2[2])) * 400.0
+        d_bright = abs(s1 - s2) / 3.0 * 0.15
+        d = float(d_chroma + d_bright)
+        return d if np.isfinite(d) else 1e9
     except Exception:
         return 1e9
 

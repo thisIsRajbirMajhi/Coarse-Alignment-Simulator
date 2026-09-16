@@ -35,18 +35,18 @@ ASSOC_LIMITS = {
 
 ASSOC_DEFAULTS = {
     "w_pred": 2.0,
-    "w_conf": 0.5,
+    "w_conf": 0.3,
     "w_hist": 0.6,
     "w_motion": 0.7,
     "w_size": 0.4,
     "w_iou": 0.6,
     "w_appear": 0.4,
-    "w_color": 1.2,
-    "gate_px": 120.0,
-    "max_jump_px": 80.0,
+    "w_color": 2.0,
+    "gate_px": 90.0,
+    "max_jump_px": 60.0,
     "mahalanobis_gate": 9.21,  # chi2 2-dof 99%: statistically principled gate
     "use_mahalanobis": True,
-    "switch_margin": 0.35,
+    "switch_margin": 0.6,
 }
 
 
@@ -188,7 +188,7 @@ def _color_score(
         dist = color_distance(tuple(dc), tuple(template_color))
         if not np.isfinite(dist):
             return 0.5
-        return float(1.0 / (1.0 + float(dist) / 40.0))
+        return float(1.0 / (1.0 + float(dist) / 20.0))
     except Exception:
         return 0.5
 

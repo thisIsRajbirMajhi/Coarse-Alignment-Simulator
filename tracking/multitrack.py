@@ -177,14 +177,42 @@ class MultiBeaconTracker:
         try:
             if not self.tracks:
                 return None
-            # Prefer current designated if still alive and matched.
+            # Prefer current designated if still alive and matched — but with a
+            # color veto: if designated's tint is far from expected while a
+            # challenger matches well, the lock has drifted to a distractor.
             if self.designated_internal_id is not None:
                 for ti, t in enumerate(self.tracks):
                     if t.internal_id == self.designated_internal_id:
-                        if assignment.get(ti) is not None:
+                        cur_d = assignment.get(ti)
+                        if cur_d is not None:
+                            if self.expected_color is not None:
+                                try:
+                                    dc = getattr(cur_d, "color_bgr", None) or t.template_color
+                                    d_cur = color_distance(dc, self.expected_color)
+                                except Exception:
+                                    d_cur = 1e9
+                                if d_cur > 8.0:
+                                    # Look for a well-matching challenger before sticking.
+                                    best_c, best_cd = None, 1e18
+                                    for tj, u in enumerate(self.tracks):
+                                        if u.internal_id == self.designated_internal_id:
+                                            continue
+                                        dd = assignment.get(tj)
+                                        if dd is None:
+                                            continue
+                                        try:
+                                            dcc = getattr(dd, "color_bgr", None) or u.template_color
+                                            ddu = color_distance(dcc, self.expected_color)
+                                        except Exception:
+                                            continue
+                                        if ddu < best_cd:
+                                            best_cd = ddu
+                                            best_c = u.internal_id
+                                    if best_c is not None and best_cd < 6.0:
+                                        return best_c
                             return t.internal_id
                         # Coast briefly: keep designated through short misses.
-                        if t.misses <= 3:
+                        if t.misses <= 5:
                             return t.internal_id
                         break
             # Otherwise best color match among matched tracks, fallback to most hits.
@@ -199,8 +227,9 @@ class MultiBeaconTracker:
                     if dd < best_d:
                         best_d = dd
                         best = t.internal_id
-                # Accept only if reasonably close (BGR dist < 90); else motion decides.
-                if best is not None and best_d < 90.0:
+                # Accept only if reasonably close (illumination-invariant units:
+                # same-ID ~0-5, wrong-ID ~9-13); else motion decides.
+                if best is not None and best_d < 12.0:
                     return best
             # Fallback: track with most hits that got a detection.
             fb, fb_h = None, -1
