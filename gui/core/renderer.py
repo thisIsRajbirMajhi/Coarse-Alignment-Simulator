@@ -132,6 +132,22 @@ class Renderer:
         except Exception:
             pass
 
+        # Draw remote terminals on minimap
+        terminals_data = kwargs.get("terminals")
+        if terminals_data and isinstance(terminals_data, dict):
+            term_list = terminals_data.get("terminals", [])
+            for t in term_list:
+                pos = t.get("position", (0, 0, 0))
+                txs = int(pos[0] * scale_x)
+                tys = int(pos[1] * scale_y)
+                is_em = t.get("is_emitting", False)
+                tid = str(t.get("id", "RT"))
+                color = (50, 220, 120) if is_em else (140, 140, 140)
+                cv2.circle(display, (txs, tys), 3, color, -1, cv2.LINE_AA)
+                if is_em:
+                    cv2.circle(display, (txs, tys), 6, color, 1, cv2.LINE_AA)
+                cv2.putText(display, tid, (txs + 5, tys + 3), cv2.FONT_HERSHEY_SIMPLEX, 0.28, color, 1, cv2.LINE_AA)
+
         cv2.putText(display, f"{sw}x{sh}", (4, 10), cv2.FONT_HERSHEY_SIMPLEX, 0.28, (180, 180, 180), 1, cv2.LINE_AA)
         return display
 
@@ -142,7 +158,7 @@ class Renderer:
         lw, lh = label_size
         sw, sh = scene_size
         display = cv2.resize(scene_frame, (max(50, lw), max(50, lh)), interpolation=cv2.INTER_LINEAR)
-        return Renderer.render_minimap_cached(display, camera, label_size=label_size, scene_size=scene_size)
+        return Renderer.render_minimap_cached(display, camera, label_size=label_size, scene_size=scene_size, **kwargs)
 
     @staticmethod
     def set_pixmap(label, bgr_frame: np.ndarray, spec=None) -> np.ndarray:

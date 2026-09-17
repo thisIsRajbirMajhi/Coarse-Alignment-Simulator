@@ -23,6 +23,7 @@ class FrameSnapshot:
     world_size: tuple[int, int]
     pixel_scale_mrad: float = 0.035
     dt: float = 1 / 30
+    terminals: dict | None = None
 
 
 class SimulationSession:
@@ -32,11 +33,12 @@ class SimulationSession:
     """
 
     def __init__(self, env_config=None, camera_config=None, controller_config=None,
-                 disturbance_config=None, seed: int = 42, **kwargs):
+                 disturbance_config=None, scenario_config=None, seed: int = 42, **kwargs):
         from camera.config import CameraConfig
         from control.config import ControllerConfig
         from disturbance.core.config import DisturbanceConfig
         from environment.config import EnvironmentConfig
+        from remote_terminal import RemoteTerminalScenario, RemoteTerminalScenarioConfig
 
         self.seed = int(seed)
         self.env_config = (env_config or EnvironmentConfig()).validate()
@@ -44,6 +46,7 @@ class SimulationSession:
         self.camera_config = (camera_config or CameraConfig()).validate(scene_bounds)
         self.controller_config = (controller_config or ControllerConfig()).validate()
         self.disturbance_config = (disturbance_config or DisturbanceConfig()).validate()
+        self.scenario_config = (scenario_config or kwargs.get("terminal_config") or RemoteTerminalScenarioConfig()).validate()
         self._built = False
         self._frame_id = 0
         self._last_dt = 1 / 30
@@ -82,6 +85,8 @@ class SimulationSession:
 
         ctrl_cfg = self.controller_config.validate()
         self.controller = PIDController(config=ctrl_cfg)
+        from remote_terminal import RemoteTerminalScenario
+        self.terminal_scenario = RemoteTerminalScenario(self.scenario_config, bounds=(scene_w, scene_h), rng=self.rng)
 
         self._disturbance_pipeline = None
         self._built = True
@@ -122,6 +127,11 @@ class SimulationSession:
         self.ensure_built()
         self.disturbance_config = config.validate()
 
+    def apply_terminal_config(self, config) -> None:
+        self.ensure_built()
+        self.scenario_config = config.validate()
+        self.terminal_scenario.apply_config(self.scenario_config)
+
     # -- stepping ------------------------------------------------------
     def _disturbance_pipeline_for(self, dt: float):
         from disturbance.core import DisturbanceContext, DisturbancePipeline
@@ -141,6 +151,11 @@ class SimulationSession:
         self._last_dt = dt_eff
         self.scene.update(dt_eff)
         self.camera.update(dt)
+        if getattr(self, "terminal_scenario", None) is not None:
+            try:
+                self.terminal_scenario.update(dt_eff, camera=self.camera)
+            except Exception as e:
+                log.debug("terminal scenario update skipped: %s", e)
 
         pipe = self._disturbance_pipeline_for(dt_eff)
         pan_dist, tilt_dist = pipe.disturb_camera_pose(self.camera.pan, self.camera.tilt, dt_eff)
@@ -151,6 +166,12 @@ class SimulationSession:
 
         x0, y0, x1, y1 = self.camera.get_fov_rect()
         fov_frame = self.scene.get_region(int(x0), int(y0), int(x1), int(y1))
+
+        if getattr(self, "terminal_scenario", None) is not None:
+            try:
+                fov_frame = self.terminal_scenario.render_fov_beacons(fov_frame, self.camera)
+            except Exception as e:
+                log.debug("fov beacon render skipped: %s", e)
 
         try:
             vig = float(getattr(self.env_config, "vignetting_pct", 0)) / 100.0
@@ -180,4 +201,5 @@ class SimulationSession:
             world_size=(int(self.env_config.world_width), int(self.env_config.world_height)),
             pixel_scale_mrad=scale,
             dt=dt_eff,
+            terminals=self.terminal_scenario.get_telemetry() if getattr(self, "terminal_scenario", None) is not None else None,
         )

@@ -81,6 +81,7 @@ class SimulationView(QWidget):
                     self._world_thumb, session.camera,
                     label_size=(max(50, lw), max(50, lh)),
                     scene_size=world_size,
+                    terminals=getattr(snapshot, "terminals", None),
                 )
                 pm2 = frame_to_pixmap(mini)
                 if pm2 is not None:

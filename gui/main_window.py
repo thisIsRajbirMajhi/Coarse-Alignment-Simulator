@@ -120,6 +120,11 @@ class MainWindow(QMainWindow):
                 self.dashboard.render(state)
             except Exception as e:
                 log.debug("dashboard render skipped: %s", e)
+            if getattr(self.windows, "_settings", None) is not None and snap is not None and getattr(snap, "terminals", None) is not None:
+                try:
+                    self.windows._settings.update_telemetry(snap.terminals)
+                except Exception as e:
+                    log.debug("dialog telemetry update skipped: %s", e)
 
     # -- slots --------------------------------------------------------
     def _on_pause_button(self) -> None:
@@ -226,6 +231,10 @@ class MainWindow(QMainWindow):
     def _on_disturbances_config(self, cfg) -> None:
         self._schedule_config("disturbances", lambda: self.controller.apply_config(
             ApplyConfigCommand(section="disturbances", config=cfg)))
+
+    def _on_terminal_config(self, cfg) -> None:
+        self._schedule_config("terminal", lambda: self.controller.apply_config(
+            ApplyConfigCommand(section="terminal", config=cfg)))
 
     # -- compat adapters --------------------------------------------
     def _start(self) -> None:

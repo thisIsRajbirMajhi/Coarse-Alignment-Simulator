@@ -24,8 +24,9 @@ class ControlView(QWidget):
         self.btn_pause.setObjectName("pauseButton")
         self.btn_reset = QPushButton("Reset")
         self.btn_reset.setObjectName("resetButton")
-        self.btn_settings = QPushButton("Settings")
+        self.btn_settings = QPushButton("Control Deck")
         self.btn_settings.setObjectName("settingsButton")
+        self.btn_control_deck = self.btn_settings
         self.btn_dashboard = QPushButton("Live Dashboard")
         self.btn_dashboard.setObjectName("settingsButton")
         self.btn_fullscreen = QPushButton("Full Screen")

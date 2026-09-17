@@ -112,3 +112,17 @@ def test_fsoc_env_render():
     assert frame is not None
     assert frame.shape == (480, 640, 3)
     env.close()
+
+
+def test_headless_simulation_remote_terminals():
+    from remote_terminal.config import RemoteTerminalScenarioConfig
+    scen_cfg = RemoteTerminalScenarioConfig(terminal_count=2)
+    scen_cfg.motion.start_x = 1000.0
+    scen_cfg.motion.start_y = 1000.0
+    sim = HeadlessSimulation(seed=42, scenario_config=scen_cfg)
+    obs = sim.reset(seed=42)
+    assert "terminals" in obs
+    assert obs["terminals"]["terminal_count"] == 2
+    step_obs, _, _, _, _ = sim.step()
+    assert "terminals" in step_obs
+    assert step_obs["terminals"]["terminal_count"] == 2

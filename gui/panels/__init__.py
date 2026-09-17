@@ -6,6 +6,7 @@ from gui.panels.camera_panel import CameraPanel  # noqa: F401
 from gui.panels.control_panel import ControlPanel  # noqa: F401
 from gui.panels.disturbances_panel import DisturbancesPanel  # noqa: F401
 from gui.panels.environment_panel import EnvironmentPanel  # noqa: F401
+from gui.panels.remote_terminal_panel import RemoteTerminalPanel  # noqa: F401
 
 __all__ = [
     "BaseConfigPanel",
@@ -14,4 +15,5 @@ __all__ = [
     "ControlPanel",
     "DisturbancesPanel",
     "EnvironmentPanel",
+    "RemoteTerminalPanel",
 ]
