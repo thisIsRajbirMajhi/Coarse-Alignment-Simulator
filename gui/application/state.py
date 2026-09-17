@@ -15,7 +15,6 @@ class LifecycleState(str, Enum):
 @dataclass
 class UIState:
     """UI-only state. Never simulation truth."""
-    selected_target: int = 0
     show_settings: bool = False
     active_dashboard_section: str = "all"
 

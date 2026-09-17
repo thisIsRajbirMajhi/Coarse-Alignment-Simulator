@@ -14,7 +14,7 @@ log = logging.getLogger(__name__)
 
 
 class SimulationView(QWidget):
-    """Two video surfaces. Receives snapshots/overlays from MainWindow."""
+    """Two video surfaces: FOV and Minimap. Receives snapshots/overlays from MainWindow."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -45,21 +45,18 @@ class SimulationView(QWidget):
     def render_snapshot(self, snapshot, session) -> None:
         if snapshot is None or session is None:
             return
-        # FOV overlay via stateless Renderer (view support, not sim).
+        # FOV overlay via stateless Renderer.
         try:
             fov = snapshot.fov_frame.copy() if snapshot.fov_frame is not None else None
             if fov is not None:
-                overlay = Renderer.render_viewport(
-                    fov, session.camera, session.beacons, session.target,
-                    tracker=None, all_dets=snapshot.all_detections,
-                    estimate=snapshot.estimate, lock_status=snapshot.lock_state,
-                )
+                overlay = Renderer.render_viewport(fov, session.camera)
                 pm = frame_to_pixmap(overlay)
                 if pm is not None:
                     self.fov_label.setPixmap(pm.scaled(
                         self.fov_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
         except Exception as e:
             log.warning("FOV render failed: %s", e)
+
         # World/minimap: cached raw thumb + overlays.
         try:
             try:
@@ -81,10 +78,9 @@ class SimulationView(QWidget):
                     self._world_thumb = cv2.resize(bg, (max(50, lw), max(50, lh)), interpolation=cv2.INTER_AREA)
                     self._world_thumb_key = key
                 mini = Renderer.render_minimap_cached(
-                    self._world_thumb, session.camera, session.beacons, session.target,
-                    tracker=None, label_size=(max(50, lw), max(50, lh)),
-                    scene_size=world_size, estimate=snapshot.estimate,
-                    lock_status=snapshot.lock_state,
+                    self._world_thumb, session.camera,
+                    label_size=(max(50, lw), max(50, lh)),
+                    scene_size=world_size,
                 )
                 pm2 = frame_to_pixmap(mini)
                 if pm2 is not None:

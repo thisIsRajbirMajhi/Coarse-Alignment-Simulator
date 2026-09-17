@@ -95,10 +95,6 @@ class EnvironmentDisturbanceConfig:
     atmospheric_brightness: float = 0.0
 
 
-@dataclass
-class TargetDisturbanceConfig:
-    enabled: bool = True
-
 
 @dataclass
 class CameraDisturbanceConfig:
@@ -151,7 +147,6 @@ class DisturbanceConfig(BaseValidatedConfig):
     # serialization and GUI compatibility surface during migration.
     global_: GlobalDisturbanceConfig = field(default_factory=GlobalDisturbanceConfig)
     environment: EnvironmentDisturbanceConfig = field(default_factory=EnvironmentDisturbanceConfig)
-    target: TargetDisturbanceConfig = field(default_factory=TargetDisturbanceConfig)
     camera: CameraDisturbanceConfig = field(default_factory=CameraDisturbanceConfig)
     optical: OpticalDisturbanceConfig = field(default_factory=OpticalDisturbanceConfig)
     sensor: SensorDisturbanceConfig = field(default_factory=SensorDisturbanceConfig)
@@ -343,7 +338,6 @@ class DisturbanceConfig(BaseValidatedConfig):
         nested = {
             "global_": GlobalDisturbanceConfig(**data.pop("global_", {})),
             "environment": EnvironmentDisturbanceConfig(**data.pop("environment", {})),
-            "target": TargetDisturbanceConfig(**data.pop("target", {})),
             "camera": CameraDisturbanceConfig(**data.pop("camera", {})),
             "optical": OpticalDisturbanceConfig(**data.pop("optical", {})),
             "sensor": SensorDisturbanceConfig(**data.pop("sensor", {})),

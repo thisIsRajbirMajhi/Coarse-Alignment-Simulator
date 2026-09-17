@@ -1,14 +1,4 @@
 # gui/main_window.py - Simulator window (thin composition root).
-#
-#   MainWindow  ("Coarse Alignment Simulator" — its OWN window)
-#    ├── SimulationView (FOV + world, fullscreen-capable)
-#    └── ControlView (Start/Stop/Pause/Reset + Dashboard/FullScreen/Settings)
-#    └── ApplicationController -> SimulationSession -> Simulation
-#
-# The Live Dashboard lives in its OWN separate window
-# (gui/windows/dashboard_window.py, owned by WindowManager) — never mixed in here.
-#
-# No target/camera/disturbance/tracking/PID math lives here.
 from __future__ import annotations
 
 import logging
@@ -18,7 +8,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout, QLabel, QMainWindow, QStatusBar, QVBoxLayout, QWidget,
 )
 
-from gui.application.commands import ApplyConfigCommand, SelectTargetCommand, SetDetectorThresholdCommand
+from gui.application.commands import ApplyConfigCommand
 from gui.application.controller import ApplicationController
 from gui.application.session import SimulationSession
 from gui.application.state import LifecycleState
@@ -86,22 +76,21 @@ class MainWindow(QMainWindow):
         self.controller.stateChanged.connect(self._on_lifecycle)
         self.controller.errorRaised.connect(self._on_error)
 
-        # Thin timer: sim high-freq, dashboard (separate window) throttled.
+        # Thin timer: sim high-freq, dashboard throttled.
         self.timer = QTimer(self)
         self.timer.setTimerType(Qt.PreciseTimer)
         self.timer.timeout.connect(self.on_timer)
         self.timer.start(TICK_MS)
         self._tick_count = 0
-        # Debounced hot-reload timers per config section (dragging a slider
-        # must not rebuild the scene on every tick).
+        # Debounced hot-reload timers per config section.
         self._config_timers: dict[str, QTimer] = {}
         self._pending_config: dict = {}
         self._apply_button_states()
 
-    # -- dashboard proxy (separate window; kept as .dashboard for API compat)
+    # -- dashboard proxy
     @property
     def dashboard(self):
-        """The Live Dashboard view inside its own separate window (no auto-show)."""
+        """The Live Dashboard view inside its own separate window."""
         return self.windows.ensure_dashboard().view
 
     # -- fullscreen -----------------------------------------------------
@@ -140,11 +129,7 @@ class MainWindow(QMainWindow):
             self.controller.pause()
 
     def _on_reset(self) -> None:
-        """Reset EVERYTHING: default configs, fresh session, fresh presentation.
-
-        Drops the settings dialog so no stale panel value survives, and
-        returns to STOPPED (explicit Start required).
-        """
+        """Reset EVERYTHING: default configs, fresh session, fresh presentation."""
         try:
             self.session = SimulationSession()
             self.session.ensure_built()
@@ -153,7 +138,7 @@ class MainWindow(QMainWindow):
             self.controller.errorRaised.emit(f"Reset failed: {e}")
             log.exception("full reset failed")
             return
-        self.controller.stop()  # STOPPED + counters cleared (emits stateChanged)
+        self.controller.stop()
         try:
             self.presenter.reset()
         except Exception as e:
@@ -203,9 +188,6 @@ class MainWindow(QMainWindow):
             log.debug("button state apply failed: %s", e)
 
     # -- config intents (from SettingsDialog via WindowManager) ------
-    # Structural sections are debounced: slider drags coalesce into one
-    # apply ~250ms after the last change instead of rebuilding per tick.
-    # Target/threshold apply instantly (cheap, no rebuild).
     def _schedule_config(self, section: str, apply) -> None:
         timer = self._config_timers.get(section)
         if timer is None:
@@ -237,29 +219,15 @@ class MainWindow(QMainWindow):
         def _apply():
             self.controller.apply_config(ApplyConfigCommand(section="environment", config=cfg))
             self.sim_view.invalidate_world_cache()
-            self.presenter.reset()  # new world = new run for metrics
-            self.windows.sync_dialog(self.session)  # pull clamped FOV/bounds back
+            self.presenter.reset()
+            self.windows.sync_dialog(self.session)
         self._schedule_config("environment", _apply)
 
     def _on_disturbances_config(self, cfg) -> None:
         self._schedule_config("disturbances", lambda: self.controller.apply_config(
             ApplyConfigCommand(section="disturbances", config=cfg)))
 
-    def _on_beacons_config(self, cfg) -> None:
-        def _apply():
-            self.controller.apply_config(ApplyConfigCommand(section="beacons", config=cfg))
-            self.sim_view.invalidate_world_cache()
-            self.presenter.reset()  # new targets = new run for metrics
-            self.windows.sync_dialog(self.session)
-        self._schedule_config("beacons", _apply)
-
-    def _on_target_selected(self, idx: int) -> None:
-        self.controller.select_target(SelectTargetCommand(target_index=int(idx)))
-
-    def _on_threshold(self, value: int) -> None:
-        self.controller.set_detector_threshold(SetDetectorThresholdCommand(threshold=int(value)))
-
-    # -- compat adapters (thin; new code does not use these) ---------
+    # -- compat adapters --------------------------------------------
     def _start(self) -> None:
         self.controller.start()
 

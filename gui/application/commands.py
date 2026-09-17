@@ -32,15 +32,5 @@ class ResetCommand:
 
 @dataclass(frozen=True)
 class ApplyConfigCommand:
-    section: str  # camera|control|environment|disturbances|beacons|global
+    section: str  # camera|control|environment|disturbances
     config: Any
-
-
-@dataclass(frozen=True)
-class SelectTargetCommand:
-    target_index: int
-
-
-@dataclass(frozen=True)
-class SetDetectorThresholdCommand:
-    threshold: int

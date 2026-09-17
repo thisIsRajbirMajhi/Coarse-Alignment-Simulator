@@ -1,7 +1,7 @@
 # gui/application/__init__.py - public application-layer API.
 from gui.application.commands import (
     ApplyConfigCommand, PauseCommand, ResetCommand, ResumeCommand,
-    SelectTargetCommand, SetDetectorThresholdCommand, StartCommand, StopCommand,
+    StartCommand, StopCommand,
 )
 from gui.application.controller import ApplicationController
 from gui.application.session import FrameSnapshot, SimulationSession
@@ -11,6 +11,5 @@ __all__ = [
     "ApplicationController", "SimulationSession", "FrameSnapshot",
     "LifecycleState", "UIState", "RuntimeStats",
     "StartCommand", "StopCommand", "PauseCommand", "ResumeCommand",
-    "ResetCommand", "ApplyConfigCommand", "SelectTargetCommand",
-    "SetDetectorThresholdCommand",
+    "ResetCommand", "ApplyConfigCommand",
 ]

@@ -7,7 +7,7 @@ import time
 from PyQt5.QtCore import QObject, pyqtSignal
 
 from gui.application.commands import (
-    ApplyConfigCommand, ResetCommand, SelectTargetCommand, SetDetectorThresholdCommand,
+    ApplyConfigCommand, ResetCommand,
 )
 from gui.application.session import FrameSnapshot, SimulationSession
 from gui.application.state import LifecycleState, UIState
@@ -105,28 +105,11 @@ class ApplicationController(QObject):
                 self.session.apply_environment_config(cmd.config)
             elif cmd.section == "disturbances":
                 self.session.apply_disturbance_config(cmd.config)
-            elif cmd.section == "beacons":
-                self.session.apply_beacon_config(cmd.config)
             else:
                 raise ValueError(f"unknown config section: {cmd.section}")
         except Exception as e:
             self.errorRaised.emit(f"Invalid {cmd.section} config: {e}")
             log.exception("apply_config failed")
-
-    def select_target(self, cmd: SelectTargetCommand) -> None:
-        try:
-            self.session.select_target(cmd.target_index)
-            self.ui.selected_target = int(cmd.target_index)
-        except Exception as e:
-            self.errorRaised.emit(f"Target select failed: {e}")
-            log.exception("select_target failed")
-
-    def set_detector_threshold(self, cmd: SetDetectorThresholdCommand) -> None:
-        try:
-            self.session.set_detector_threshold(cmd.threshold)
-        except Exception as e:
-            self.errorRaised.emit(f"Threshold rejected: {e}")
-            log.exception("set_detector_threshold failed")
 
     # -- stepping (called by thin QTimer) ----------------------------
     def step(self) -> FrameSnapshot | None:

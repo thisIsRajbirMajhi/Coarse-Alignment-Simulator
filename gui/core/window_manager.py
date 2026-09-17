@@ -44,20 +44,10 @@ class WindowManager:
         from gui.views.settings_dialog import SettingsDialog
         if self._settings is None:
             self._settings = SettingsDialog(session, self._parent)
-            # Wire intents -> parent controller hooks
             self._settings.cameraChanged.connect(self._parent._on_camera_config)
             self._settings.controlChanged.connect(self._parent._on_control_config)
             self._settings.environmentChanged.connect(self._parent._on_environment_config)
             self._settings.disturbancesChanged.connect(self._parent._on_disturbances_config)
-            self._settings.beaconsChanged.connect(self._parent._on_beacons_config)
-            try:
-                self._settings.targetChanged.connect(self._parent._on_target_selected)
-            except Exception as e:
-                log.debug("settings target wiring skipped: %s", e)
-            try:
-                self._settings.thresholdChanged.connect(self._parent._on_threshold)
-            except Exception as e:
-                log.debug("settings threshold wiring skipped: %s", e)
         self._settings.show()
         self._settings.raise_()
         self._settings.activateWindow()

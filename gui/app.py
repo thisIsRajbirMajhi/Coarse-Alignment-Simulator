@@ -2,25 +2,24 @@
 Module: gui.app — public entry (console architecture).
 
   Application (Qt-free sim ownership):
-    - gui.application.session          : SimulationSession (Scene/Beacons/Camera/PID/Pipeline)
+    - gui.application.session          : SimulationSession (Scene/Camera/PID)
     - gui.application.controller       : ApplicationController (lifecycle/step/timing)
     - gui.application.state/commands   : LifecycleState/UIState, intent commands
   Presentation (Qt-free view models):
     - gui.presentation.view_state      : DashboardState + formatters
-    - gui.presentation.simulation_presenter : Snapshot+metrics -> DashboardState
+    - gui.presentation.simulation_presenter : Snapshot+telemetry -> DashboardState
   Views (Qt, no sim access):
     - gui.views.simulation_view        : FOV + world surfaces
-    - gui.views.dashboard_view         : Live Dashboard (reference design)
+    - gui.views.dashboard_view         : Live Dashboard
     - gui.views.control_view           : Start/Stop/Pause/Reset primary controls
     - gui.views.settings_dialog        : secondary config (pure input panels)
   Core:
     - gui.styles                       : APP_STYLE, SCENE_SIZE, FOV_SIZE, TICK_MS
     - gui.core.renderer                : Renderer (viewport/minimap overlays, stateless)
     - gui.core.frame_presenter         : NumPy -> QPixmap
-    - gui.core.photon_renderer         : beacon photon patches (sim-owned)
     - gui.core.window_manager          : secondary windows
   Panels (gui/panels/* — pure inputs: display/validate/emit Config):
-    - gui.panels.base/global/camera/control/disturbances/environment/multi_beacon
+    - gui.panels.base/global/camera/control/disturbances/environment
   Orchestrator:
     - gui.main_window                  : MainWindow (thin composition root)
 
