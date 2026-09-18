@@ -63,9 +63,9 @@ def test_control_deck_fullscreen_toggle(qapp):
     dlg = SettingsDialog(session)
 
     # Check tabs: Remote Terminal is first tab
-    assert dlg.tabs.count() == 5
+    assert dlg.tabs.count() == 4
     assert dlg.tabs.tabText(0) == "Remote Terminal"
-    assert dlg.tabs.tabText(1) == "Camera"
+    assert dlg.tabs.tabText(1) in ("Local Terminal", "Camera")
 
     # Test fullscreen toggle
     assert dlg.btn_fullscreen.text() == "Full Screen"

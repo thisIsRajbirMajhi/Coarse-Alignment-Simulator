@@ -4,10 +4,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from camera.config import CameraConfig
-from control.config import ControllerConfig
 from disturbance.core.config import DisturbanceConfig
 from environment.config import EnvironmentConfig
+from local_terminal.config import LocalTerminalConfig
 from simulation.env import FSOCEnv
 from simulation.headless import HeadlessConfig, HeadlessSimulation
 
@@ -41,18 +40,17 @@ def test_headless_simulation_determinism():
     assert step1["pan"] == step2["pan"]
     assert step1["tilt"] == step2["tilt"]
 
-
 def test_headless_simulation_custom_configs():
     env_cfg = EnvironmentConfig(world_width=3000, world_height=2500, star_count=50)
-    cam_cfg = CameraConfig(fov_width=800, fov_height=600)
-    ctrl_cfg = ControllerConfig(kp=0.5, output_clamp=50.0)
+    lt_cfg = LocalTerminalConfig()
+    lt_cfg.camera.resolution_width = 800
+    lt_cfg.camera.resolution_height = 600
     dist_cfg = DisturbanceConfig(turbulence=3)
 
     sim = HeadlessSimulation(
         seed=99,
         env_config=env_cfg,
-        camera_config=cam_cfg,
-        controller_config=ctrl_cfg,
+        local_terminal_config=lt_cfg,
         disturbance_config=dist_cfg,
     )
     obs = sim.reset(seed=99)

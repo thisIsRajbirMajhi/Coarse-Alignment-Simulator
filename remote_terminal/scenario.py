@@ -72,6 +72,12 @@ class RemoteTerminalScenario:
         self.terminals = new_terminals
         self._sync_terminal_positions()
 
+    def get_visible_terminals(self, camera) -> list[Any]:
+        if camera is None:
+            return []
+        x0, y0, x1, y1 = camera.get_fov_rect()
+        return [t for t in self.terminals if x0 <= t.x <= x1 and y0 <= t.y <= y1]
+
     def update(self, dt: float, camera=None) -> None:
         """Advance scenario motion, update each terminal, and evaluate link progression."""
         dt = float(max(1e-4, min(dt, 0.2)))

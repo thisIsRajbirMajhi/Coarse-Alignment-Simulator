@@ -97,7 +97,7 @@ class ApplicationController(QObject):
     # -- commands ----------------------------------------------------
     def apply_config(self, cmd: ApplyConfigCommand) -> None:
         try:
-            if cmd.section == "camera":
+            if cmd.section in ("camera", "local_terminal"):
                 self.session.apply_camera_config(cmd.config)
             elif cmd.section == "control":
                 self.session.apply_controller_config(cmd.config)

@@ -1,4 +1,4 @@
-# gui/views/settings_dialog.py - Fullscreen-capable Control Deck hosting Remote Terminal and system configs.
+# gui/views/settings_dialog.py - Fullscreen-capable Control Deck hosting Local Terminal, Remote Terminal, and system configs.
 from __future__ import annotations
 
 import logging
@@ -25,15 +25,16 @@ class SettingsDialog(QDialog):
     """
     Control Deck window/dialog - fullscreen capable.
     Hosts:
-      - Remote Terminal Control Deck (6-card architecture)
-      - Camera Panel
+      - Local Terminal Control Deck (Configuration A–E & Operations F–I)
+      - Remote Terminal Control Deck (6-card multi-terminal architecture)
       - Control Panel (PID)
       - Environment Panel
       - Disturbances Panel
     Emits validated Config objects upward. Never touches simulation directly.
     """
 
-    cameraChanged = pyqtSignal(object)
+    localTerminalChanged = pyqtSignal(object)
+    cameraChanged = pyqtSignal(object)  # Compatibility alias
     controlChanged = pyqtSignal(object)
     environmentChanged = pyqtSignal(object)
     disturbancesChanged = pyqtSignal(object)
@@ -42,8 +43,8 @@ class SettingsDialog(QDialog):
     def __init__(self, session, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.setMinimumSize(950, 700)
-        self.resize(1400, 920)
+        self.setMinimumSize(1000, 720)
+        self.resize(1440, 920)
         self.setStyleSheet(APP_STYLE)
         self.setWindowFlags(self.windowFlags() | Qt.Window)
         self._fullscreen = False
@@ -62,7 +63,7 @@ class SettingsDialog(QDialog):
         title.setStyleSheet("font-size:16px; font-weight:700; color:#ffffff;")
         hbox.addWidget(title)
 
-        sub = QLabel("Configuration & Remote Terminal System", header)
+        sub = QLabel("Local Optical Terminal • Remote Terminal • Control • Environment • Disturbances", header)
         sub.setStyleSheet("font-size:11px; color:#e2e8f0; margin-left:8px;")
         hbox.addWidget(sub)
         hbox.addStretch(1)
@@ -83,40 +84,42 @@ class SettingsDialog(QDialog):
         self.tabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout.addWidget(self.tabs, 1)
 
-        from gui.panels.camera_panel import CameraPanel
-        from gui.panels.control_panel import ControlPanel
         from gui.panels.disturbances_panel import DisturbancesPanel
         from gui.panels.environment_panel import EnvironmentPanel
+        from gui.panels.local_terminal_panel import LocalTerminalPanel
         from gui.panels.remote_terminal_panel import RemoteTerminalPanel
 
-        # 1. Remote Terminal Panel
+        scene_bounds = (int(session.env_config.world_width), int(session.env_config.world_height))
+
+        # 1. Local Terminal Panel (replaces standalone camera deck)
+        lt_cfg = getattr(session, "local_terminal_config", None) or getattr(session, "camera_config", None)
+        self.local_terminal_panel = LocalTerminalPanel(initial=lt_cfg, scene_bounds=scene_bounds)
+        # Compatibility alias
+        self.camera_panel = self.local_terminal_panel
+
+        # 2. Remote Terminal Panel
         scen_cfg = getattr(session, "scenario_config", None)
         self.terminal_panel = RemoteTerminalPanel(initial=scen_cfg)
 
-        # 2. Camera Panel
-        scene_bounds = (int(session.env_config.world_width), int(session.env_config.world_height))
-        self.camera_panel = CameraPanel(initial=session.camera_config, scene_bounds=scene_bounds)
-
-        # 3. Control Panel
-        self.control_panel = ControlPanel(initial=session.controller_config)
-
-        # 4. Environment Panel
+        # 3. Environment Panel
         self.env_panel = EnvironmentPanel(initial=session.env_config)
 
-        # 5. Disturbances Panel
+        # 4. Disturbances Panel
         self.dist_panel = DisturbancesPanel(initial=session.disturbance_config)
 
         # Wrap each panel in a scroll area with custom clean background
         self._add_scrolled_tab(self.terminal_panel, "Remote Terminal")
-        self._add_scrolled_tab(self.camera_panel, "Camera")
-        self._add_scrolled_tab(self.control_panel, "Control (PID)")
+        self._add_scrolled_tab(self.local_terminal_panel, "Local Terminal")
         self._add_scrolled_tab(self.env_panel, "Environment")
         self._add_scrolled_tab(self.dist_panel, "Disturbances")
 
         # Connect signals
+        def _on_local_terminal_changed(cfg):
+            self.localTerminalChanged.emit(cfg)
+            self.cameraChanged.emit(cfg)
+
+        self.local_terminal_panel.configChanged.connect(_on_local_terminal_changed)
         self.terminal_panel.configChanged.connect(self.terminalChanged.emit)
-        self.camera_panel.configChanged.connect(lambda: self.cameraChanged.emit(self.camera_panel.collect_config()))
-        self.control_panel.configChanged.connect(self.controlChanged.emit)
         self.env_panel.configChanged.connect(self.environmentChanged.emit)
         self.dist_panel.configChanged.connect(self.disturbancesChanged.emit)
 
@@ -146,10 +149,21 @@ class SettingsDialog(QDialog):
             log.debug("control deck fullscreen toggle failed: %s", e)
 
     def update_telemetry(self, telemetry: dict) -> None:
+        if not isinstance(telemetry, dict):
+            return
+        # Local Terminal telemetry
         try:
-            self.terminal_panel.update_telemetry(telemetry)
+            lt_data = telemetry.get("local_terminal") or telemetry
+            self.local_terminal_panel.update_telemetry(lt_data)
         except Exception as e:
-            log.debug("terminal telemetry update skipped: %s", e)
+            log.debug("local terminal telemetry update skipped: %s", e)
+
+        # Remote Terminal telemetry
+        try:
+            rt_data = telemetry.get("terminals") or telemetry
+            self.terminal_panel.update_telemetry(rt_data)
+        except Exception as e:
+            log.debug("remote terminal telemetry update skipped: %s", e)
 
     def sync_world_bounds(self, session) -> None:
         """Push current world size into panels (call after world resize)."""
@@ -158,7 +172,7 @@ class SettingsDialog(QDialog):
         except Exception as e:
             log.debug("world bounds sync skipped: %s", e)
             return
-        for panel, method in ((self.camera_panel, "set_scene_bounds"),):
+        for panel, method in ((self.local_terminal_panel, "set_scene_bounds"),):
             try:
                 getattr(panel, method)(bounds)
             except Exception as e:
@@ -168,14 +182,17 @@ class SettingsDialog(QDialog):
         """Pull clamped session values back into widgets (no emit, no loops)."""
         self.sync_world_bounds(session)
         try:
+            if hasattr(session, "local_terminal_config"):
+                self.local_terminal_panel.set_config(session.local_terminal_config, emit=False)
+            elif hasattr(session, "camera_config"):
+                self.local_terminal_panel.set_config(session.camera_config, emit=False)
+        except Exception as e:
+            log.debug("local terminal sync skipped: %s", e)
+        try:
             if hasattr(session, "scenario_config"):
                 self.terminal_panel.set_config(session.scenario_config, emit=False)
         except Exception as e:
-            log.debug("terminal sync skipped: %s", e)
-        try:
-            self.camera_panel.set_config(session.camera_config, emit=False)
-        except Exception as e:
-            log.debug("camera sync skipped: %s", e)
+            log.debug("remote terminal sync skipped: %s", e)
         try:
             self.control_panel.set_config(session.controller_config, emit=False)
         except Exception as e:

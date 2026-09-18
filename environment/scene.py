@@ -8,7 +8,7 @@
 # Vignetting policy: REAL lens vignetting is sensor/image-space (centered on camera FOV),
 #   NOT world-space (centered on world 2500,2500). Previous Scene._build_background baked
 #   vignetting into the 5000×5000 world buffer (dark corners at world centre). Now vignetting
-#   is NOT applied in Scene; it is applied at camera-capture stage (PTZCamera.capture or
+#   is NOT applied in Scene; it is applied at camera-capture stage (LocalTerminal.capture or
 #   MainWindow post-capture) so it follows the camera FOV.
 
 import numpy as np
@@ -239,7 +239,7 @@ class Scene:
         image stage (image-space).
 
         Args:
-          x0,y0,x1,y1 : world coords (from PTZCamera.get_fov_rect())
+          x0,y0,x1,y1 : world coords (from LocalTerminal.get_fov_rect())
         Returns:
           uint8 (h,w,3) crop.
         """

@@ -24,27 +24,36 @@ class FrameSnapshot:
     pixel_scale_mrad: float = 0.035
     dt: float = 1 / 30
     terminals: dict | None = None
+    local_terminal: dict | None = None
 
 
 class SimulationSession:
-    """Owns Scene/Camera/Controller/Disturbance.
+    """Owns Scene/LocalTerminal/Controller/Disturbance.
 
     GUI talks to this; widgets never touch sim objects directly.
     """
 
-    def __init__(self, env_config=None, camera_config=None, controller_config=None,
+    def __init__(self, env_config=None, camera_config=None, local_terminal_config=None, controller_config=None,
                  disturbance_config=None, scenario_config=None, seed: int = 42, **kwargs):
-        from camera.config import CameraConfig
-        from control.config import ControllerConfig
         from disturbance.core.config import DisturbanceConfig
         from environment.config import EnvironmentConfig
+        from local_terminal import LocalTerminal, LocalTerminalConfig
         from remote_terminal import RemoteTerminalScenario, RemoteTerminalScenarioConfig
 
         self.seed = int(seed)
         self.env_config = (env_config or EnvironmentConfig()).validate()
         scene_bounds = (int(self.env_config.world_width), int(self.env_config.world_height))
-        self.camera_config = (camera_config or CameraConfig()).validate(scene_bounds)
-        self.controller_config = (controller_config or ControllerConfig()).validate()
+
+        # Local Terminal configuration (replaces standalone camera system)
+        lt_cfg = local_terminal_config or kwargs.get("local_terminal")
+        if lt_cfg is None:
+            if camera_config is not None:
+                lt_cfg = LocalTerminalConfig.from_camera_config(camera_config)
+            else:
+                lt_cfg = LocalTerminalConfig()
+        self.local_terminal_config = lt_cfg.validate(scene_bounds)
+        self.camera_config = self.local_terminal_config
+
         self.disturbance_config = (disturbance_config or DisturbanceConfig()).validate()
         self.scenario_config = (scenario_config or kwargs.get("terminal_config") or RemoteTerminalScenarioConfig()).validate()
         self._built = False
@@ -53,10 +62,9 @@ class SimulationSession:
 
     # -- construction -------------------------------------------------
     def build(self) -> None:
-        from camera.ptz_camera import PTZCamera
         from common.rng import get_rng, seed_global
-        from control.controller import PIDController
         from environment.scene import Scene
+        from local_terminal import LocalTerminal, LocalTerminalConfig
 
         cfg = self.env_config.validate()
         seed_global(int(cfg.seed) if cfg.seed is not None else self.seed)
@@ -70,21 +78,18 @@ class SimulationSession:
             log.debug("disturbance reset skipped: %s", e)
 
         scene_w, scene_h = int(cfg.world_width), int(cfg.world_height)
-        cam_cfg = self.camera_config.validate((scene_w, scene_h))
-        # clamp FOV inside world
-        cam_cfg.fov_width = min(int(cam_cfg.fov_width), scene_w - 10)
-        cam_cfg.fov_height = min(int(cam_cfg.fov_height), scene_h - 10)
-        self.camera_config = cam_cfg
+        lt_cfg = self.local_terminal_config.validate((scene_w, scene_h))
+        self.local_terminal_config = lt_cfg
+        self.camera_config = lt_cfg
 
         self.scene = Scene(config=cfg)
-        self.camera = PTZCamera(config=cam_cfg, scene_bounds=(scene_w, scene_h), rng=getattr(self, "rng", None))
+        self.local_terminal = LocalTerminal(config=lt_cfg, scene_bounds=(scene_w, scene_h), rng=getattr(self, "rng", None))
+        self.camera = self.local_terminal
         try:
-            self.camera.set_vignetting(float(getattr(cfg, "vignetting_pct", 0)) / 100.0)
+            self.local_terminal.set_vignetting(float(getattr(cfg, "vignetting_pct", 0)) / 100.0)
         except Exception as e:
             log.debug("vignetting skipped: %s", e)
 
-        ctrl_cfg = self.controller_config.validate()
-        self.controller = PIDController(config=ctrl_cfg)
         from remote_terminal import RemoteTerminalScenario
         self.terminal_scenario = RemoteTerminalScenario(self.scenario_config, bounds=(scene_w, scene_h), rng=self.rng)
 
@@ -107,16 +112,47 @@ class SimulationSession:
         self.build()
 
     # -- config application (validated, explicit) ----------------------
-    def apply_camera_config(self, config) -> None:
+    def apply_local_terminal_config(self, config) -> None:
         self.ensure_built()
         scene_bounds = (int(self.env_config.world_width), int(self.env_config.world_height))
-        self.camera_config = config.validate(scene_bounds)
-        self.camera.apply_config(self.camera_config)
+        self.local_terminal_config = config.validate(scene_bounds)
+        self.camera_config = self.local_terminal_config
+        self.local_terminal.apply_config(self.local_terminal_config)
 
-    def apply_controller_config(self, config) -> None:
-        self.ensure_built()
-        self.controller_config = config.validate()
-        self.controller.apply_config(self.controller_config)
+    def apply_camera_config(self, config) -> None:
+        from local_terminal import LocalTerminalConfig
+        if isinstance(config, LocalTerminalConfig):
+            self.apply_local_terminal_config(config)
+        else:
+            lt_cfg = LocalTerminalConfig.from_camera_config(config)
+            self.apply_local_terminal_config(lt_cfg)
+
+    @property
+    def controller_config(self):
+        """Compatibility property forwarding to Local Terminal tracking config."""
+        return self.local_terminal_config.tracking
+
+    @controller_config.setter
+    def controller_config(self, cfg) -> None:
+        if cfg is not None:
+            self.apply_controller_config(cfg)
+
+    def apply_controller_config(self, config=None) -> None:
+        """Compatibility adapter: updates Local Terminal tracking servo parameters."""
+        if config is None:
+            return
+        if hasattr(config, "kp"):
+            self.local_terminal_config.tracking.kp = float(config.kp)
+        if hasattr(config, "ki"):
+            self.local_terminal_config.tracking.ki = float(config.ki)
+        if hasattr(config, "kd"):
+            self.local_terminal_config.tracking.kd = float(config.kd)
+        if hasattr(config, "dead_zone"):
+            self.local_terminal_config.tracking.dead_zone = float(config.dead_zone)
+        if hasattr(config, "output_clamp"):
+            self.local_terminal_config.tracking.output_clamp = float(config.output_clamp)
+        if self._built and self.local_terminal is not None:
+            self.local_terminal.apply_config(self.local_terminal_config)
 
     def apply_environment_config(self, config) -> None:
         # World-size change requires rebuild (scene + camera bounds).
@@ -150,12 +186,16 @@ class SimulationSession:
         dt_eff = float(np.clip(dt, 1e-4, 0.1))
         self._last_dt = dt_eff
         self.scene.update(dt_eff)
-        self.camera.update(dt)
         if getattr(self, "terminal_scenario", None) is not None:
             try:
                 self.terminal_scenario.update(dt_eff, camera=self.camera)
             except Exception as e:
                 log.debug("terminal scenario update skipped: %s", e)
+
+        try:
+            self.local_terminal.update(dt, remote_scenario=getattr(self, "terminal_scenario", None))
+        except Exception:
+            self.camera.update(dt)
 
         pipe = self._disturbance_pipeline_for(dt_eff)
         pan_dist, tilt_dist = pipe.disturb_camera_pose(self.camera.pan, self.camera.tilt, dt_eff)
@@ -202,4 +242,5 @@ class SimulationSession:
             pixel_scale_mrad=scale,
             dt=dt_eff,
             terminals=self.terminal_scenario.get_telemetry() if getattr(self, "terminal_scenario", None) is not None else None,
+            local_terminal=self.local_terminal.get_telemetry() if getattr(self, "local_terminal", None) is not None else None,
         )

@@ -127,7 +127,7 @@ def test_headless_unaffected():
 
 def test_no_sim_imports_qt():
     import subprocess, sys
-    code = "import simulation.headless, disturbance, control.controller, camera.ptz_camera; print('ok')"
+    code = "import simulation.headless, disturbance, local_terminal.terminal; print('ok')"
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert "PyQt" not in r.stdout + r.stderr or "ok" in r.stdout
 

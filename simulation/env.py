@@ -26,6 +26,7 @@ def _make_sim_from_config(headless_config: HeadlessConfig, seed: int) -> Headles
         seed=seed,
         env_config=headless_config.env,
         camera_config=headless_config.camera,
+        local_terminal_config=getattr(headless_config, "local_terminal", None),
         controller_config=headless_config.controller,
         disturbance_config=headless_config.disturbance,
         scenario_config=getattr(headless_config, "scenario", None),
@@ -51,7 +52,8 @@ if _HAS_GYM:
                     cfg_kwargs[k] = v
                 elif k == "env_config":
                     cfg_kwargs["env"] = v
-                elif k == "camera_config":
+                elif k in ("camera_config", "local_terminal_config"):
+                    cfg_kwargs["local_terminal"] = v
                     cfg_kwargs["camera"] = v
                 elif k == "controller_config":
                     cfg_kwargs["controller"] = v

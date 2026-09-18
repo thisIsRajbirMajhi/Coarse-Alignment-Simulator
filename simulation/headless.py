@@ -6,16 +6,13 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from camera.config import CameraConfig
-from camera.ptz_camera import PTZCamera
 from common.rng import get_rng, seed_global
-from control.config import ControllerConfig
-from control.controller import PIDController
 from disturbance import disturbances as dist
 from disturbance.core.config import DisturbanceConfig
 from disturbance.core import DisturbanceContext, DisturbancePipeline
 from environment.config import EnvironmentConfig
 from environment.scene import Scene
+from local_terminal import LocalTerminal, LocalTerminalConfig
 from remote_terminal import RemoteTerminalScenario, RemoteTerminalScenarioConfig
 
 
@@ -24,8 +21,9 @@ class HeadlessConfig:
     """Aggregated config for HeadlessSimulation - all validated, single source."""
     seed: int = 42
     env: EnvironmentConfig | None = None
-    camera: CameraConfig | None = None
-    controller: ControllerConfig | None = None
+    camera: LocalTerminalConfig | None = None
+    local_terminal: LocalTerminalConfig | None = None
+    controller: Any | None = None
     disturbance: DisturbanceConfig | None = None
     scenario: RemoteTerminalScenarioConfig | None = None
     max_steps: int = 2000
@@ -38,15 +36,16 @@ class HeadlessSimulation:
     Headless FSOC simulator — deterministic, no Qt.
 
     Pipeline:
-      scene.update → camera.update → disturbances → capture FOV → camera.move (direct action)
+      scene.update → local_terminal.update → disturbances → capture FOV → local_terminal.move (direct action)
     """
 
     def __init__(
         self,
         seed: int = 42,
         env_config: EnvironmentConfig | None = None,
-        camera_config: CameraConfig | None = None,
-        controller_config: ControllerConfig | None = None,
+        camera_config: LocalTerminalConfig | None = None,
+        local_terminal_config: LocalTerminalConfig | None = None,
+        controller_config: Any | None = None,
         disturbance_config: DisturbanceConfig | None = None,
         scenario_config: RemoteTerminalScenarioConfig | None = None,
         rng: np.random.Generator | None = None,
@@ -70,17 +69,16 @@ class HeadlessSimulation:
             self.env_config.validate()
         self._scene_size = (int(self.env_config.world_width), int(self.env_config.world_height))
 
-        if camera_config is None:
-            fov = (640, 480)
-            self.camera_config = CameraConfig(
-                fov_width=fov[0], fov_height=fov[1],
-                viewport_width=2000, viewport_height=2000,
-                god_width=2000, god_height=2000,
-            ).validate(self._scene_size)
-        else:
-            self.camera_config = camera_config.validate(self._scene_size)
+        # Local Terminal configuration (replaces standalone camera system)
+        lt_cfg = local_terminal_config or camera_config or kwargs.get("local_terminal")
+        if lt_cfg is None:
+            lt_cfg = LocalTerminalConfig()
+        elif not isinstance(lt_cfg, LocalTerminalConfig):
+            lt_cfg = LocalTerminalConfig.from_camera_config(lt_cfg)
+        self.local_terminal_config = lt_cfg.validate(self._scene_size)
+        # Compatibility property alias
+        self.camera_config = self.local_terminal_config
 
-        self.controller_config = (controller_config or ControllerConfig()).validate()
         self.disturbance_config = (disturbance_config or DisturbanceConfig()).validate()
         self.scenario_config = (scenario_config or RemoteTerminalScenarioConfig()).validate()
 
@@ -95,28 +93,32 @@ class HeadlessSimulation:
             bounds=self._scene_size,
         )
 
+    @property
+    def controller_config(self):
+        """Compatibility property forwarding to Local Terminal tracking config."""
+        return self.local_terminal_config.tracking
+
     def _build_simulation(self):
         cfg = self.env_config.validate()
         self._scene_size = (int(cfg.world_width), int(cfg.world_height))
         self.scene = Scene(config=cfg)
 
         sw, sh = self._scene_size
-        cam_cfg = self.camera_config.validate((sw, sh))
-        fov_w = min(int(cam_cfg.fov_width), sw - 10)
-        fov_h = min(int(cam_cfg.fov_height), sh - 10)
-        cam_cfg.fov_width = max(20, fov_w)
-        cam_cfg.fov_height = max(20, fov_h)
-        self.camera_config = cam_cfg
-        self._fov_size = (int(cam_cfg.fov_width), int(cam_cfg.fov_height))
-        self.camera = PTZCamera(config=cam_cfg, scene_bounds=(sw, sh), rng=self.rng)
+        lt_cfg = self.local_terminal_config.validate((sw, sh))
+        self.local_terminal_config = lt_cfg
+        self.camera_config = lt_cfg
+        self._fov_size = (int(lt_cfg.camera.resolution_width), int(lt_cfg.camera.resolution_height))
+
+        self.local_terminal = LocalTerminal(config=lt_cfg, scene_bounds=(sw, sh), rng=self.rng)
+        # Compatibility alias for external callers
+        self.camera = self.local_terminal
+
         try:
             vig = float(cfg.vignetting_pct) / 100.0
-            self.camera.set_vignetting(vig)
+            self.local_terminal.set_vignetting(vig)
         except Exception:
             pass
 
-        ctrl_cfg = self.controller_config.validate()
-        self.controller = PIDController(config=ctrl_cfg)
         self.terminal_scenario = RemoteTerminalScenario(self.scenario_config, bounds=self._scene_size, rng=self.rng)
 
         self._camera_drift_state.clear()
@@ -201,6 +203,11 @@ class HeadlessSimulation:
             "fov_size": self._fov_size,
             "step_count": self.step_count,
         }
+        if hasattr(self, "local_terminal") and self.local_terminal is not None:
+            try:
+                obs["local_terminal"] = self.local_terminal.get_telemetry()
+            except Exception:
+                pass
         if hasattr(self, "terminal_scenario") and self.terminal_scenario is not None:
             try:
                 obs["terminals"] = self.terminal_scenario.get_telemetry()
@@ -219,13 +226,16 @@ class HeadlessSimulation:
             self.scene.update(dt_eff)
         except Exception:
             pass
-        try:
-            self.camera.update(dt_wall)
-        except Exception:
-            pass
         if hasattr(self, "terminal_scenario") and self.terminal_scenario is not None:
             try:
                 self.terminal_scenario.update(dt_eff, camera=self.camera)
+            except Exception:
+                pass
+        try:
+            self.local_terminal.update(dt_wall, remote_scenario=getattr(self, "terminal_scenario", None))
+        except Exception:
+            try:
+                self.camera.update(dt_wall)
             except Exception:
                 pass
 
