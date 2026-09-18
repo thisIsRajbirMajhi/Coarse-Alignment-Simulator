@@ -86,3 +86,7 @@ class ReacquisitionManager:
                                        if stage in self.config.stages else 40.0)
         return bool(spatial_ok and signature_score >= 0.80
                     and confirmations >= 1 and snr_db >= min_snr)
+
+
+# Spec alias (§28/§32)
+ReacquisitionController = ReacquisitionManager

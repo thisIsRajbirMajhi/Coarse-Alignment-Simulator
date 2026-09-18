@@ -6,7 +6,12 @@ from typing import Any
 
 import numpy as np
 
-from local_terminal.models import CandidateTrack, SignatureScores, TargetIdentificationSignature
+from local_terminal.models import (
+    CandidateTrack,
+    OpticalConsistencyScore,
+    SignatureScores,
+    TargetIdentificationSignature,
+)
 
 
 class SignatureAnalyzer:

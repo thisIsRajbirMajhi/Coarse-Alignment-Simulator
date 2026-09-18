@@ -36,7 +36,8 @@ class RemoteTerminal:
         bc = self.config.beacon
         self._encoder = BeaconEncoder(BeaconEncoderConfig(
             terminal_id=str(self.config.identity.id),
-            network_id=0,
+            token=str(getattr(bc, "token", "ALPHA-7")),
+            wavelength_nm=int(getattr(bc, "wavelength_nm", 1550)),
             chip_rate_hz=float(getattr(bc, "identification_chip_rate_hz", 8.0)),
         ))
         self._sync_states()
@@ -110,9 +111,16 @@ class RemoteTerminal:
         bc = self.config.beacon
         target_id = str(self.config.identity.id)
         chip_rate = float(getattr(bc, "identification_chip_rate_hz", 8.0))
-        if self._encoder.config.terminal_id != target_id or self._encoder.config.chip_rate_hz != chip_rate:
+        token = str(getattr(bc, "token", "ALPHA-7"))
+        wl = int(getattr(bc, "wavelength_nm", 1550))
+        if (self._encoder.config.terminal_id != target_id
+            or self._encoder.config.chip_rate_hz != chip_rate
+            or self._encoder.config.token != token
+            or self._encoder.config.wavelength_nm != wl):
             self._encoder.config.terminal_id = target_id
             self._encoder.config.chip_rate_hz = chip_rate
+            self._encoder.config.token = token
+            self._encoder.config.wavelength_nm = wl
             self._encoder._rebuild()
         self._encoder.update(self.sim_time)
         self._sync_states()

@@ -132,6 +132,7 @@ class BeaconConfig:
     identification_code_enabled: bool = True
     identification_code: str = "RT001"
     identification_chip_rate_hz: float = 8.0
+    token: str = "ALPHA-7"
     polarization_type: str = "UNPOLARIZED"  # UNPOLARIZED | LINEAR | CIRCULAR | ELLIPTICAL
     polarization_angle_deg: float = 0.0
 

@@ -28,10 +28,13 @@ from local_terminal.models import (
     BeamProfile,
     CameraFrame,
     CandidateTrack,
+    OpticalMeasurement,
     PTZCommand,
     SearchCommand,
+    SignalMeasurement,
     SignalState,
     TargetIdentificationSignature,
+    TargetPayloadConfig,
     TargetState,
     TrackingStatus,
     UpdateInput,
@@ -130,8 +133,14 @@ class LocalTerminalSystem:
             det = getattr(config, "detection", None)
             acq = getattr(config, "acquisition", None)
             timeout = float(getattr(acq, "timeout", 30.0) or 30.0) if acq is not None else 30.0
+            tp = self._build_target_profile(config)
+            exp_id = str(getattr(tp, "expected_terminal_id", "") or "").strip()
+            require_id = bool(exp_id and exp_id != "0")
             if det is not None:
-                return AcquisitionConfig2.from_detection(det, timeout)
+                acq_cfg = AcquisitionConfig2.from_detection(det, timeout)
+                acq_cfg.require_identity_match = require_id
+                acq_cfg.expected_terminal_id = exp_id
+                return acq_cfg
         except Exception:
             pass
         return AcquisitionConfig2()
@@ -139,9 +148,19 @@ class LocalTerminalSystem:
     def _build_target_profile(self, config: Any) -> TargetProfile:
         """Build TargetProfile from config; falls back to wildcard (accept any)."""
         try:
+            tp = getattr(config, "target_payload", getattr(config, "target_profile", None))
+            if tp is not None:
+                if isinstance(tp, TargetProfile):
+                    return tp.validate()
+                elif isinstance(tp, dict):
+                    return TargetProfile.from_dict(tp)
             det = getattr(config, "detection", None)
             if det is not None and hasattr(det, "build_target_profile"):
                 return det.build_target_profile()
+            elif det is not None:
+                code = str(getattr(det, "identification_code", "") or "").strip()
+                if code:
+                    return TargetProfile(expected_terminal_id=code).validate()
         except Exception:
             pass
         return TargetProfile()  # wildcard: accept any terminal
@@ -319,7 +338,30 @@ class LocalTerminalSystem:
                         hist = list(tr.temporal.intensity_history)
                         times = list(tr.temporal.timestamps) if tr.temporal.timestamps else []
                         chip_rate = float(getattr(self._target_profile, "chip_rate_hz", 8.0))
-                        sig_meas = self._signal_analyzer.analyze(hist, times, chip_rate)
+                        bg_est = float(getattr(frame_proc, "background_estimate", 0.0) if frame_proc else 0.0)
+                        sig_meas = self._signal_analyzer.analyze(hist, times, chip_rate, bg_est)
+
+                        # §8 & §27: OpticalMeasurement
+                        tr.optical_measurement = OpticalMeasurement(
+                            centroid_x=float(tr.meas_x),
+                            centroid_y=float(tr.meas_y),
+                            peak_intensity=float(tr.meas_intensity),
+                            integrated_intensity=float(tr.meas_intensity * max(1.0, tr.meas_spot_px)),
+                            snr=float(tr.meas_snr),
+                            apparent_diameter=float(tr.meas_spot_px),
+                            background_level=bg_est,
+                            spectral_estimate=float(getattr(tr.signature, "spectral_score", 1.0) * 1550.0),
+                            timestamp=float(ts),
+                        )
+                        # §9 & §27: SignalMeasurement
+                        tr.signal_measurement = sig_meas
+                        tr.optical_quality = float(tr.signature.overall_score)
+                        tr.signal_quality = float(sig_meas.signal_quality)
+                        tr.filtered_position = (float(tr.est_x), float(tr.est_y))
+                        tr.predicted_position = (float(tr.est_x + tr.est_vx * dt), float(tr.est_y + tr.est_vy * dt))
+                        tr.velocity = (float(tr.est_vx), float(tr.est_vy))
+                        tr.acceleration = (float(tr.est_ax), float(tr.est_ay))
+
                         # Update SignalState from signal measurement
                         ss = tr.signal_state
                         ss.chip_rate_hz = float(sig_meas.estimated_chip_rate_hz)
@@ -331,7 +373,8 @@ class LocalTerminalSystem:
                             ss.state = "DECODING"
                         elif sig_meas.num_samples >= 20:
                             ss.state = "SAMPLING"
-                        # Frame decoder
+
+                        # §12: Frame decoder
                         df = self._frame_decoder.update(
                             tr.observation_id, sig_meas, tr._decoded_frame)
                         tr._decoded_frame = df
@@ -346,13 +389,35 @@ class LocalTerminalSystem:
                         ss.total_successes = int(df.success_count)
                         if df.valid:
                             ss.state = "VALID"
-                        # Identity matcher
+
+                        # §14: Identity validator
                         decision = self._id_matcher.match(tr.observation_id, df)
                         tr._identity_decision = decision
                         ss.identity_matched = bool(decision.matched)
                         ss.identity_reason = str(decision.reason)
                         ss.identity_confidence = float(decision.confidence)
-                        # Hard-reject impostors immediately
+
+                        # Populate §27 candidate track fields
+                        tr.decoded_terminal_id = str(df.terminal_id) or str(df.terminal_id_str)
+                        tr.decoded_token = str(getattr(df, "token", ""))
+                        tr.decoded_wavelength_nm = float(getattr(df, "wavelength_nm", 0.0))
+                        tr.sequence_number = int(df.sequence_number)
+                        tr.identity_state = str(decision.status)
+                        tr.identity_confidence = float(decision.confidence)
+                        if df.valid and df.crc_ok:
+                            tr.valid_frame_count += 1
+                            tr.last_valid_frame_time = float(ts)
+                            tr.last_valid_sequence = int(df.sequence_number)
+                            tr.latest_frame = df.frame
+                        elif sig_meas.sufficient_data:
+                            tr.invalid_frame_count += 1
+
+                        tr.synchronization_state = {
+                            "synced": bool(df.valid or (sig_meas.sufficient_data and sig_meas.num_samples >= 20)),
+                            "confidence": float(df.confidence),
+                        }
+
+                        # Hard-reject impostors immediately (§14, §17)
                         if tr.is_impostor:
                             tr.lifecycle_state = CandidateState.REJECTED
                     except Exception:
@@ -466,7 +531,7 @@ class LocalTerminalSystem:
             # for a frame (§17). New acquisitions use `selection`.
             active_alive = (self.tracks.get(self.active_observation_id)
                             if self.active_observation_id else None)
-            if active_alive is not None and active_alive in alive:
+            if active_alive is not None and active_alive in alive and active_alive.miss_count <= 2:
                 confirm_target = active_alive
             else:
                 confirm_target = selection
@@ -642,6 +707,9 @@ class LocalTerminalSystem:
             prev = self.tracks.get(self.active_observation_id)
             if prev is not None and not self.reacq.active and self._loss_streak >= 3:
                 try:
+                    cur_p, cur_t = inp.current_ptz_pose or (0.0, 0.0)
+                    self._reacq_anchor_pan = float(cur_p)
+                    self._reacq_anchor_tilt = float(cur_t)
                     self.reacq.begin((float(prev.est_x), float(prev.est_y)),
                                      (float(prev.est_vx), float(prev.est_vy)),
                                      prev.observation_id, float(prev.signature.overall_score))
@@ -751,12 +819,13 @@ class LocalTerminalSystem:
                         max_step = deg * ppx * dt
                     except Exception:
                         max_step = 40.0
-                    max_step = max(4.0, min(120.0, max_step * 1.2))
-                    cx = 0.8 * perr_x + dith_x * 0.5
-                    cy = 0.8 * perr_y + dith_y * 0.5
-                    cx = max(-max_step, min(max_step, cx))
-                    cy = max(-max_step, min(max_step, cy))
+                    anchor_p = float(getattr(self, "_reacq_anchor_pan", float(cur_pan if 'cur_pan' in locals() else 500.0)))
+                    anchor_t = float(getattr(self, "_reacq_anchor_tilt", float(cur_tilt if 'cur_tilt' in locals() else 500.0)))
+                    desired_p = anchor_p + 0.8 * perr_x + dith_x * 0.5
+                    desired_t = anchor_t + 0.8 * perr_y + dith_y * 0.5
                     cur_pan, cur_tilt = inp.current_ptz_pose or (0.0, 0.0)
+                    cx = max(-max_step, min(max_step, desired_p - float(cur_pan)))
+                    cy = max(-max_step, min(max_step, desired_t - float(cur_tilt)))
                     ptz_cmd = PTZCommand(target_pan=float(cur_pan) + float(cx),
                                          target_tilt=float(cur_tilt) + float(cy),
                                          pan_velocity=float(cx) / max(dt, 1e-3),

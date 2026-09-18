@@ -24,8 +24,9 @@ class AcquisitionConfig2:
     minimum_snr_db: float = 8.0
     acquisition_timeout: float = 30.0
     # Phase-2: identity gate
-    require_identity_lock: bool = True   # if True, identity_matched must be True to acquire
-    # If False, falls back to Phase-1 optical-only acquisition (backward compat)
+    require_identity_lock: bool = True   # if True, identity gate is active
+    require_identity_match: bool = False # if True, identity_matched must be True to acquire
+    expected_terminal_id: str = ""
 
     @classmethod
     def from_detection(cls, det_cfg: object, timeout: float = 30.0) -> AcquisitionConfig2:
@@ -140,18 +141,16 @@ class AcquisitionManager:
         spatial_lock = ok_score and ok_snr and centroid_ok
 
         # ── Identity lock gate ────────────────────────────────────────────
-        if self.config.require_identity_lock:
-            # Identity lock required: must be matched OR still accumulating evidence
-            reason = track.signal_state.identity_reason
-            if track.is_impostor:
-                # Known-wrong identity → hard reject this track from the window
-                window = self._confirm_windows.setdefault(track.observation_id, [])
-                window.append(-2.0)  # sentinel for impostor
-                del window[:-32]
-                return AcquisitionResult(acquired=False, observation_id=track.observation_id,
-                                         confidence=float(track.signature.overall_score),
-                                         timestamp=float(timestamp))
-            id_locked = track.signal_state.identity_matched or reason in ("NO_DATA", "BUILDING")
+        if track.is_impostor:
+            window = self._confirm_windows.setdefault(track.observation_id, [])
+            window.append(-2.0)
+            del window[:-32]
+            return AcquisitionResult(acquired=False, observation_id=track.observation_id,
+                                     confidence=float(track.signature.overall_score),
+                                     timestamp=float(timestamp))
+
+        if self.config.require_identity_lock and self.config.require_identity_match:
+            id_locked = bool(track.signal_state.identity_matched)
         else:
             id_locked = True
 

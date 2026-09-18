@@ -479,33 +479,37 @@ class DetectionConfig:
 # =====================================================================
 @dataclass
 class TargetProfile:
-    """What the local terminal expects to receive from the authorised target beacon.
+    """What the local terminal expects to receive from the authorised target beacon (§4, §29).
 
     Configured locally; never fetched from a RemoteTerminal object.
     This is the sole authoritative source for identity decisions.
     """
     # Identity fields ─────────────────────────────────────────────────
-    # The expected remote terminal ID string (e.g. 'RT-001').
-    # Empty string or '0' → accept any (wildcard).
     expected_terminal_id:      str   = ""
-    # Numeric byte form; derived from expected_terminal_id on validate().
     expected_terminal_id_byte: int   = 0
-    # Network/group byte. 0 → accept any.
     expected_network_id:       int   = 0
-    # Capabilities that MUST be present. 0 → no requirement.
+    expected_token:            str   = "ALPHA-7"
+    expected_wavelength_nm:    float = 1550.0
+    wavelength_tolerance_nm:   float = 20.0
+    expected_protocol_version: int   = 1
+    expected_message_type:     int   = 1
     required_capabilities:     int   = 0
 
     # Decode quality gates ─────────────────────────────────────────────
     chip_rate_hz:           float = 8.0     # expected chip rate (bps)
     min_decode_confidence:  float = 0.40    # fraction of CRC-passing frames in sliding window
     min_consecutive_valid:  int   = 2       # consecutive valid frames before IDENTIFIED
+    required_valid_frames:  int   = 2
 
-    # Replay guard ─────────────────────────────────────────────────────
+    # Validation guards ────────────────────────────────────────────────
     require_sequence_advance: bool = True
+    sequence_validation_enabled: bool = True
+    wavelength_validation_enabled: bool = False
 
     # Tracking identity retention ──────────────────────────────────────
-    # Frames of identity failure tolerated during TRACKING before forcing REACQUIRING.
     max_identity_fail_streak: int = 10
+    allow_wavelength_override: bool = False
+    max_sequence_gap: int = 0
 
     def validate(self) -> "TargetProfile":
         if self.expected_terminal_id:
@@ -517,12 +521,16 @@ class TargetProfile:
         self.chip_rate_hz = float(max(0.5, min(self.chip_rate_hz, 30.0)))
         self.min_decode_confidence = float(max(0.0, min(self.min_decode_confidence, 1.0)))
         self.min_consecutive_valid = int(max(1, self.min_consecutive_valid))
+        self.required_valid_frames = self.min_consecutive_valid
         self.max_identity_fail_streak = int(max(1, self.max_identity_fail_streak))
         return self
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> "TargetProfile":
         return cls(**_filter_dataclass_fields(cls, data)).validate() if isinstance(data, dict) else cls().validate()
+
+
+TargetPayloadConfig = TargetProfile
 
 
 # =====================================================================

@@ -50,6 +50,7 @@ class CandidateState(str, Enum):
     IDENTITY_UNKNOWN = "IDENTITY_UNKNOWN"  # decoded but ID not yet confirmed
     IDENTIFIED = "IDENTIFIED"
     SELECTED = "SELECTED"
+    ACQUIRING = "ACQUIRING"
     ACQUIRED = "ACQUIRED"
     TRACKING = "TRACKING"
     DEGRADED = "DEGRADED"

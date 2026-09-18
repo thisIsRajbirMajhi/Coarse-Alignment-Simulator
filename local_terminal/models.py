@@ -14,6 +14,20 @@ from typing import Any
 import numpy as np
 
 from local_terminal.states import CandidateState, LocalTerminalState
+from local_terminal.beacon_frame import (
+    BeaconDecodeResult,
+    BeaconFrame,
+    DecodedPayload,
+)
+from local_terminal.signal_analyzer import (
+    OpticalMeasurement,
+    SignalMeasurement,
+)
+from local_terminal.identity_matcher import (
+    IdentityDecision,
+    TargetPayloadConfig,
+    TargetProfile,
+)
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -224,6 +238,10 @@ class SignalState:
 # ---------------------------------------------------------------------
 # §13 Candidate track data model (local BEACON-N identity only)
 # ---------------------------------------------------------------------
+# Optical consistency score alias (§16)
+OpticalConsistencyScore = SignatureScores
+
+
 @dataclass
 class CandidateTrack:
     observation_id: str = ""  # BEACON-N, local only — never an RT- ID
@@ -253,7 +271,29 @@ class CandidateTrack:
     confidence: float = 0.0
     confirm_count: int = 0  # consecutive signature confirmations
     timestamps: list[float] = field(default_factory=list)
-    # ── Phase-2: communication path ────────────────────────────────────────
+    # ── Upgrade.md §27: structured pipeline fields ─────────────────────────
+    optical_measurement: OpticalMeasurement = field(default_factory=OpticalMeasurement)
+    signal_measurement: SignalMeasurement = field(default_factory=SignalMeasurement)
+    synchronization_state: dict[str, Any] = field(default_factory=dict)
+    decode_state: str = "IDLE"
+    latest_frame: BeaconFrame | None = None
+    decoded_terminal_id: str = ""
+    decoded_token: str = ""
+    decoded_wavelength_nm: float = 0.0
+    sequence_number: int = -1
+    identity_state: str = "UNKNOWN"
+    identity_confidence: float = 0.0
+    valid_frame_count: int = 0
+    invalid_frame_count: int = 0
+    last_valid_frame_time: float = 0.0
+    last_valid_sequence: int = -1
+    filtered_position: tuple[float, float] = (0.0, 0.0)
+    predicted_position: tuple[float, float] = (0.0, 0.0)
+    velocity: tuple[float, float] = (0.0, 0.0)
+    acceleration: tuple[float, float] = (0.0, 0.0)
+    optical_quality: float = 0.0
+    signal_quality: float = 0.0
+    # ── Backward compatibility communication path ──────────────────────────
     beam_profile: BeamProfile = field(default_factory=BeamProfile)
     signal_state: SignalState = field(default_factory=SignalState)
     # Cached FrameDecoder + IdentityMatcher outputs (set by system.py)
@@ -272,10 +312,21 @@ class CandidateTrack:
         """Shortcut: True when the identity path confirmed this track."""
         return bool(self.signal_state.identity_matched)
 
+    @identity_matched.setter
+    def identity_matched(self, val: bool) -> None:
+        self.signal_state.identity_matched = bool(val)
+
     @property
     def is_impostor(self) -> bool:
         """Decoded a valid frame but ID or network does not match profile."""
-        return self.signal_state.identity_reason in ("ID_MISMATCH", "NET_MISMATCH")
+        return (self.signal_state.identity_reason in ("ID_MISMATCH", "NET_MISMATCH", "WRONG_TERMINAL", "WRONG_TOKEN")
+                or bool(getattr(self.signal_state, "is_impostor", False)))
+
+    @is_impostor.setter
+    def is_impostor(self, val: bool) -> None:
+        self.signal_state.is_impostor = bool(val)
+        if val:
+            self.signal_state.identity_reason = "ID_MISMATCH"
 
 
 # ---------------------------------------------------------------------
