@@ -139,23 +139,32 @@ class Renderer:
     def draw_tracker_point(img: np.ndarray, spot: tuple[float, float],
                            color: tuple[int, int, int] = (80, 210, 90),
                            label: str | None = None) -> None:
-        """Draw the tracker point: diamond marker + error line from center + label."""
+        """Draw the tracker point as a hollow circle so the object stays visible inside.
+
+        Ring outline only (nothing painted over the target) + error line from
+        FOV center stopping at the ring rim + label.
+        """
         h, w = img.shape[:2]
         sx, sy = int(round(float(spot[0]))), int(round(float(spot[1])))
         sx = max(0, min(w - 1, sx))
         sy = max(0, min(h - 1, sy))
         cx, cy = w // 2, h // 2
-        # Error vector from FOV center to tracked spot (thin, dimmer).
+        r = max(10, min(w, h) // 32)
+        # Error vector from FOV center, stopping at the ring rim so it never
+        # crosses the object.
         try:
+            import math as _math
+            dx, dy = float(sx - cx), float(sy - cy)
+            dist = _math.hypot(dx, dy)
             dim = tuple(max(0, min(255, int(c * 0.55))) for c in color)
-            cv2.line(img, (cx, cy), (sx, sy), dim, 1, cv2.LINE_AA)
+            if dist > r + 2:
+                ex = int(round(sx - dx / dist * r))
+                ey = int(round(sy - dy / dist * r))
+                cv2.line(img, (cx, cy), (ex, ey), dim, 1, cv2.LINE_AA)
         except Exception:
             pass
-        # Diamond outline + filled core.
-        r = max(7, min(w, h) // 40)
-        pts = np.array([[sx, sy - r], [sx + r, sy], [sx, sy + r], [sx - r, sy]], np.int32)
-        cv2.polylines(img, [pts], True, color, 2, cv2.LINE_AA)
-        cv2.circle(img, (sx, sy), 2, color, -1, cv2.LINE_AA)
+        # Hollow ring — object visible inside.
+        cv2.circle(img, (sx, sy), r, color, 2, cv2.LINE_AA)
         if label:
             try:
                 (tw, th), _ = cv2.getTextSize(str(label), cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
