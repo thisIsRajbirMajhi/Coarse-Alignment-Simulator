@@ -97,16 +97,16 @@ class CandidateAssociationManager:
         track.temporal.timestamps.append(float(timestamp))
         track.temporal.intensity_history.append(float(det.peak_intensity))
         track.temporal.centroid_history.append((float(det.centroid_x), float(det.centroid_y)))
-        # bounded buffers (§34)
-        del track.temporal.timestamps[:-96]
-        del track.temporal.intensity_history[:-96]
-        del track.temporal.centroid_history[:-96]
+        # bounded buffers per Plans/New Upgrades.md §§10, 34 (> 2 full frame durations)
+        del track.temporal.timestamps[:-1200]
+        del track.temporal.intensity_history[:-1200]
+        del track.temporal.centroid_history[:-1200]
         track.timestamps.append(float(timestamp))
-        del track.timestamps[:-96]
+        del track.timestamps[:-1200]
         track.feature_history.append({"snr": det.local_snr, "spot_px": det.apparent_diameter,
                                       "spectral": det.spectral_observation.estimated_center,
                                       "peak": det.peak_intensity})
-        del track.feature_history[:-96]
+        del track.feature_history[:-1200]
 
     def associate(self, detections: list[DetectionCandidate],
                   tracks: dict[str, CandidateTrack],

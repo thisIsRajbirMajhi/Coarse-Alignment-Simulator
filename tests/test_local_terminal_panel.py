@@ -116,3 +116,34 @@ def test_control_deck_dialog_hosts_local_terminal(qapp):
     # Sync from session (must complete cleanly without exceptions)
     dlg.sync_from_session(session)
     dlg.close()
+
+
+def test_local_terminal_randomize_and_accordion(qapp):
+    from gui.panels.local_terminal_panel import LocalTerminalPanel
+
+    panel = LocalTerminalPanel()
+    # Check default state: advanced container is collapsed
+    assert panel._advanced_visible is False
+    assert "Click to Expand" in panel.btn_toggle_advanced.text()
+
+    # Toggle to expand
+    panel.toggle_advanced()
+    assert panel._advanced_visible is True
+    assert "Click to Collapse" in panel.btn_toggle_advanced.text()
+
+    # Toggle to collapse
+    panel.toggle_advanced()
+    assert panel._advanced_visible is False
+
+    # Test randomize button and method
+    changed_events = []
+    panel.configChanged.connect(lambda cfg: changed_events.append(cfg))
+
+    panel.btn_randomize_local.click()
+    assert len(changed_events) == 1
+    new_cfg = changed_events[0]
+    assert new_cfg.acquisition.search_pattern in ["SPIRAL", "RASTER", "RANDOM", "FIGURE_8", "SECTOR", "GRID"]
+    assert new_cfg.tracking.algorithm in ["CENTROID", "PEAK", "KALMAN"]
+    assert new_cfg.ptz.pan_speed > 0
+    panel.close()
+

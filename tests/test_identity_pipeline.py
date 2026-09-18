@@ -67,11 +67,13 @@ def build_frame(terminal_id: str = "RT-001", network_id: int = 0,
 def make_decoded_frame(terminal_id: str = "RT-001", network_id: int = 0,
                        seq: int = 1, confidence: float = 0.9,
                        consec: int = 3, valid: bool = True,
-                       crc_ok: bool = True) -> DecodedFrame:
+                       crc_ok: bool = True, token: str = "ALPHA-7") -> DecodedFrame:
     return DecodedFrame(
         valid=valid,
         crc_ok=crc_ok,
+        terminal_id=terminal_id,
         terminal_id_byte=terminal_id_to_byte(terminal_id),
+        token=token,
         network_id=network_id,
         sequence_number=seq,
         capabilities=0x0F,
@@ -93,7 +95,9 @@ def encode_and_decode(terminal_id: str, seq: int = 1) -> DecodedFrame | None:
     return DecodedFrame(
         valid=result.crc_ok,
         crc_ok=result.crc_ok,
+        terminal_id=result.terminal_id,
         terminal_id_byte=result.terminal_id_byte,
+        token=result.token or "ALPHA-7",
         network_id=result.network_id,
         sequence_number=result.sequence_number,
         capabilities=result.capabilities,

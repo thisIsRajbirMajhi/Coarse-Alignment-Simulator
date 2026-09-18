@@ -106,3 +106,60 @@ def test_remote_terminal_capabilities_persistence(qapp):
     assert "TRACKING" in caps
     assert "OPTICAL_RX" not in caps
     panel.close()
+
+
+def test_remote_terminal_randomize_and_accordion(qapp):
+    from gui.panels.remote_terminal_panel import RemoteTerminalPanel
+
+    panel = RemoteTerminalPanel()
+    # Check default state: advanced container is collapsed
+    assert panel._advanced_visible is False
+    assert "Click to Expand" in panel.btn_toggle_advanced.text()
+
+    # Toggle to expand
+    panel.toggle_advanced()
+    assert panel._advanced_visible is True
+    assert "Click to Collapse" in panel.btn_toggle_advanced.text()
+
+    # Toggle to collapse
+    panel.toggle_advanced()
+    assert panel._advanced_visible is False
+
+    # Test randomize button and method
+    changed_events = []
+    panel.configChanged.connect(lambda cfg: changed_events.append(cfg))
+
+    panel.btn_randomize_remote.click()
+    assert len(changed_events) == 1
+    new_cfg = changed_events[0]
+    assert 1 <= new_cfg.terminal_count <= 8
+    assert new_cfg.terminals[0].beacon.wavelength_nm in [850.0, 980.0, 1064.0, 1310.0, 1550.0]
+    panel.close()
+
+
+def test_control_deck_randomize_all(qapp):
+    from gui.application.session import SimulationSession
+    from gui.views.settings_dialog import SettingsDialog
+
+    session = SimulationSession()
+    session.ensure_built()
+    dlg = SettingsDialog(session)
+
+    rt_signals = []
+    lt_signals = []
+    dlg.terminalChanged.connect(lambda cfg: rt_signals.append(cfg))
+    dlg.localTerminalChanged.connect(lambda cfg: lt_signals.append(cfg))
+
+    # Click Randomize All
+    dlg.btn_randomize.click()
+
+    assert len(rt_signals) == 1
+    assert len(lt_signals) == 1
+    rt_cfg = rt_signals[0]
+    lt_cfg = lt_signals[0]
+
+    # Verify optical wavelength was synchronized across both terminals
+    assert rt_cfg.terminals[0].beacon.wavelength_nm == lt_cfg.detection.wavelength
+    assert rt_cfg.terminals[0].beacon.mod_type == lt_cfg.detection.modulation_type
+    dlg.close()
+

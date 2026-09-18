@@ -1,10 +1,14 @@
-"""Frame Decoder: Converts SignalMeasurement (chip samples) into decoded frames per Upgrade.md §§11, 12."""
+"""Frame Decoder: Converts SignalMeasurement (chip samples) into decoded frames.
+Per Plans/New Upgrades.md §§5, 13, 16, 18.
+
+Implements real streaming decoding, sample index tracking, and canonical sequence semantics.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
 
-from local_terminal.beacon_frame import (
+from common.protocol.beacon import (
     BeaconDecodeResult,
     BeaconFrame,
     BeaconFrameParser,
@@ -17,7 +21,7 @@ from local_terminal.signal_analyzer import SignalMeasurement
 
 @dataclass
 class DecodedFrame:
-    """Result of one decode attempt for a candidate track."""
+    """Result of one decode attempt for a candidate track (§13, §16)."""
 
     valid: bool = False  # CRC passed + sync found
     terminal_id: str = ""
@@ -29,6 +33,7 @@ class DecodedFrame:
     capabilities: int = 0
     crc_ok: bool = False
     reason: str = "NO_DATA"
+    is_new_frame: bool = False  # Mandatory per §16
     # Running statistics
     attempt_count: int = 0
     success_count: int = 0
@@ -37,6 +42,7 @@ class DecodedFrame:
     confidence: float = 0.0
     frame: BeaconFrame | None = None
     decode_result: BeaconDecodeResult | None = None
+    last_processed_sample_index: int = 0
 
     @property
     def terminal_id_str(self) -> str:
@@ -46,9 +52,9 @@ class DecodedFrame:
 
 
 class TrackDecodeState:
-    """Per-track sliding bit buffer for frame synchronisation (§10, §12)."""
+    """Per-track streaming state machine for frame synchronisation (§13, §18)."""
 
-    WINDOW = 1600  # hold sufficient chips
+    WINDOW = 1600  # hold sufficient chips for multiple frames
 
     def __init__(self) -> None:
         self._bit_buf: list[int] = []
@@ -60,34 +66,74 @@ class TrackDecodeState:
         self._sliding_window: list[float] = []
         self._WINDOW_N = 10
         self._parser = BeaconFrameParser()
+        self.last_processed_sample_index = 0
+        self.last_valid_frame: BeaconFrame | None = None
+        self.last_is_new_frame = False
 
     def reset(self) -> None:
         self._bit_buf.clear()
         self._last_seq = -1
         self._consec_valid = 0
         self._consec_invalid = 0
+        self.last_processed_sample_index = 0
+        self.last_valid_frame = None
+        self.last_is_new_frame = False
 
-    def push_chips(self, chip_samples: list[float]) -> None:
-        """Append new hard-decided chip samples to sliding buffer."""
-        for s in chip_samples:
+    def push_chips(self, chip_samples: list[float], sample_index: int | None = None) -> None:
+        """Append new hard-decided chip samples to sliding buffer without duplicating old samples (§13)."""
+        if sample_index is not None:
+            # Incremental append based on sample_index
+            if sample_index < self.last_processed_sample_index:
+                # History buffer was cleared/reset; restart from 0
+                self.last_processed_sample_index = 0
+            new_samples = chip_samples[self.last_processed_sample_index : sample_index]
+            self.last_processed_sample_index = sample_index
+        else:
+            # Direct/standalone push (e.g. unit tests)
+            new_samples = chip_samples
+            self.last_processed_sample_index += len(chip_samples)
+
+        for s in new_samples:
             self._bit_buf.append(1 if float(s) >= 0.5 else 0)
+
         if len(self._bit_buf) > self.WINDOW:
             self._bit_buf = self._bit_buf[-self.WINDOW :]
 
     def try_decode(self) -> DecodedFrame | None:
-        """Attempt to find and decode a frame in the current buffer."""
+        """Attempt to find and decode a frame in the streaming bit buffer (§13, §16, §18)."""
         if len(self._bit_buf) < 48:
             return None
 
         self._attempt_count += 1
-        result = self._parser.parse(self._bit_buf)
+        result = self._parser.parse(self._bit_buf, last_seq=self._last_seq)
 
         if result.valid_crc and result.frame is not None:
-            self._success_count += 1
-            self._consec_valid += 1
+            if getattr(result, "consumed_bits", 0) > 0:
+                self._bit_buf = self._bit_buf[result.consumed_bits :]
+            seq = result.sequence_number
+            if self._last_seq < 0:
+                is_new = True
+                self._last_seq = seq
+                self._consec_valid = 1
+                self._success_count += 1
+                self.last_valid_frame = result.frame
+            elif seq > self._last_seq:
+                is_new = True
+                self._last_seq = seq
+                self._consec_valid += 1
+                self._success_count += 1
+                self.last_valid_frame = result.frame
+            elif seq == self._last_seq:
+                # Duplicate sequence: valid decode but does NOT increment valid persistence (§18)
+                is_new = False
+            else:
+                # Older sequence: invalid sequence
+                is_new = False
+
+            self.last_is_new_frame = is_new
+            result.is_new_frame = is_new
             self._consec_invalid = 0
             self._sliding_window.append(1.0)
-            self._last_seq = result.sequence_number
 
             confidence = self._sliding_confidence()
             df = DecodedFrame(
@@ -101,6 +147,7 @@ class TrackDecodeState:
                 capabilities=result.capabilities,
                 crc_ok=True,
                 reason=result.reason,
+                is_new_frame=is_new,
                 attempt_count=self._attempt_count,
                 success_count=self._success_count,
                 last_seq_seen=result.sequence_number,
@@ -108,6 +155,7 @@ class TrackDecodeState:
                 confidence=confidence,
                 frame=result.frame,
                 decode_result=result,
+                last_processed_sample_index=self.last_processed_sample_index,
             )
             return df
         else:
@@ -133,11 +181,13 @@ class TrackDecodeState:
             "confidence": self._sliding_confidence(),
             "last_seq": self._last_seq,
             "buf_chips": len(self._bit_buf),
+            "last_processed_sample_index": self.last_processed_sample_index,
+            "is_new_frame": self.last_is_new_frame,
         }
 
 
 class FrameDecoder:
-    """Stateful per-track frame decoder."""
+    """Stateful per-track streaming frame decoder (§13)."""
 
     def __init__(self) -> None:
         self._states: dict[str, TrackDecodeState] = {}
@@ -163,7 +213,8 @@ class FrameDecoder:
                 success_count=state._success_count,
             )
 
-        state.push_chips(signal.chip_samples)
+        # Pass total chip count to only append new chips (§13)
+        state.push_chips(signal.chip_samples, sample_index=len(signal.chip_samples))
         result = state.try_decode()
 
         if result is not None:
@@ -175,6 +226,8 @@ class FrameDecoder:
         prev.success_count = stats["success_count"]
         prev.consecutive_valid = stats["consecutive_valid"]
         prev.confidence = stats["confidence"]
+        prev.is_new_frame = False
+        prev.last_processed_sample_index = stats["last_processed_sample_index"]
         return prev
 
     def get_statistics(self, observation_id: str) -> dict[str, Any]:

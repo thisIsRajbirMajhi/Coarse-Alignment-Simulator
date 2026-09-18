@@ -25,8 +25,9 @@ class AcquisitionConfig2:
     acquisition_timeout: float = 30.0
     # Phase-2: identity gate
     require_identity_lock: bool = True   # if True, identity gate is active
-    require_identity_match: bool = False # if True, identity_matched must be True to acquire
-    expected_terminal_id: str = ""
+    require_identity_match: bool = True  # if True, identity_matched must be True to acquire
+    expected_terminal_id: str = "RT-001"
+    legacy_optical_mode: bool = False
 
     @classmethod
     def from_detection(cls, det_cfg: object, timeout: float = 30.0) -> AcquisitionConfig2:
@@ -140,7 +141,7 @@ class AcquisitionManager:
 
         spatial_lock = ok_score and ok_snr and centroid_ok
 
-        # ── Identity lock gate ────────────────────────────────────────────
+        # ── Identity lock gate (§24, §25) ─────────────────────────────────
         if track.is_impostor:
             window = self._confirm_windows.setdefault(track.observation_id, [])
             window.append(-2.0)
@@ -149,10 +150,10 @@ class AcquisitionManager:
                                      confidence=float(track.signature.overall_score),
                                      timestamp=float(timestamp))
 
-        if self.config.require_identity_lock and self.config.require_identity_match:
-            id_locked = bool(track.signal_state.identity_matched)
-        else:
+        if getattr(self.config, "legacy_optical_mode", False) or not self.config.require_identity_lock:
             id_locked = True
+        else:
+            id_locked = bool(track.signal_state.identity_matched)
 
         # ── Confirmation window ───────────────────────────────────────────
         window = self._confirm_windows.setdefault(track.observation_id, [])

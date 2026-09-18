@@ -115,6 +115,11 @@ class LocalTerminalSystem:
         self._frame_decoder = FrameDecoder()
         self._target_profile: TargetProfile = self._build_target_profile(config)
         self._id_matcher = IdentityMatcher(self._target_profile)
+        exp_id = str(getattr(self._target_profile, "expected_terminal_id", "") or "").strip()
+        require_id = bool(exp_id and exp_id != "0")
+        self.lifecycle.legacy_optical_identification_enabled = bool(
+            getattr(self._target_profile, "legacy_optical_identification_enabled", False)
+        ) or (not require_id)
         self._id_check_counter: int = 0   # for periodic identity re-check during tracking
 
 
@@ -136,10 +141,12 @@ class LocalTerminalSystem:
             tp = self._build_target_profile(config)
             exp_id = str(getattr(tp, "expected_terminal_id", "") or "").strip()
             require_id = bool(exp_id and exp_id != "0")
+            legacy_opt = bool(getattr(tp, "legacy_optical_identification_enabled", False)) or (not require_id)
             if det is not None:
                 acq_cfg = AcquisitionConfig2.from_detection(det, timeout)
                 acq_cfg.require_identity_match = require_id
                 acq_cfg.expected_terminal_id = exp_id
+                acq_cfg.legacy_optical_mode = legacy_opt
                 return acq_cfg
         except Exception:
             pass
@@ -194,6 +201,11 @@ class LocalTerminalSystem:
         try:
             self._target_profile = self._build_target_profile(config)
             self._id_matcher.update_profile(self._target_profile)
+            exp_id = str(getattr(self._target_profile, "expected_terminal_id", "") or "").strip()
+            require_id = bool(exp_id and exp_id != "0")
+            self.lifecycle.legacy_optical_identification_enabled = bool(
+                getattr(self._target_profile, "legacy_optical_identification_enabled", False)
+            ) or (not require_id)
         except Exception:
             pass
 
@@ -338,7 +350,7 @@ class LocalTerminalSystem:
                         hist = list(tr.temporal.intensity_history)
                         times = list(tr.temporal.timestamps) if tr.temporal.timestamps else []
                         chip_rate = float(getattr(self._target_profile, "chip_rate_hz", 8.0))
-                        bg_est = float(getattr(frame_proc, "background_estimate", 0.0) if frame_proc else 0.0)
+                        bg_est = float(getattr(processed, "background_estimate", 0.0) if processed else 0.0)
                         sig_meas = self._signal_analyzer.analyze(hist, times, chip_rate, bg_est)
 
                         # §8 & §27: OpticalMeasurement

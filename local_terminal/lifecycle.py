@@ -17,13 +17,19 @@ from local_terminal.states import CandidateState
 
 
 class CandidateLifecycleManager:
-    """Identity-aware lifecycle: SEEN → … → IDENTIFIED → ACQUIRED → TRACKING."""
+    """Identity-aware lifecycle: SEEN → … → IDENTIFIED → ACQUIRED → TRACKING per Plans/New Upgrades.md §4, §22, §23."""
 
-    def __init__(self, tentative_hits: int = 2, expire_misses: int = 45,
-                 degrade_below: float = 0.70):
+    def __init__(
+        self,
+        tentative_hits: int = 2,
+        expire_misses: int = 45,
+        degrade_below: float = 0.70,
+        legacy_optical_identification_enabled: bool = False,
+    ):
         self.tentative_hits = int(tentative_hits)
         self.expire_misses = int(expire_misses)
         self.degrade_below = float(degrade_below)
+        self.legacy_optical_identification_enabled = bool(legacy_optical_identification_enabled)
 
     # -- Phase-2 fast-path: identity-driven transitions -------------------
 
@@ -113,15 +119,14 @@ class CandidateLifecycleManager:
                           CandidateState.IDENTITY_UNKNOWN):
                 return new_st
 
-        # Legacy optical path (used when identification_code is empty / wildcard
-        # or while identity data is still accumulating as NO_DATA)
+        # Legacy optical path (used ONLY when legacy_optical_identification_enabled is explicitly True per §4, §23)
         if st == CandidateState.SEEN:
             track.lifecycle_state = (CandidateState.TENTATIVE if track.hit_count >= self.tentative_hits
                                      else CandidateState.SEEN)
         elif st == CandidateState.TENTATIVE:
             track.lifecycle_state = CandidateState.VALIDATING if track.hit_count >= self.tentative_hits else st
         elif st == CandidateState.VALIDATING:
-            if signature_ok and score_ok:
+            if self.legacy_optical_identification_enabled and signature_ok and score_ok:
                 track.confirm_count += 1
                 if track.confirm_count >= 1:
                     track.lifecycle_state = CandidateState.IDENTIFIED

@@ -38,7 +38,10 @@ class RemoteTerminal:
             terminal_id=str(self.config.identity.id),
             token=str(getattr(bc, "token", "ALPHA-7")),
             wavelength_nm=int(getattr(bc, "wavelength_nm", 1550)),
-            chip_rate_hz=float(getattr(bc, "identification_chip_rate_hz", 8.0)),
+            protocol_version=int(getattr(bc, "protocol_version", 1)),
+            message_type=int(getattr(bc, "message_type", 1)),
+            payload_codec=str(getattr(bc, "payload_codec", "COMPACT")),
+            chip_rate_hz=float(getattr(bc, "chip_rate_hz", getattr(bc, "identification_chip_rate_hz", 12.0))),
         ))
         self._sync_states()
 

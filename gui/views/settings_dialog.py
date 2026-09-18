@@ -68,6 +68,18 @@ class SettingsDialog(QDialog):
         hbox.addWidget(sub)
         hbox.addStretch(1)
 
+        self.btn_randomize = QPushButton("🎲 Randomize All", header)
+        self.btn_randomize.setObjectName("randomizeAllButton")
+        self.btn_randomize.setToolTip("Randomize all remote and local terminal parameters and synchronize optical pairing on the go")
+        self.btn_randomize.setStyleSheet(
+            "QPushButton { background:#4f46e5; color:#ffffff; font-weight:700; font-size:12px; "
+            "border:1px solid #4338ca; border-radius:6px; padding:6px 14px; margin-right:4px; } "
+            "QPushButton:hover { background:#4338ca; border-color:#3730a3; } "
+            "QPushButton:pressed { background:#3730a3; }"
+        )
+        self.btn_randomize.clicked.connect(self.randomize_all)
+        hbox.addWidget(self.btn_randomize)
+
         self.btn_fullscreen = QPushButton("Full Screen", header)
         self.btn_fullscreen.setObjectName("settingsButton")
         self.btn_fullscreen.clicked.connect(self.toggle_fullscreen)
@@ -135,6 +147,36 @@ class SettingsDialog(QDialog):
         )
         scroll.setWidget(widget)
         self.tabs.addTab(scroll, title)
+
+    def randomize_all(self) -> None:
+        """Randomize remote and local terminal configurations in sync on the go."""
+        import random
+
+        laser_lines = [850.0, 980.0, 1064.0, 1310.0, 1550.0]
+        tokens = ["ALPHA-7", "BRAVO-2", "ECHO-9", "SIERRA-4", "OMEGA-1", "KILO-6"]
+        mod_types = ["AM", "OOK", "PM"]
+
+        chosen_wl = random.choice(laser_lines)
+        chosen_token = random.choice(tokens)
+        chosen_mod = random.choice(mod_types)
+        chosen_freq = round(random.uniform(8.0, 20.0), 1)
+
+        # 1. Randomize Remote Terminal (emits exactly 1 terminalChanged signal via connect)
+        self.terminal_panel.randomize(
+            token=chosen_token,
+            wavelength=chosen_wl,
+            mod_type=chosen_mod,
+            mod_freq=chosen_freq,
+            emit=True,
+        )
+
+        # 2. Randomize Local Terminal (emits exactly 1 localTerminalChanged signal via connect)
+        self.local_terminal_panel.randomize(
+            wavelength=chosen_wl,
+            mod_type=chosen_mod,
+            mod_freq=chosen_freq,
+            emit=True,
+        )
 
     def toggle_fullscreen(self) -> None:
         try:

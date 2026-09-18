@@ -7,13 +7,14 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
-from local_terminal.beacon_frame import (
-    BeaconFrame,
-    BeaconPayload,
+from common.protocol.beacon import (
     CHIP_HIGH,
     CHIP_LOW,
     MESSAGE_TYPE_BEACON,
     PROTOCOL_VERSION,
+    BeaconFrame,
+    BeaconPayload,
+    OOKEncoder,
     frame_to_chips,
 )
 
@@ -25,7 +26,8 @@ class BeaconEncoderConfig:
     wavelength_nm: int = 1550
     protocol_version: int = PROTOCOL_VERSION
     message_type: int = MESSAGE_TYPE_BEACON
-    chip_rate_hz: float = 8.0
+    payload_codec: str = "COMPACT"
+    chip_rate_hz: float = 12.0
     frame_period_s: float = -1.0
     network_id: int = 0
 
@@ -36,7 +38,8 @@ class BeaconEncoderConfig:
         wavelength_nm: int = 1550,
         protocol_version: int = PROTOCOL_VERSION,
         message_type: int = MESSAGE_TYPE_BEACON,
-        chip_rate_hz: float = 8.0,
+        payload_codec: str = "COMPACT",
+        chip_rate_hz: float = 12.0,
         frame_period_s: float = -1.0,
         network_id: int = 0,
         **kwargs: Any,
@@ -46,6 +49,7 @@ class BeaconEncoderConfig:
         self.wavelength_nm = int(wavelength_nm)
         self.protocol_version = int(protocol_version)
         self.message_type = int(message_type)
+        self.payload_codec = str(payload_codec)
         self.chip_rate_hz = float(chip_rate_hz)
         self.frame_period_s = float(frame_period_s)
         self.network_id = int(network_id)
@@ -67,6 +71,7 @@ class BeaconFrameEncoder:
             ),
             protocol_version=int(self.config.protocol_version),
             message_type=int(self.config.message_type),
+            payload_codec=str(getattr(self.config, "payload_codec", "COMPACT")),
         )
 
 

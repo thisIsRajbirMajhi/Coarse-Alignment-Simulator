@@ -131,8 +131,12 @@ class BeaconConfig:
     # the optical intensity stream and must be decoded from camera samples.
     identification_code_enabled: bool = True
     identification_code: str = "RT001"
-    identification_chip_rate_hz: float = 8.0
+    identification_chip_rate_hz: float = 12.0
     token: str = "ALPHA-7"
+    protocol_version: int = 1
+    message_type: int = 1
+    payload_codec: str = "COMPACT"  # COMPACT | JSON
+    chip_rate_hz: float = 12.0
     polarization_type: str = "UNPOLARIZED"  # UNPOLARIZED | LINEAR | CIRCULAR | ELLIPTICAL
     polarization_angle_deg: float = 0.0
 
@@ -166,11 +170,22 @@ class BeaconConfig:
             self.duty_cycle = float(max(0.0, min(float(self.duty_cycle), 1.0)))
         self.identification_code_enabled = bool(self.identification_code_enabled)
         self.identification_code = str(self.identification_code or "").strip()[:32]
-        self.identification_chip_rate_hz = float(max(0.5, min(float(self.identification_chip_rate_hz), 30.0)))
+        self.protocol_version = int(self.protocol_version if self.protocol_version is not None else 1)
+        self.message_type = int(self.message_type if self.message_type is not None else 1)
+        self.payload_codec = str(self.payload_codec or "COMPACT").upper()
+        if self.payload_codec not in {"COMPACT", "JSON"}:
+            self.payload_codec = "COMPACT"
+        # Sync chip_rate_hz with identification_chip_rate_hz
+        rate = self.chip_rate_hz if self.chip_rate_hz is not None else self.identification_chip_rate_hz
+        self.chip_rate_hz = float(max(0.5, min(float(rate or 12.0), 60.0)))
+        self.identification_chip_rate_hz = self.chip_rate_hz
         if self.polarization_type not in {"UNPOLARIZED", "LINEAR", "CIRCULAR", "ELLIPTICAL"}:
             self.polarization_type = "UNPOLARIZED"
         self.polarization_angle_deg = float(self.polarization_angle_deg) % 180.0
         return self
+
+    def __post_init__(self) -> None:
+        self.validate()
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> BeaconConfig:

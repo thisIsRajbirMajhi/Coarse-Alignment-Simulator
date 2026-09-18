@@ -578,6 +578,7 @@ class TestSection39EndToEndAcceptance:
             expected_terminal_id="RT-001",
             expected_token="ALPHA-7",
             expected_wavelength_nm=1550,
+            legacy_optical_identification_enabled=True,
         )
 
         term = LocalTerminal(config=lt_cfg, scene_bounds=(1000, 1000))

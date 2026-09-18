@@ -478,14 +478,14 @@ class DetectionConfig:
 # 10b. TARGET PROFILE (Phase-2 identity configuration)
 # =====================================================================
 @dataclass
-class TargetProfile:
-    """What the local terminal expects to receive from the authorised target beacon (§4, §29).
+class TargetPayloadConfig:
+    """What the local terminal expects to receive from the authorised target beacon per Plans/New Upgrades.md §11.
 
     Configured locally; never fetched from a RemoteTerminal object.
     This is the sole authoritative source for identity decisions.
     """
     # Identity fields ─────────────────────────────────────────────────
-    expected_terminal_id:      str   = ""
+    expected_terminal_id:      str   = "RT-001"
     expected_terminal_id_byte: int   = 0
     expected_network_id:       int   = 0
     expected_token:            str   = "ALPHA-7"
@@ -496,41 +496,89 @@ class TargetProfile:
     required_capabilities:     int   = 0
 
     # Decode quality gates ─────────────────────────────────────────────
-    chip_rate_hz:           float = 8.0     # expected chip rate (bps)
+    chip_rate_hz:           float = 12.0    # expected chip rate (bps)
     min_decode_confidence:  float = 0.40    # fraction of CRC-passing frames in sliding window
-    min_consecutive_valid:  int   = 2       # consecutive valid frames before IDENTIFIED
-    required_valid_frames:  int   = 2
+    min_consecutive_valid:  int   = 3       # consecutive valid frames before IDENTIFIED
+    required_valid_frames:  int   = 3
 
     # Validation guards ────────────────────────────────────────────────
     require_sequence_advance: bool = True
     sequence_validation_enabled: bool = True
-    wavelength_validation_enabled: bool = False
+    wavelength_validation_enabled: bool = True
 
     # Tracking identity retention ──────────────────────────────────────
-    max_identity_fail_streak: int = 10
-    allow_wavelength_override: bool = False
     max_sequence_gap: int = 0
+    identity_timeout_s: float = 5.0
+    max_identity_fail_streak: int = 10
+    legacy_optical_identification_enabled: bool = False
+    allow_wavelength_override: bool = False
 
-    def validate(self) -> "TargetProfile":
+    def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> "TargetPayloadConfig":
+        self.expected_terminal_id = str(self.expected_terminal_id or "").strip()
         if self.expected_terminal_id:
             try:
-                from local_terminal.beacon_frame import terminal_id_to_byte
+                from common.protocol.beacon import terminal_id_to_byte
                 self.expected_terminal_id_byte = terminal_id_to_byte(self.expected_terminal_id)
             except Exception:
                 pass
-        self.chip_rate_hz = float(max(0.5, min(self.chip_rate_hz, 30.0)))
-        self.min_decode_confidence = float(max(0.0, min(self.min_decode_confidence, 1.0)))
-        self.min_consecutive_valid = int(max(1, self.min_consecutive_valid))
-        self.required_valid_frames = self.min_consecutive_valid
-        self.max_identity_fail_streak = int(max(1, self.max_identity_fail_streak))
+        self.expected_token = str(self.expected_token or "").strip()
+        self.expected_wavelength_nm = float(self.expected_wavelength_nm if self.expected_wavelength_nm is not None else 1550.0)
+        self.wavelength_tolerance_nm = float(max(0.1, float(self.wavelength_tolerance_nm or 20.0)))
+        self.expected_protocol_version = int(self.expected_protocol_version if self.expected_protocol_version is not None else 1)
+        self.expected_message_type = int(self.expected_message_type if self.expected_message_type is not None else 1)
+        self.chip_rate_hz = float(max(0.5, min(float(self.chip_rate_hz or 12.0), 60.0)))
+        self.min_decode_confidence = float(max(0.0, min(float(self.min_decode_confidence or 0.4), 1.0)))
+        if self.required_valid_frames != 3 and self.min_consecutive_valid == 3:
+            self.min_consecutive_valid = int(max(1, self.required_valid_frames))
+        elif self.min_consecutive_valid != 3 and self.required_valid_frames == 3:
+            self.required_valid_frames = int(max(1, self.min_consecutive_valid))
+        else:
+            self.min_consecutive_valid = int(max(1, self.min_consecutive_valid or 3))
+            self.required_valid_frames = self.min_consecutive_valid
+        self.max_identity_fail_streak = int(max(1, self.max_identity_fail_streak if self.max_identity_fail_streak is not None else 10))
+        self.identity_timeout_s = float(max(0.1, float(self.identity_timeout_s or 5.0)))
+        self.sequence_validation_enabled = bool(self.sequence_validation_enabled)
+        self.wavelength_validation_enabled = bool(self.wavelength_validation_enabled)
+        self.legacy_optical_identification_enabled = bool(self.legacy_optical_identification_enabled)
         return self
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> "TargetProfile":
-        return cls(**_filter_dataclass_fields(cls, data)).validate() if isinstance(data, dict) else cls().validate()
+    def from_detection_config(cls, cfg: Any) -> "TargetPayloadConfig":
+        try:
+            from common.protocol.beacon import terminal_id_to_byte
+            code = str(getattr(cfg, "identification_code", "") or "").strip()
+            tid_byte = terminal_id_to_byte(code) if code else 0
+            wl = float(getattr(cfg, "wavelength", 1550.0) or 1550.0)
+            corr = float(getattr(cfg, "code_correlation_threshold", 0.4) or 0.4)
+            pers = int(getattr(cfg, "code_persistence", 3) or 3)
+            return cls(
+                expected_terminal_id=code,
+                expected_terminal_id_byte=tid_byte,
+                expected_token="ALPHA-7",
+                expected_wavelength_nm=wl,
+                min_decode_confidence=corr,
+                min_consecutive_valid=pers,
+                required_valid_frames=pers,
+                require_sequence_advance=True,
+                sequence_validation_enabled=True,
+            ).validate()
+        except Exception:
+            return cls().validate()
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> "TargetPayloadConfig":
+        cleaned = _filter_dataclass_fields(cls, data) if isinstance(data, dict) else {}
+        if "required_valid_frames" in cleaned and "min_consecutive_valid" not in cleaned:
+            cleaned["min_consecutive_valid"] = cleaned["required_valid_frames"]
+        elif "min_consecutive_valid" in cleaned and "required_valid_frames" not in cleaned:
+            cleaned["required_valid_frames"] = cleaned["min_consecutive_valid"]
+        return cls(**cleaned).validate()
 
 
-TargetPayloadConfig = TargetProfile
+TargetProfile = TargetPayloadConfig
 
 
 # =====================================================================
@@ -627,6 +675,7 @@ class LocalTerminalConfig:
     detection: DetectionConfig = field(default_factory=DetectionConfig)
     tracking: TrackingConfig = field(default_factory=TrackingConfig)
     communication: LocalCommunicationConfig = field(default_factory=LocalCommunicationConfig)
+    target_payload: TargetPayloadConfig = field(default_factory=lambda: TargetPayloadConfig(expected_terminal_id=""))
 
     # Optional optical vignetting (sensor effect)
     vignetting: float = 0.0
@@ -648,8 +697,21 @@ class LocalTerminalConfig:
         self.detection.validate()
         self.tracking.validate()
         self.communication.validate()
+        self.target_payload.validate()
         self.vignetting = float(max(0.0, min(self.vignetting, 0.95)))
         return self
+
+    @property
+    def target_profile(self) -> TargetPayloadConfig:
+        """Alias for target_payload per Plans/New Upgrades.md §11."""
+        return self.target_payload
+
+    @target_profile.setter
+    def target_profile(self, val: Any) -> None:
+        if isinstance(val, dict):
+            self.target_payload = TargetPayloadConfig.from_dict(val)
+        elif val is not None:
+            self.target_payload = val
 
     # --- Convenience flat attribute accessors ---
     @property
@@ -1015,6 +1077,10 @@ class LocalTerminalConfig:
             cfg.tracking = TrackingConfig.from_dict(root["tracking"])
         if "communication" in root:
             cfg.communication = LocalCommunicationConfig.from_dict(root["communication"])
+        if "target_payload" in root or "targetPayload" in root:
+            cfg.target_payload = TargetPayloadConfig.from_dict(root.get("target_payload") or root.get("targetPayload"))
+        elif "target_profile" in root or "targetProfile" in root:
+            cfg.target_payload = TargetPayloadConfig.from_dict(root.get("target_profile") or root.get("targetProfile"))
 
         # Also support legacy flat properties if supplied
         for k in ("fov_width", "fov_height", "pan_min", "pan_max", "tilt_min", "tilt_max",

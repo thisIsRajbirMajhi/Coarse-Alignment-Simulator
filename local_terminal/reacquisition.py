@@ -87,6 +87,61 @@ class ReacquisitionManager:
         return bool(spatial_ok and signature_score >= 0.80
                     and confirmations >= 1 and snr_db >= min_snr)
 
+    def can_merge(self, old_track: Any, new_track: Any, max_spatial_gate_px: float = 60.0) -> bool:
+        """Evaluate whether new_track can merge into old_track per Plans/New Upgrades.md §30."""
+        return can_merge_reacquisition(
+            old_track=old_track,
+            new_track=new_track,
+            predicted_pos=self.last_known,
+            max_spatial_gate_px=max_spatial_gate_px,
+        )
+
+
+def can_merge_reacquisition(
+    old_track: Any,
+    new_track: Any,
+    predicted_pos: tuple[float, float] | None = None,
+    max_spatial_gate_px: float = 60.0,
+) -> bool:
+    """Authoritative check if new_track can merge with old_track during reacquisition (§30).
+
+    Requires:
+      1. Both tracks have non-empty decoded_terminal_id.
+      2. new_track has verified identity_matched == True.
+      3. old_track and new_track decoded_terminal_id match.
+      4. new_track.last_valid_sequence > old_track.last_valid_sequence (strictly advancing).
+      5. Spatial distance to predicted position <= max_spatial_gate_px.
+    """
+    if old_track is None or new_track is None:
+        return False
+
+    old_tid = getattr(old_track, "decoded_terminal_id", "") or getattr(getattr(old_track, "signal_state", None), "decoded_terminal_id", "")
+    new_tid = getattr(new_track, "decoded_terminal_id", "") or getattr(getattr(new_track, "signal_state", None), "decoded_terminal_id", "")
+
+    if not old_tid or not new_tid:
+        return False
+
+    new_matched = getattr(new_track, "identity_matched", False) or getattr(getattr(new_track, "signal_state", None), "identity_matched", False)
+    if not new_matched:
+        return False
+
+    if old_tid != new_tid:
+        return False
+
+    old_seq = int(getattr(old_track, "last_valid_sequence", -1))
+    new_seq = int(getattr(new_track, "last_valid_sequence", -1))
+    if old_seq >= 0 and new_seq <= old_seq:
+        return False
+
+    # Spatial check
+    pred = predicted_pos if predicted_pos is not None else (float(getattr(old_track, "est_x", 0.0)), float(getattr(old_track, "est_y", 0.0)))
+    new_pos = (float(getattr(new_track, "meas_x", 0.0)), float(getattr(new_track, "meas_y", 0.0)))
+    spatial_err = ((new_pos[0] - pred[0]) ** 2 + (new_pos[1] - pred[1]) ** 2) ** 0.5
+    if spatial_err > float(max_spatial_gate_px):
+        return False
+
+    return True
+
 
 # Spec alias (§28/§32)
 ReacquisitionController = ReacquisitionManager

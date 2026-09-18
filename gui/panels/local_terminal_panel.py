@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import copy
 import logging
+import math
+import random
 from typing import Any
 
 from PyQt5.QtCore import Qt, pyqtSignal
@@ -50,19 +52,22 @@ log = logging.getLogger(__name__)
 class LocalTerminalPanel(BaseConfigPanel):
     """
     Local Terminal Control Deck matching LocalTerminal.md specifications:
-      Top: Terminal Identity Banner & Live Telemetry Chips (Power, Op, PTZ, Acq, Det, Trk, Link)
-      Two Major Operational Sub-Tabs:
-        1. CONFIGURATION:
-           - A: Sensor Resolution & FOV
-           - B: Pan-Tilt Mechanics
-           - C: Display & Screen Sizes
-           - D: Derived Pixel -> Angle (Angular Model)
-           - E: Realism & Mechanical Errors
-        2. OPERATIONS:
-           - F: Acquisition (Raster, Spiral, etc.)
-           - G: Detection (Spectral, Spot Size, Modulation, SNR)
-           - H: Tracking (Centroid, Prediction, Smoothing)
-           - I: Communication (Capabilities, Protocol, Link State)
+      Top: Terminal Identity Banner, Live Status Chips & Quick Actions (🎲 Randomize, Reset).
+      1. Quick Setup (Major Parameters - Always Visible):
+         - Target Optical Detection & Modulation Pairing
+         - Camera Pixel Resolution & Optical FOV
+         - Autonomous Acquisition & Search Pattern
+         - PTZ Pan/Tilt Slew Rates & Control Mode
+         - Tracking Servo Mode, Algorithm & Error Diagnostics
+      2. Advanced Parameters (Collapsible Accordion):
+         - Pan/Tilt Mechanical Limits & Actuator Specs
+         - Display & Screen Viewport Dimensions
+         - Dynamically Computed Angular Model (Pixel <-> Angle)
+         - Actuator Realism & Mechanical Imperfections (Backlash, Latency, Jitter, Encoder)
+         - Detailed Search Region Coordinates
+         - Optical Filtering & Spot Tolerances
+         - Tracking PID Servo Gains & Lost Target Action
+         - Transceiver Communication Capabilities & Protocol
     """
 
     configChanged = pyqtSignal(object)
@@ -77,6 +82,7 @@ class LocalTerminalPanel(BaseConfigPanel):
         self._scene_bounds = scene_bounds
         self._config = (initial or LocalTerminalConfig()).validate(scene_bounds)
         self._updating = False
+        self._advanced_visible = False
         self._build_ui()
         self.set_scene_bounds(scene_bounds)
         self.set_config(self._config, emit=False)
@@ -90,7 +96,7 @@ class LocalTerminalPanel(BaseConfigPanel):
         main_layout.setSpacing(12)
 
         # -------------------------------------------------------------
-        # TOP BANNER: IDENTITY & LIVE STATUS BADGES
+        # TOP BANNER: IDENTITY, ACTIONS & LIVE STATUS BADGES
         # -------------------------------------------------------------
         banner = QGroupBox("Local Terminal System Identity & Real-Time Status")
         banner.setStyleSheet(
@@ -100,7 +106,7 @@ class LocalTerminalPanel(BaseConfigPanel):
         b_layout = QVBoxLayout(banner)
         b_layout.setSpacing(8)
 
-        # Row 1: Identity info
+        # Row 1: Identity info + Quick action buttons
         id_row = QHBoxLayout()
         self.lbl_id = QLabel("ID: <b>LT-001</b>")
         self.lbl_id.setStyleSheet("font-size:12px; color:#1e3a8a; padding:3px 8px; background:#eff6ff; border-radius:4px; border:1px solid #bfdbfe;")
@@ -114,6 +120,18 @@ class LocalTerminalPanel(BaseConfigPanel):
         self.lbl_platform.setStyleSheet("font-size:11px; color:#64748b; margin-left:8px;")
         id_row.addWidget(self.lbl_platform)
         id_row.addStretch(1)
+
+        self.btn_randomize_local = QPushButton("🎲 Randomize Local")
+        self.btn_randomize_local.setObjectName("randomizeLocalButton")
+        self.btn_randomize_local.setToolTip("Randomize scan pattern, slew speeds, and tracking parameters on the fly")
+        self.btn_randomize_local.setStyleSheet(
+            "QPushButton { background:#4f46e5; color:#ffffff; font-weight:700; font-size:11px; "
+            "border:1px solid #4338ca; border-radius:6px; padding:5px 12px; } "
+            "QPushButton:hover { background:#4338ca; border-color:#3730a3; } "
+            "QPushButton:pressed { background:#3730a3; }"
+        )
+        self.btn_randomize_local.clicked.connect(lambda: self.randomize(emit=True))
+        id_row.addWidget(self.btn_randomize_local)
 
         self.btn_reset_all = self._make_reset_button("Reset Local Terminal")
         self.btn_reset_all.clicked.connect(self._on_reset_clicked)
@@ -136,71 +154,184 @@ class LocalTerminalPanel(BaseConfigPanel):
             chips_row.addWidget(b)
         chips_row.addStretch(1)
         b_layout.addLayout(chips_row)
-
         main_layout.addWidget(banner)
 
         # -------------------------------------------------------------
-        # SUB-TABS: CONFIGURATION (A–E) & OPERATIONS (F–I)
+        # 1. QUICK SETUP: MAJOR PARAMETERS (ALWAYS VISIBLE)
         # -------------------------------------------------------------
-        self.sub_tabs = QTabWidget(self)
-        self.sub_tabs.setStyleSheet(
-            "QTabBar::tab { font-size:12px; font-weight:700; padding:8px 18px; min-width:140px; }"
+        quick_box, quick_grid = self._make_group("⚡ Quick Setup — Major Parameters")
+        quick_grid.setSpacing(10)
+        quick_grid.setColumnStretch(1, 2)
+        quick_grid.setColumnStretch(4, 2)
+
+        # 1.1 Detection & Spectral Pairing
+        quick_grid.addWidget(self._label("Center Wavelength (nm)"), 0, 0)
+        self.det_wl_slider, self.det_wl_label, self.det_wl_factor = self._make_float_slider(800.0, 1650.0, 1550.0, decimals=1, suffix=" nm")
+        quick_grid.addWidget(self.det_wl_slider, 0, 1)
+        quick_grid.addWidget(self.det_wl_label, 0, 2)
+
+        quick_grid.addWidget(self._label("Confidence Thresh / Live"), 0, 3)
+        conf_h = QHBoxLayout()
+        self.det_conf_slider, self.det_conf_label, self.det_conf_factor = self._make_float_slider(0.5, 1.0, 0.85, decimals=2)
+        conf_h.addWidget(self.det_conf_slider, 1)
+        conf_h.addWidget(self.det_conf_label)
+        self.prog_confidence = QProgressBar()
+        self.prog_confidence.setRange(0, 100)
+        self.prog_confidence.setValue(0)
+        self.prog_confidence.setTextVisible(True)
+        self.prog_confidence.setFormat("%v%")
+        self.prog_confidence.setFixedWidth(80)
+        self.prog_confidence.setStyleSheet(
+            "QProgressBar { border:1px solid #d1d5db; border-radius:4px; text-align:center; height:18px; font-weight:700; }"
+            "QProgressBar::chunk { background:#059669; border-radius:3px; }"
         )
+        conf_h.addWidget(self.prog_confidence)
+        quick_grid.addLayout(conf_h, 0, 4, 1, 2)
 
-        # 1. Configuration Tab Widget
-        config_tab = QWidget()
-        config_layout = QVBoxLayout(config_tab)
-        config_layout.setContentsMargins(4, 8, 4, 8)
-        config_layout.setSpacing(12)
-        self._build_configuration_tab(config_layout)
-        self.sub_tabs.addTab(config_tab, "⚙️ Configuration (A–E)")
+        quick_grid.addWidget(self._label("Modulation Type"), 1, 0)
+        self.combo_mod_type = QComboBox()
+        self.combo_mod_type.addItems(["AM", "PM", "OOK", "PPM", "ANY"])
+        self.combo_mod_type.setMinimumHeight(26)
+        quick_grid.addWidget(self.combo_mod_type, 1, 1, 1, 2)
 
-        # 2. Operations Tab Widget
-        ops_tab = QWidget()
-        ops_layout = QVBoxLayout(ops_tab)
-        ops_layout.setContentsMargins(4, 8, 4, 8)
-        ops_layout.setSpacing(12)
-        self._build_operations_tab(ops_layout)
-        self.sub_tabs.addTab(ops_tab, "🎯 Operations & Mission (F–I)")
+        quick_grid.addWidget(self._label("Modulation Freq (kHz)"), 1, 3)
+        self.det_mod_freq_slider, self.det_mod_freq_label, self.det_mod_freq_factor = self._make_float_slider(0.1, 50.0, 10.0, decimals=1, suffix=" kHz")
+        quick_grid.addWidget(self.det_mod_freq_slider, 1, 4)
+        quick_grid.addWidget(self.det_mod_freq_label, 1, 5)
 
-        main_layout.addWidget(self.sub_tabs, 1)
+        # Separator line
+        sep1 = QLabel()
+        sep1.setFixedHeight(1)
+        sep1.setStyleSheet("background:#e2e8f0; margin:3px 0px;")
+        quick_grid.addWidget(sep1, 2, 0, 1, 6)
+
+        # 1.2 Camera Resolution & FOV
+        quick_grid.addWidget(self._label("Resolution W x H (px)"), 3, 0)
+        res_h = QHBoxLayout()
+        self.fov_w_slider, self.fov_w_label = self._make_int_slider(320, 5000, 640, tooltip="Sensor pixel resolution width")
+        self.fov_h_slider, self.fov_h_label = self._make_int_slider(240, 5000, 480, tooltip="Sensor pixel resolution height")
+        res_h.addWidget(self.fov_w_slider, 1)
+        res_h.addWidget(self.fov_w_label)
+        res_h.addWidget(self.fov_h_slider, 1)
+        res_h.addWidget(self.fov_h_label)
+        quick_grid.addLayout(res_h, 3, 1, 1, 2)
+
+        quick_grid.addWidget(self._label("Optical FOV X x Y (deg)"), 3, 3)
+        fov_h = QHBoxLayout()
+        self.fov_x_slider, self.fov_x_label, self.fov_x_factor = self._make_float_slider(0.5, 20.0, 4.0, decimals=1, suffix="°")
+        self.fov_y_slider, self.fov_y_label, self.fov_y_factor = self._make_float_slider(0.5, 20.0, 3.0, decimals=1, suffix="°")
+        fov_h.addWidget(self.fov_x_slider, 1)
+        fov_h.addWidget(self.fov_x_label)
+        fov_h.addWidget(self.fov_y_slider, 1)
+        fov_h.addWidget(self.fov_y_label)
+        quick_grid.addLayout(fov_h, 3, 4, 1, 2)
+
+        # Separator line
+        sep2 = QLabel()
+        sep2.setFixedHeight(1)
+        sep2.setStyleSheet("background:#e2e8f0; margin:3px 0px;")
+        quick_grid.addWidget(sep2, 4, 0, 1, 6)
+
+        # 1.3 Acquisition & Search Pattern
+        quick_grid.addWidget(self._label("Acquisition Mode"), 5, 0)
+        self.combo_acq_mode = QComboBox()
+        self.combo_acq_mode.addItems(["AUTO", "SEARCH", "AUTO_ACQUISITION", "MANUAL", "TARGET_POINTING"])
+        self.combo_acq_mode.setMinimumHeight(26)
+        quick_grid.addWidget(self.combo_acq_mode, 5, 1, 1, 2)
+
+        quick_grid.addWidget(self._label("Search Pattern"), 5, 3)
+        self.combo_acq_pattern = QComboBox()
+        self.combo_acq_pattern.addItems(["RANDOM", "RASTER", "SPIRAL", "SECTOR", "GRID", "CUSTOM", "FIGURE_8"])
+        self.combo_acq_pattern.setMinimumHeight(26)
+        quick_grid.addWidget(self.combo_acq_pattern, 5, 4, 1, 2)
+
+        quick_grid.addWidget(self._label("Search Scan Speed"), 6, 0)
+        self.acq_speed_slider, self.acq_speed_label, self.acq_speed_factor = self._make_float_slider(1.0, 30.0, 15.0, decimals=1, suffix=" deg/s")
+        quick_grid.addWidget(self.acq_speed_slider, 6, 1)
+        quick_grid.addWidget(self.acq_speed_label, 6, 2)
+
+        quick_grid.addWidget(self._label("PTZ Control Mode"), 6, 3)
+        self.combo_ctrl_mode = QComboBox()
+        self.combo_ctrl_mode.addItems(["MANUAL", "SEARCH", "AUTO", "TRACKING"])
+        self.combo_ctrl_mode.setMinimumHeight(26)
+        quick_grid.addWidget(self.combo_ctrl_mode, 6, 4, 1, 2)
+
+        # 1.4 PTZ Pan/Tilt Speeds
+        quick_grid.addWidget(self._label("PTZ Pan Speed"), 7, 0)
+        self.pan_speed_slider, self.pan_speed_label, self.pan_speed_factor = self._make_float_slider(1.0, 30.0, 8.0, decimals=1, suffix=" deg/s")
+        quick_grid.addWidget(self.pan_speed_slider, 7, 1)
+        quick_grid.addWidget(self.pan_speed_label, 7, 2)
+
+        quick_grid.addWidget(self._label("PTZ Tilt Speed"), 7, 3)
+        self.tilt_speed_slider, self.tilt_speed_label, self.tilt_speed_factor = self._make_float_slider(1.0, 30.0, 8.0, decimals=1, suffix=" deg/s")
+        quick_grid.addWidget(self.tilt_speed_slider, 7, 4)
+        quick_grid.addWidget(self.tilt_speed_label, 7, 5)
+
+        # 1.5 Tracking Mode & Algorithm
+        quick_grid.addWidget(self._label("Tracking Mode"), 8, 0)
+        self.combo_trk_mode = QComboBox()
+        self.combo_trk_mode.addItems(["OFF", "TRACKING", "AUTO"])
+        self.combo_trk_mode.setMinimumHeight(26)
+        quick_grid.addWidget(self.combo_trk_mode, 8, 1, 1, 2)
+
+        quick_grid.addWidget(self._label("Tracking Algorithm"), 8, 3)
+        self.combo_trk_algo = QComboBox()
+        self.combo_trk_algo.addItems(["CENTROID", "PEAK", "KALMAN"])
+        self.combo_trk_algo.setMinimumHeight(26)
+        quick_grid.addWidget(self.combo_trk_algo, 8, 4, 1, 2)
+
+        # Diagnostics / Readouts in Quick Setup
+        self.lbl_target_ident = QLabel("Target Discrimination: Autonomous scan active • Candidates in FOV: 0 | Identified Target: None")
+        self.lbl_target_ident.setStyleSheet("color:#4338ca; font-weight:600; font-size:11px; padding-top:4px;")
+        quick_grid.addWidget(self.lbl_target_ident, 9, 0, 1, 6)
+
+        self.lbl_trk_offsets = QLabel("Tracking Error: Δx = 0.0 px (0.0 µrad) • Δy = 0.0 px (0.0 µrad)")
+        self.lbl_trk_offsets.setStyleSheet("color:#1e3a8a; font-weight:600; font-size:11px; padding-top:2px;")
+        quick_grid.addWidget(self.lbl_trk_offsets, 10, 0, 1, 6)
+
+        main_layout.addWidget(quick_box)
+
+        # -------------------------------------------------------------
+        # 2. ADVANCED PARAMETERS (COLLAPSIBLE ACCORDION)
+        # -------------------------------------------------------------
+        self.btn_toggle_advanced = QPushButton("▶ ⚙️ Advanced Parameters (Mechanics, Noise & Fine-Tuning) [Click to Expand]")
+        self.btn_toggle_advanced.setStyleSheet(
+            "QPushButton { background:#f1f5f9; border:1px solid #cbd5e1; border-radius:6px; padding:8px 14px; "
+            "font-weight:700; color:#1e293b; text-align:left; font-size:12px; } "
+            "QPushButton:hover { background:#e2e8f0; border-color:#94a3b8; }"
+        )
+        self.btn_toggle_advanced.clicked.connect(self.toggle_advanced)
+        main_layout.addWidget(self.btn_toggle_advanced)
+
+        self.adv_container = QWidget()
+        self.adv_container.setVisible(False)  # Collapsed by default
+        adv_layout = QVBoxLayout(self.adv_container)
+        adv_layout.setContentsMargins(0, 4, 0, 4)
+        adv_layout.setSpacing(12)
+
+        # Detailed groups inside advanced section
+        self._build_advanced_sections(adv_layout)
+        main_layout.addWidget(self.adv_container)
+
+        main_layout.addStretch(1)
+
+        self._setup_backward_compatibility_aliases()
+        self._wire_signals()
+
+    def toggle_advanced(self) -> None:
+        self._advanced_visible = not getattr(self, "_advanced_visible", False)
+        self.adv_container.setVisible(self._advanced_visible)
+        if self._advanced_visible:
+            self.btn_toggle_advanced.setText("▼ ⚙️ Advanced Parameters [Click to Collapse]")
+        else:
+            self.btn_toggle_advanced.setText("▶ ⚙️ Advanced Parameters (Mechanics, Noise & Fine-Tuning) [Click to Expand]")
 
     # -----------------------------------------------------------------
-    # CONFIGURATION SECTION (GROUPS A–E)
+    # ADVANCED SECTION SUB-GROUPS
     # -----------------------------------------------------------------
-    def _build_configuration_tab(self, layout: QVBoxLayout) -> None:
-        # ---- A: Sensor Resolution & FOV ----
-        fov_box, fov_grid = self._make_group("A — Sensor Resolution & Optical Field of View (FOV)")
-        fov_grid.setColumnStretch(1, 2)
-        fov_grid.setColumnStretch(4, 2)
-
-        fov_grid.addWidget(self._label("Resolution W (px)"), 0, 0)
-        self.fov_w_slider, self.fov_w_label = self._make_int_slider(320, 5000, 640, tooltip="Sensor pixel resolution width (default 640)")
-        fov_grid.addWidget(self.fov_w_slider, 0, 1)
-        fov_grid.addWidget(self.fov_w_label, 0, 2)
-
-        fov_grid.addWidget(self._label("Resolution H (px)"), 0, 3)
-        self.fov_h_slider, self.fov_h_label = self._make_int_slider(240, 5000, 480, tooltip="Sensor pixel resolution height (default 480)")
-        fov_grid.addWidget(self.fov_h_slider, 0, 4)
-        fov_grid.addWidget(self.fov_h_label, 0, 5)
-
-        fov_grid.addWidget(self._label("FOV X (deg)"), 1, 0)
-        self.fov_x_slider, self.fov_x_label, self.fov_x_factor = self._make_float_slider(0.5, 20.0, 4.0, decimals=1, suffix=" deg", tooltip="Horizontal field of view")
-        fov_grid.addWidget(self.fov_x_slider, 1, 1)
-        fov_grid.addWidget(self.fov_x_label, 1, 2)
-
-        fov_grid.addWidget(self._label("FOV Y (deg)"), 1, 3)
-        self.fov_y_slider, self.fov_y_label, self.fov_y_factor = self._make_float_slider(0.5, 20.0, 3.0, decimals=1, suffix=" deg", tooltip="Vertical field of view")
-        fov_grid.addWidget(self.fov_y_slider, 1, 4)
-        fov_grid.addWidget(self.fov_y_label, 1, 5)
-
-        type_lbl = QLabel("Camera Type: Monochrome • Sensor Type: Focal Plane Array (FPA) NIR-Sensitive")
-        type_lbl.setStyleSheet("color:#475569; font-size:10px; font-style:italic; padding-top:2px;")
-        fov_grid.addWidget(type_lbl, 2, 0, 1, 6)
-        layout.addWidget(fov_box)
-
-        # ---- B: Pan-Tilt Mechanics ----
-        mech_box, mech_grid = self._make_group("B — Pan-Tilt Mechanics & Actuator Specifications")
+    def _build_advanced_sections(self, layout: QVBoxLayout) -> None:
+        # Group B: Pan-Tilt Mechanics & Actuator Specifications
+        mech_box, mech_grid = self._make_group("B — Pan-Tilt Mechanics, Home & Limits")
         mech_grid.setColumnStretch(1, 2)
         mech_grid.setColumnStretch(4, 2)
 
@@ -236,40 +367,23 @@ class LocalTerminalPanel(BaseConfigPanel):
         mech_grid.addWidget(self.home_tilt_slider, 2, 4)
         mech_grid.addWidget(self.home_tilt_label, 2, 5)
 
-        mech_grid.addWidget(self._label("Pan Speed (deg/s)"), 3, 0)
-        self.pan_speed_slider, self.pan_speed_label, self.pan_speed_factor = self._make_float_slider(1.0, 30.0, 8.0, decimals=1, suffix=" deg/s")
-        mech_grid.addWidget(self.pan_speed_slider, 3, 1)
-        mech_grid.addWidget(self.pan_speed_label, 3, 2)
-
-        mech_grid.addWidget(self._label("Tilt Speed (deg/s)"), 3, 3)
-        self.tilt_speed_slider, self.tilt_speed_label, self.tilt_speed_factor = self._make_float_slider(1.0, 30.0, 8.0, decimals=1, suffix=" deg/s")
-        mech_grid.addWidget(self.tilt_speed_slider, 3, 4)
-        mech_grid.addWidget(self.tilt_speed_label, 3, 5)
-
-        mech_grid.addWidget(self._label("Actuator Res (px)"), 4, 0)
+        mech_grid.addWidget(self._label("Actuator Res (px)"), 3, 0)
         self.res_slider, self.res_label, self.res_factor = self._make_float_slider(0.01, 2.0, 0.10, decimals=2, suffix=" px")
-        mech_grid.addWidget(self.res_slider, 4, 1)
-        mech_grid.addWidget(self.res_label, 4, 2)
+        mech_grid.addWidget(self.res_slider, 3, 1)
+        mech_grid.addWidget(self.res_label, 3, 2)
 
-        mech_grid.addWidget(self._label("Latency (ms)"), 4, 3)
+        mech_grid.addWidget(self._label("Latency (ms)"), 3, 3)
         self.latency_slider, self.latency_label = self._make_int_slider(0, 500, 12, tooltip="Command queue delay")
-        mech_grid.addWidget(self.latency_slider, 4, 4)
-        mech_grid.addWidget(self.latency_label, 4, 5)
+        mech_grid.addWidget(self.latency_slider, 3, 4)
+        mech_grid.addWidget(self.latency_label, 3, 5)
 
-        mech_grid.addWidget(self._label("Update Rate (Hz)"), 5, 0)
+        mech_grid.addWidget(self._label("Update Rate (Hz)"), 4, 0)
         self.update_rate_slider, self.update_rate_label = self._make_int_slider(20, 120, 30, tooltip="Actuator refresh frequency")
-        mech_grid.addWidget(self.update_rate_slider, 5, 1)
-        mech_grid.addWidget(self.update_rate_label, 5, 2)
-
-        mech_grid.addWidget(self._label("Control Mode"), 5, 3)
-        self.combo_ctrl_mode = QComboBox()
-        self.combo_ctrl_mode.addItems(["MANUAL", "SEARCH", "AUTO", "TRACKING"])
-        self.combo_ctrl_mode.setMinimumHeight(26)
-        mech_grid.addWidget(self.combo_ctrl_mode, 5, 4, 1, 2)
-
+        mech_grid.addWidget(self.update_rate_slider, 4, 1)
+        mech_grid.addWidget(self.update_rate_label, 4, 2)
         layout.addWidget(mech_box)
 
-        # ---- C: Display / Screen Sizes ----
+        # Group C: Display Screen & Viewport Sizes
         disp_box, disp_grid = self._make_group("C — Display & Screen Viewport Dimensions")
         disp_grid.setColumnStretch(1, 2)
         disp_grid.setColumnStretch(4, 2)
@@ -297,7 +411,7 @@ class LocalTerminalPanel(BaseConfigPanel):
         disp_grid.addWidget(self.god_h_label, 1, 5)
         layout.addWidget(disp_box)
 
-        # ---- D: Pixel -> Angle (Derived Angular Model) ----
+        # Group D: Dynamic Angular Model
         ang_box, ang_grid = self._make_group("D — Derived Pixel ↔ Angle Model (Dynamically Computed)")
         ang_grid.setColumnStretch(1, 1)
         ang_grid.setColumnStretch(3, 1)
@@ -322,12 +436,12 @@ class LocalTerminalPanel(BaseConfigPanel):
         self.lbl_inv_y.setStyleSheet("font-size:11px; color:#475569;")
         ang_grid.addWidget(self.lbl_inv_y, 1, 3)
 
-        ang_hint = QLabel("Derived automatically from optical geometry: θ = FOV / Resolution. (4.0° / 640 px = 109.083 µrad/px).")
+        ang_hint = QLabel("Derived automatically from optical geometry: θ = FOV / Resolution.")
         ang_hint.setStyleSheet("color:#64748b; font-size:10px; font-style:italic;")
         ang_grid.addWidget(ang_hint, 2, 0, 1, 4)
         layout.addWidget(ang_box)
 
-        # ---- E: Realism & Mechanical Errors ----
+        # Group E: Actuator Realism & Noise
         real_box, real_grid = self._make_group("E — Actuator Realism & Mechanical Imperfections")
         real_grid.setColumnStretch(1, 2)
         real_grid.setColumnStretch(4, 2)
@@ -353,194 +467,116 @@ class LocalTerminalPanel(BaseConfigPanel):
         real_grid.addWidget(self.jitter_label, 1, 5)
         layout.addWidget(real_box)
 
-        layout.addStretch(1)
-
-    # -----------------------------------------------------------------
-    # OPERATIONS SECTION (GROUPS F–I)
-    # -----------------------------------------------------------------
-    def _build_operations_tab(self, layout: QVBoxLayout) -> None:
-        # ---- F: Acquisition ----
-        acq_box, acq_grid = self._make_group("F — Target Acquisition & Spatial Scanning")
+        # Fine Acquisition & Scan Region
+        acq_box, acq_grid = self._make_group("F — Fine Spatial Scan Region Coordinates")
         acq_grid.setColumnStretch(1, 2)
         acq_grid.setColumnStretch(4, 2)
 
-        acq_grid.addWidget(self._label("Acquisition Mode"), 0, 0)
-        self.combo_acq_mode = QComboBox()
-        self.combo_acq_mode.addItems(["AUTO", "SEARCH", "AUTO_ACQUISITION", "MANUAL", "TARGET_POINTING"])
-        self.combo_acq_mode.setMinimumHeight(26)
-        acq_grid.addWidget(self.combo_acq_mode, 0, 1, 1, 2)
-
-        acq_grid.addWidget(self._label("Search Pattern"), 0, 3)
-        self.combo_acq_pattern = QComboBox()
-        self.combo_acq_pattern.addItems(["RANDOM", "RASTER", "SPIRAL", "SECTOR", "GRID", "CUSTOM", "FIGURE_8"])
-        self.combo_acq_pattern.setMinimumHeight(26)
-        acq_grid.addWidget(self.combo_acq_pattern, 0, 4, 1, 2)
-
-        acq_grid.addWidget(self._label("Pan Search Min (deg)"), 1, 0)
+        acq_grid.addWidget(self._label("Pan Search Min (deg)"), 0, 0)
         self.acq_pmin_slider, self.acq_pmin_label, self.acq_pmin_factor = self._make_float_slider(-45.0, 0.0, -20.0, decimals=1, suffix=" deg")
-        acq_grid.addWidget(self.acq_pmin_slider, 1, 1)
-        acq_grid.addWidget(self.acq_pmin_label, 1, 2)
+        acq_grid.addWidget(self.acq_pmin_slider, 0, 1)
+        acq_grid.addWidget(self.acq_pmin_label, 0, 2)
 
-        acq_grid.addWidget(self._label("Pan Search Max (deg)"), 1, 3)
+        acq_grid.addWidget(self._label("Pan Search Max (deg)"), 0, 3)
         self.acq_pmax_slider, self.acq_pmax_label, self.acq_pmax_factor = self._make_float_slider(0.0, 45.0, 20.0, decimals=1, suffix=" deg")
-        acq_grid.addWidget(self.acq_pmax_slider, 1, 4)
-        acq_grid.addWidget(self.acq_pmax_label, 1, 5)
+        acq_grid.addWidget(self.acq_pmax_slider, 0, 4)
+        acq_grid.addWidget(self.acq_pmax_label, 0, 5)
 
-        acq_grid.addWidget(self._label("Tilt Search Min (deg)"), 2, 0)
+        acq_grid.addWidget(self._label("Tilt Search Min (deg)"), 1, 0)
         self.acq_tmin_slider, self.acq_tmin_label, self.acq_tmin_factor = self._make_float_slider(-30.0, 0.0, -10.0, decimals=1, suffix=" deg")
-        acq_grid.addWidget(self.acq_tmin_slider, 2, 1)
-        acq_grid.addWidget(self.acq_tmin_label, 2, 2)
+        acq_grid.addWidget(self.acq_tmin_slider, 1, 1)
+        acq_grid.addWidget(self.acq_tmin_label, 1, 2)
 
-        acq_grid.addWidget(self._label("Tilt Search Max (deg)"), 2, 3)
+        acq_grid.addWidget(self._label("Tilt Search Max (deg)"), 1, 3)
         self.acq_tmax_slider, self.acq_tmax_label, self.acq_tmax_factor = self._make_float_slider(0.0, 30.0, 10.0, decimals=1, suffix=" deg")
-        acq_grid.addWidget(self.acq_tmax_slider, 2, 4)
-        acq_grid.addWidget(self.acq_tmax_label, 2, 5)
+        acq_grid.addWidget(self.acq_tmax_slider, 1, 4)
+        acq_grid.addWidget(self.acq_tmax_label, 1, 5)
 
-        acq_grid.addWidget(self._label("Scan Speed (deg/s)"), 3, 0)
-        self.acq_speed_slider, self.acq_speed_label, self.acq_speed_factor = self._make_float_slider(1.0, 30.0, 15.0, decimals=1, suffix=" deg/s")
-        acq_grid.addWidget(self.acq_speed_slider, 3, 1)
-        acq_grid.addWidget(self.acq_speed_label, 3, 2)
-
-        acq_grid.addWidget(self._label("Timeout (s)"), 3, 3)
+        acq_grid.addWidget(self._label("Timeout (s)"), 2, 0)
         self.acq_timeout_slider, self.acq_timeout_label = self._make_int_slider(5, 120, 30, tooltip="Search sweep timeout duration")
-        acq_grid.addWidget(self.acq_timeout_slider, 3, 4)
-        acq_grid.addWidget(self.acq_timeout_label, 3, 5)
+        acq_grid.addWidget(self.acq_timeout_slider, 2, 1)
+        acq_grid.addWidget(self.acq_timeout_label, 2, 2)
         layout.addWidget(acq_box)
 
-        # ---- G: Detection ----
-        det_box, det_grid = self._make_group("G — Optical Detection & Spectral Matching")
+        # Fine Optical Detection & Tolerances
+        det_box, det_grid = self._make_group("G — Fine Optical Detection Tolerances")
         det_grid.setColumnStretch(1, 2)
         det_grid.setColumnStretch(4, 2)
 
-        det_grid.addWidget(self._label("Center Wavelength (nm)"), 0, 0)
-        self.det_wl_slider, self.det_wl_label, self.det_wl_factor = self._make_float_slider(800.0, 1650.0, 1550.0, decimals=1, suffix=" nm")
-        det_grid.addWidget(self.det_wl_slider, 0, 1)
-        det_grid.addWidget(self.det_wl_label, 0, 2)
-
-        det_grid.addWidget(self._label("Bandwidth (nm)"), 0, 3)
+        det_grid.addWidget(self._label("Bandwidth (nm)"), 0, 0)
         self.det_bw_slider, self.det_bw_label, self.det_bw_factor = self._make_float_slider(1.0, 50.0, 10.0, decimals=1, suffix=" nm")
-        det_grid.addWidget(self.det_bw_slider, 0, 4)
-        det_grid.addWidget(self.det_bw_label, 0, 5)
+        det_grid.addWidget(self.det_bw_slider, 0, 1)
+        det_grid.addWidget(self.det_bw_label, 0, 2)
 
-        det_grid.addWidget(self._label("Minimum SNR (dB)"), 1, 0)
+        det_grid.addWidget(self._label("Minimum SNR (dB)"), 0, 3)
         self.det_snr_slider, self.det_snr_label, self.det_snr_factor = self._make_float_slider(1.0, 30.0, 8.0, decimals=1, suffix=" dB")
-        det_grid.addWidget(self.det_snr_slider, 1, 1)
-        det_grid.addWidget(self.det_snr_label, 1, 2)
+        det_grid.addWidget(self.det_snr_slider, 0, 4)
+        det_grid.addWidget(self.det_snr_label, 0, 5)
 
-        det_grid.addWidget(self._label("Intensity Thresh (DN)"), 1, 3)
+        det_grid.addWidget(self._label("Intensity Thresh (DN)"), 1, 0)
         self.det_int_slider, self.det_int_label, self.det_int_factor = self._make_float_slider(0.0, 100.0, 0.0, decimals=1, suffix=" DN")
-        det_grid.addWidget(self.det_int_slider, 1, 4)
-        det_grid.addWidget(self.det_int_label, 1, 5)
+        det_grid.addWidget(self.det_int_slider, 1, 1)
+        det_grid.addWidget(self.det_int_label, 1, 2)
 
-        det_grid.addWidget(self._label("Expected Spot (mrad)"), 2, 0)
+        det_grid.addWidget(self._label("Expected Spot (mrad)"), 1, 3)
         self.det_spot_slider, self.det_spot_label, self.det_spot_factor = self._make_float_slider(0.5, 10.0, 3.0, decimals=1, suffix=" mrad")
-        det_grid.addWidget(self.det_spot_slider, 2, 1)
-        det_grid.addWidget(self.det_spot_label, 2, 2)
+        det_grid.addWidget(self.det_spot_slider, 1, 4)
+        det_grid.addWidget(self.det_spot_label, 1, 5)
 
-        det_grid.addWidget(self._label("Spot Tolerance (mrad)"), 2, 3)
+        det_grid.addWidget(self._label("Spot Tolerance (mrad)"), 2, 0)
         self.det_tol_slider, self.det_tol_label, self.det_tol_factor = self._make_float_slider(0.1, 2.0, 0.5, decimals=1, suffix=" mrad")
-        det_grid.addWidget(self.det_tol_slider, 2, 4)
-        det_grid.addWidget(self.det_tol_label, 2, 5)
-
-        det_grid.addWidget(self._label("Modulation Type"), 3, 0)
-        self.combo_mod_type = QComboBox()
-        self.combo_mod_type.addItems(["AM", "PM", "OOK", "PPM", "ANY"])
-        self.combo_mod_type.setMinimumHeight(26)
-        det_grid.addWidget(self.combo_mod_type, 3, 1, 1, 2)
-
-        det_grid.addWidget(self._label("Modulation Freq (kHz)"), 3, 3)
-        self.det_mod_freq_slider, self.det_mod_freq_label, self.det_mod_freq_factor = self._make_float_slider(0.1, 50.0, 10.0, decimals=1, suffix=" kHz")
-        det_grid.addWidget(self.det_mod_freq_slider, 3, 4)
-        det_grid.addWidget(self.det_mod_freq_label, 3, 5)
-
-        det_grid.addWidget(self._label("Confidence Thresh"), 4, 0)
-        self.det_conf_slider, self.det_conf_label, self.det_conf_factor = self._make_float_slider(0.5, 1.0, 0.85, decimals=2)
-        det_grid.addWidget(self.det_conf_slider, 4, 1)
-        det_grid.addWidget(self.det_conf_label, 4, 2)
-
-        det_grid.addWidget(self._label("Live Confidence"), 4, 3)
-        self.prog_confidence = QProgressBar()
-        self.prog_confidence.setRange(0, 100)
-        self.prog_confidence.setValue(0)
-        self.prog_confidence.setTextVisible(True)
-        self.prog_confidence.setFormat("%v%")
-        self.prog_confidence.setStyleSheet(
-            "QProgressBar { border:1px solid #d1d5db; border-radius:4px; text-align:center; height:18px; font-weight:700; }"
-            "QProgressBar::chunk { background:#059669; border-radius:3px; }"
-        )
-        det_grid.addWidget(self.prog_confidence, 4, 4, 1, 2)
-
-        self.lbl_target_ident = QLabel("Target Discrimination: Autonomous scan active • Candidates in FOV: 0 | Identified Target: None")
-        self.lbl_target_ident.setStyleSheet("color:#4338ca; font-weight:600; font-size:11px; padding-top:4px;")
-        det_grid.addWidget(self.lbl_target_ident, 5, 0, 1, 6)
-
+        det_grid.addWidget(self.det_tol_slider, 2, 1)
+        det_grid.addWidget(self.det_tol_label, 2, 2)
         layout.addWidget(det_box)
 
-        # ---- H: Tracking ----
-        trk_box, trk_grid = self._make_group("H — Centroid Target Tracking & Predictive Filtering")
+        # Servo PID & Filtering Gains
+        trk_box, trk_grid = self._make_group("H — Servo PID Gains & Tracking Filter")
         trk_grid.setColumnStretch(1, 2)
         trk_grid.setColumnStretch(4, 2)
 
-        trk_grid.addWidget(self._label("Tracking Mode"), 0, 0)
-        self.combo_trk_mode = QComboBox()
-        self.combo_trk_mode.addItems(["OFF", "TRACKING", "AUTO"])
-        self.combo_trk_mode.setMinimumHeight(26)
-        trk_grid.addWidget(self.combo_trk_mode, 0, 1, 1, 2)
-
-        trk_grid.addWidget(self._label("Algorithm"), 0, 3)
-        self.combo_trk_algo = QComboBox()
-        self.combo_trk_algo.addItems(["CENTROID", "PEAK", "KALMAN"])
-        self.combo_trk_algo.setMinimumHeight(26)
-        trk_grid.addWidget(self.combo_trk_algo, 0, 4, 1, 2)
-
-        trk_grid.addWidget(self._label("Update Rate (Hz)"), 1, 0)
+        trk_grid.addWidget(self._label("Update Rate (Hz)"), 0, 0)
         self.trk_rate_slider, self.trk_rate_label = self._make_int_slider(10, 120, 30)
-        trk_grid.addWidget(self.trk_rate_slider, 1, 1)
-        trk_grid.addWidget(self.trk_rate_label, 1, 2)
+        trk_grid.addWidget(self.trk_rate_slider, 0, 1)
+        trk_grid.addWidget(self.trk_rate_label, 0, 2)
 
-        trk_grid.addWidget(self._label("Prediction Horizon (s)"), 1, 3)
+        trk_grid.addWidget(self._label("Prediction Horizon (s)"), 0, 3)
         self.trk_horiz_slider, self.trk_horiz_label, self.trk_horiz_factor = self._make_float_slider(0.0, 2.0, 0.5, decimals=2, suffix=" s")
-        trk_grid.addWidget(self.trk_horiz_slider, 1, 4)
-        trk_grid.addWidget(self.trk_horiz_label, 1, 5)
+        trk_grid.addWidget(self.trk_horiz_slider, 0, 4)
+        trk_grid.addWidget(self.trk_horiz_label, 0, 5)
 
-        trk_grid.addWidget(self._label("Smoothing (0..1)"), 2, 0)
+        trk_grid.addWidget(self._label("Smoothing (0..1)"), 1, 0)
         self.trk_smooth_slider, self.trk_smooth_label, self.trk_smooth_factor = self._make_float_slider(0.0, 0.9, 0.2, decimals=2)
-        trk_grid.addWidget(self.trk_smooth_slider, 2, 1)
-        trk_grid.addWidget(self.trk_smooth_label, 2, 2)
+        trk_grid.addWidget(self.trk_smooth_slider, 1, 1)
+        trk_grid.addWidget(self.trk_smooth_label, 1, 2)
 
-        trk_grid.addWidget(self._label("Lost Target Action"), 2, 3)
+        trk_grid.addWidget(self._label("Lost Target Action"), 1, 3)
         self.combo_lost_action = QComboBox()
         self.combo_lost_action.addItems(["RESUME_SEARCH", "HOLD_POSITION", "RETURN_HOME"])
         self.combo_lost_action.setMinimumHeight(26)
-        trk_grid.addWidget(self.combo_lost_action, 2, 4, 1, 2)
+        trk_grid.addWidget(self.combo_lost_action, 1, 4, 1, 2)
 
-        trk_grid.addWidget(self._label("Servo Kp (Prop Gain)"), 3, 0)
+        trk_grid.addWidget(self._label("Servo Kp (Prop Gain)"), 2, 0)
         self.trk_kp_slider, self.trk_kp_label, self.trk_kp_factor = self._make_float_slider(0.01, 1.0, 0.25, decimals=2)
-        trk_grid.addWidget(self.trk_kp_slider, 3, 1)
-        trk_grid.addWidget(self.trk_kp_label, 3, 2)
+        trk_grid.addWidget(self.trk_kp_slider, 2, 1)
+        trk_grid.addWidget(self.trk_kp_label, 2, 2)
 
-        trk_grid.addWidget(self._label("Servo Ki (Integ Gain)"), 3, 3)
+        trk_grid.addWidget(self._label("Servo Ki (Integ Gain)"), 2, 3)
         self.trk_ki_slider, self.trk_ki_label, self.trk_ki_factor = self._make_float_slider(0.0, 0.5, 0.05, decimals=3)
-        trk_grid.addWidget(self.trk_ki_slider, 3, 4)
-        trk_grid.addWidget(self.trk_ki_label, 3, 5)
+        trk_grid.addWidget(self.trk_ki_slider, 2, 4)
+        trk_grid.addWidget(self.trk_ki_label, 2, 5)
 
-        trk_grid.addWidget(self._label("Servo Kd (Deriv Gain)"), 4, 0)
+        trk_grid.addWidget(self._label("Servo Kd (Deriv Gain)"), 3, 0)
         self.trk_kd_slider, self.trk_kd_label, self.trk_kd_factor = self._make_float_slider(0.0, 0.2, 0.02, decimals=3)
-        trk_grid.addWidget(self.trk_kd_slider, 4, 1)
-        trk_grid.addWidget(self.trk_kd_label, 4, 2)
+        trk_grid.addWidget(self.trk_kd_slider, 3, 1)
+        trk_grid.addWidget(self.trk_kd_label, 3, 2)
 
-        trk_grid.addWidget(self._label("Dead Zone (px)"), 4, 3)
+        trk_grid.addWidget(self._label("Dead Zone (px)"), 3, 3)
         self.trk_dz_slider, self.trk_dz_label, self.trk_dz_factor = self._make_float_slider(0.0, 5.0, 0.5, decimals=1, suffix=" px")
-        trk_grid.addWidget(self.trk_dz_slider, 4, 4)
-        trk_grid.addWidget(self.trk_dz_label, 4, 5)
-
-        self.lbl_trk_offsets = QLabel("Tracking Error: Δx = 0.0 px (0.0 µrad) • Δy = 0.0 px (0.0 µrad)")
-        self.lbl_trk_offsets.setStyleSheet("color:#1e3a8a; font-weight:600; font-size:11px; padding-top:4px;")
-        trk_grid.addWidget(self.lbl_trk_offsets, 5, 0, 1, 6)
-
+        trk_grid.addWidget(self.trk_dz_slider, 3, 4)
+        trk_grid.addWidget(self.trk_dz_label, 3, 5)
         layout.addWidget(trk_box)
 
-        # ---- I: Communication ----
+        # Transceiver & Communication
         comm_box, comm_grid = self._make_group("I — Optical Communication & Transceiver Link")
         comm_grid.setColumnStretch(1, 2)
         comm_grid.setColumnStretch(3, 2)
@@ -569,12 +605,53 @@ class LocalTerminalPanel(BaseConfigPanel):
         caps_layout.addWidget(self.chk_cap_trk)
         caps_layout.addStretch(1)
         comm_grid.addLayout(caps_layout, 1, 1, 1, 3)
-
         layout.addWidget(comm_box)
-        layout.addStretch(1)
 
-        self._setup_backward_compatibility_aliases()
-        self._wire_signals()
+    # -----------------------------------------------------------------
+    # RANDOMIZE FEATURE
+    # -----------------------------------------------------------------
+    def randomize(
+        self,
+        wavelength: float | None = None,
+        mod_type: str | None = None,
+        mod_freq: float | None = None,
+        emit: bool = True,
+    ) -> None:
+        """Randomize operational scan, tracking, and kinematics parameters on the fly."""
+        was_updating = self._updating
+        self._updating = True
+        try:
+            patterns = ["SPIRAL", "RASTER", "RANDOM", "FIGURE_8", "SECTOR", "GRID"]
+            self.combo_acq_pattern.setCurrentText(random.choice(patterns))
+            self.acq_speed_slider.setValue(int(random.uniform(8.0, 24.0) * self.acq_speed_factor))
+
+            self.pan_speed_slider.setValue(int(random.uniform(6.0, 18.0) * self.pan_speed_factor))
+            self.tilt_speed_slider.setValue(int(random.uniform(6.0, 18.0) * self.tilt_speed_factor))
+
+            algos = ["CENTROID", "PEAK", "KALMAN"]
+            self.combo_trk_algo.setCurrentText(random.choice(algos))
+
+            self.combo_acq_mode.setCurrentText("AUTO")
+            self.combo_trk_mode.setCurrentText("AUTO")
+
+            if wavelength is not None:
+                self.det_wl_slider.setValue(int(round(wavelength * self.det_wl_factor)))
+            if mod_type is not None:
+                self.combo_mod_type.setCurrentText(mod_type)
+            if mod_freq is not None:
+                self.det_mod_freq_slider.setValue(int(round(mod_freq * self.det_mod_freq_factor)))
+
+            # Randomize PID responsiveness slightly around optimal
+            self.trk_kp_slider.setValue(int(random.uniform(0.18, 0.40) * self.trk_kp_factor))
+            self.trk_ki_slider.setValue(int(random.uniform(0.02, 0.08) * self.trk_ki_factor))
+            self.trk_kd_slider.setValue(int(random.uniform(0.01, 0.04) * self.trk_kd_factor))
+
+            self._update_derived_angular_labels()
+        finally:
+            self._updating = was_updating
+
+        if emit:
+            self.configChanged.emit(self.collect_config())
 
     # -----------------------------------------------------------------
     # HELPERS & COMPATIBILITY ALIASES
@@ -614,7 +691,6 @@ class LocalTerminalPanel(BaseConfigPanel):
         self.btn_reset = self.btn_reset_all
 
     def _wire_signals(self) -> None:
-        # All sliders, combos, checkboxes connect to _on_change
         sliders = [
             self.fov_w_slider, self.fov_h_slider, self.fov_x_slider, self.fov_y_slider,
             self.pan_min_slider, self.pan_max_slider, self.tilt_min_slider, self.tilt_max_slider,
@@ -656,7 +732,6 @@ class LocalTerminalPanel(BaseConfigPanel):
         fx = self.fov_x_slider.value() / self.fov_x_factor
         fy = self.fov_y_slider.value() / self.fov_y_factor
 
-        import math
         x_urad = (math.radians(fx) * 1e6) / fw
         y_urad = (math.radians(fy) * 1e6) / fh
         inv_x = 1.0 / x_urad if x_urad > 0 else 0.0

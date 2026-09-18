@@ -16,66 +16,24 @@ from local_terminal.beacon_frame import (
 from local_terminal.frame_decoder import DecodedFrame
 
 
-@dataclass
-class TargetPayloadConfig:
-    """Configuration specifying the authorized target beacon (§4, §29)."""
-
-    expected_terminal_id: str = "RT-001"
-    expected_terminal_id_byte: int = 0
-    expected_network_id: int = 0
-    expected_token: str = "ALPHA-7"
-    expected_wavelength_nm: float = 1550.0
-    wavelength_tolerance_nm: float = 20.0
-    expected_protocol_version: int = 1
-    expected_message_type: int = 1
-    min_decode_confidence: float = 0.40
-    min_consecutive_valid: int = 2
-    required_valid_frames: int = 2
-    chip_rate_hz: float = 8.0
-    require_sequence_advance: bool = True
-    sequence_validation_enabled: bool = True
-    wavelength_validation_enabled: bool = False
-    max_identity_fail_streak: int = 10
-    required_capabilities: int = 0
-    allow_wavelength_override: bool = False
-    max_sequence_gap: int = 0
-
-    def validate(self) -> TargetPayloadConfig:
-        if self.expected_terminal_id:
-            try:
-                self.expected_terminal_id_byte = terminal_id_to_byte(self.expected_terminal_id)
-            except Exception:
-                pass
-        self.min_decode_confidence = float(max(0.0, min(1.0, self.min_decode_confidence)))
-        self.min_consecutive_valid = int(max(1, self.min_consecutive_valid))
-        self.required_valid_frames = self.min_consecutive_valid
-        self.chip_rate_hz = float(max(0.5, min(self.chip_rate_hz, 30.0)))
-        self.max_identity_fail_streak = int(max(1, self.max_identity_fail_streak))
-        return self
-
-    @classmethod
-    def from_detection_config(cls, cfg: Any) -> TargetPayloadConfig:
-        try:
-            code = str(getattr(cfg, "identification_code", "") or "").strip()
-            tid_byte = terminal_id_to_byte(code) if code else 0
-            wl = float(getattr(cfg, "wavelength", 1550.0) or 1550.0)
-            return cls(
-                expected_terminal_id=code,
-                expected_terminal_id_byte=tid_byte,
-                expected_token="ALPHA-7",
-                expected_wavelength_nm=wl,
-                min_decode_confidence=float(getattr(cfg, "code_correlation_threshold", 0.4) or 0.4),
-                min_consecutive_valid=int(getattr(cfg, "code_persistence", 2) or 2),
-                required_valid_frames=int(getattr(cfg, "code_persistence", 2) or 2),
-                require_sequence_advance=True,
-                sequence_validation_enabled=True,
-            ).validate()
-        except Exception:
-            return cls().validate()
+from local_terminal.config import TargetPayloadConfig, TargetProfile
 
 
-# TargetProfile is an exact alias of TargetPayloadConfig
-TargetProfile = TargetPayloadConfig
+class CanonicalStatus(str):
+    """String subclass that matches both specific sequence reason and canonical INVALID_SEQUENCE (§18)."""
+
+    def __new__(cls, value: str, canonical: str = "INVALID_SEQUENCE") -> CanonicalStatus:
+        obj = str.__new__(cls, value)
+        obj._canonical = str(canonical)
+        return obj
+
+    def __eq__(self, other: Any) -> bool:
+        if super().__eq__(other):
+            return True
+        return self._canonical == other
+
+    def __hash__(self) -> int:
+        return super().__hash__()
 
 
 @dataclass
@@ -132,7 +90,7 @@ class IdentityValidator:
         observation_id: str = "track-0",
         optical_wavelength_nm: float = 0.0,
     ) -> IdentityDecision:
-        dec = self.match(observation_id, frame)
+        dec = self.match(observation_id, frame, optical_wavelength_nm=optical_wavelength_nm)
         if (
             dec.reason == "BUILDING"
             and dec.terminal_id_ok
@@ -151,6 +109,7 @@ class IdentityValidator:
         self,
         observation_id: str,
         decoded: DecodedFrame | DecodedPayload | BeaconFrame | Any,
+        optical_wavelength_nm: float = 0.0,
     ) -> IdentityDecision:
         p = self.profile
         tid_str = getattr(decoded, "terminal_id_str", getattr(decoded, "terminal_id", ""))
@@ -209,7 +168,7 @@ class IdentityValidator:
             dec.is_impostor = True
             return dec
 
-        # Gate 4: Authorization token
+        # Gate 4: Authorization token (§19 - strict checking)
         expected_token = p.expected_token.strip()
         decoded_token = str(getattr(decoded, "token", "") or "").strip()
         if not expected_token:
@@ -217,8 +176,12 @@ class IdentityValidator:
         elif decoded_token and decoded_token == expected_token:
             dec.token_valid = True
         elif not decoded_token:
-            # Token omitted in decoded frame
-            dec.token_valid = True
+            # Token missing when expected (§19: missing token != valid)
+            dec.token_valid = False
+            dec.status = "WRONG_TOKEN"
+            dec.reason = "MISSING_TOKEN"
+            dec.is_impostor = True
+            return dec
         else:
             dec.token_valid = False
             dec.status = "WRONG_TOKEN"
@@ -246,18 +209,25 @@ class IdentityValidator:
                 return dec
         dec.capabilities_ok = True
 
-        # Gate 7: Wavelength consistency
+        # Gate 7: Wavelength consistency (§20)
         decoded_wl = float(getattr(decoded, "wavelength_nm", 0.0))
-        if p.expected_wavelength_nm > 0.0 and decoded_wl > 0.0:
+        if p.expected_wavelength_nm > 0.0 and decoded_wl > 0.0 and getattr(p, "wavelength_validation_enabled", True):
             if abs(decoded_wl - p.expected_wavelength_nm) > p.wavelength_tolerance_nm:
                 dec.wavelength_valid = False
                 if not getattr(p, "allow_wavelength_override", False):
                     dec.status = "WAVELENGTH_MISMATCH"
                     dec.reason = "WAVELENGTH_MISMATCH"
                     return dec
+        if optical_wavelength_nm > 0.0 and p.expected_wavelength_nm > 0.0 and getattr(p, "wavelength_validation_enabled", True):
+            if abs(optical_wavelength_nm - p.expected_wavelength_nm) > max(p.wavelength_tolerance_nm, 50.0):
+                dec.wavelength_valid = False
+                if not getattr(p, "allow_wavelength_override", False):
+                    dec.status = "WAVELENGTH_MISMATCH"
+                    dec.reason = "OPTICAL_WAVELENGTH_MISMATCH"
+                    return dec
         dec.wavelength_valid = True
 
-        # Gate 8: Sequence validation / Replay guard
+        # Gate 8: Sequence validation / Replay guard (§18)
         seq = int(getattr(decoded, "sequence_number", -1))
         last_seq = self._last_seq.get(observation_id, -1)
         if p.sequence_validation_enabled and p.require_sequence_advance and seq >= 0:
@@ -265,19 +235,19 @@ class IdentityValidator:
                 if seq == last_seq:
                     dec.sequence_valid = False
                     dec.sequence_ok = False
-                    dec.status = "DUPLICATE_SEQUENCE"
+                    dec.status = CanonicalStatus("DUPLICATE_SEQUENCE", "INVALID_SEQUENCE")
                     dec.reason = "DUPLICATE_SEQUENCE"
                     return dec
                 elif seq < last_seq:
                     dec.sequence_valid = False
                     dec.sequence_ok = False
-                    dec.status = "OLD_SEQUENCE"
+                    dec.status = CanonicalStatus("OLD_SEQUENCE", "INVALID_SEQUENCE")
                     dec.reason = "OLD_SEQUENCE"
                     return dec
                 elif getattr(p, "max_sequence_gap", 0) > 0 and (seq - last_seq) > p.max_sequence_gap:
                     dec.sequence_valid = False
                     dec.sequence_ok = False
-                    dec.status = "SEQUENCE_DISCONTINUITY"
+                    dec.status = CanonicalStatus("SEQUENCE_DISCONTINUITY", "INVALID_SEQUENCE")
                     dec.reason = "SEQUENCE_DISCONTINUITY"
                     return dec
             self._last_seq[observation_id] = seq

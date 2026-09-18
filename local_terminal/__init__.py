@@ -19,6 +19,8 @@ from local_terminal.config import (
     PTZConfig,
     RealismConfig,
     TrackingConfig,
+    TargetPayloadConfig,
+    TargetProfile,
 )
 from local_terminal.estimator import TrackStateEstimator
 from local_terminal.frame_processor import FrameProcessor
@@ -39,7 +41,7 @@ from local_terminal.models import (
     UpdateOutput,
 )
 from local_terminal.ptz_actuator import PTZActuatorModel
-from local_terminal.reacquisition import ReacquisitionConfig, ReacquisitionManager
+from local_terminal.reacquisition import ReacquisitionConfig, ReacquisitionManager, can_merge_reacquisition
 from local_terminal.search_manager import SearchManager
 from local_terminal.signature import SignatureAnalyzer
 from local_terminal.state_machine import LocalStateMachine
@@ -88,8 +90,10 @@ __all__ = [
     "PTZActuatorModel",
     "ReacquisitionManager",
     "ReacquisitionConfig",
+    "can_merge_reacquisition",
     "SearchManager",
     "LocalStateMachine",
     "TelemetryManager",
     "TrackingMetrics",
+    "TargetPayloadConfig",
 ]
