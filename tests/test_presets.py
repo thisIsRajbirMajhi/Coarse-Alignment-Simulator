@@ -51,7 +51,9 @@ def test_preset_multi_target_selects_valid():
     from presets.runner import run_headless
     res = run_headless("multi_target")
     assert res["passed"], res["reason"]
-    assert res["active_target"] == "RT-MATCH-VALID"
+    # Plan §3: local observation id only — never an RT- id.
+    assert str(res["active_target"]).startswith("BEACON-")
+    assert "RT-" not in str(res["active_target"])
 
 
 def test_preset_negatives_never_lock():
@@ -96,7 +98,7 @@ def test_challenging_presets_track_fast_and_random():
     assert res["passed"], res["reason"]
     res = run_headless("agile_swarm")
     assert res["passed"], res["reason"]
-    assert res["active_target"] == "RT-SW-VALID"
+    assert str(res["active_target"]).startswith("BEACON-")
 
 
 def test_wild_random_walker_is_caught_mid_run():

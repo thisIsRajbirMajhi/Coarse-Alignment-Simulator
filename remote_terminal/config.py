@@ -127,6 +127,11 @@ class BeaconConfig:
     pulse_rate_khz: float = 10.0  # kHz
     pulse_width_us: float = 50.0  # us
     duty_cycle: float = 0.5  # fraction 0..1 (calculated or explicit)
+    # A low-rate OOK overlay carrying terminal identity.  It is emitted into
+    # the optical intensity stream and must be decoded from camera samples.
+    identification_code_enabled: bool = True
+    identification_code: str = "RT001"
+    identification_chip_rate_hz: float = 8.0
     polarization_type: str = "UNPOLARIZED"  # UNPOLARIZED | LINEAR | CIRCULAR | ELLIPTICAL
     polarization_angle_deg: float = 0.0
 
@@ -158,6 +163,9 @@ class BeaconConfig:
             self.duty_cycle = float(max(0.001, min(calc_d, 1.0)))
         else:
             self.duty_cycle = float(max(0.0, min(float(self.duty_cycle), 1.0)))
+        self.identification_code_enabled = bool(self.identification_code_enabled)
+        self.identification_code = str(self.identification_code or "").strip()[:32]
+        self.identification_chip_rate_hz = float(max(0.5, min(float(self.identification_chip_rate_hz), 30.0)))
         if self.polarization_type not in {"UNPOLARIZED", "LINEAR", "CIRCULAR", "ELLIPTICAL"}:
             self.polarization_type = "UNPOLARIZED"
         self.polarization_angle_deg = float(self.polarization_angle_deg) % 180.0
@@ -358,6 +366,7 @@ class RemoteTerminalScenarioConfig:
             rt = RemoteTerminalConfig(
                 identity=IdentityConfig(id=f"RT-{idx:03d}", name=f"Remote Optical Terminal {idx:03d}"),
                 communication=CommunicationConfig(terminal_id=f"RT-{idx:03d}"),
+                beacon=BeaconConfig(identification_code=f"RT{idx:03d}"),
                 target_signature=TargetSignatureConfig(code=f"RT{idx:03d}"),
             )
             self.terminals.append(rt)

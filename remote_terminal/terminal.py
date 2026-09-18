@@ -101,6 +101,43 @@ class RemoteTerminal:
         self.sim_time += dt
         self._sync_states()
 
+    def emit_ideal_beam(self, pixel_scale_mrad: float = 0.035):
+        """Ideal optical beam state before the Propagation Channel (§2/§17).
+
+        Returns OpticalBeamState with emitted intensity (temporal modulation
+        included), geometric position, beam direction and spot characteristics.
+        The Propagation Channel transforms this into the received state.
+        """
+        from disturbance.optical.channel import OpticalBeamState
+
+        bc = self.config.beacon
+        temp_fac = compute_temporal_factor(
+            sim_time=self.sim_time,
+            mod_type=bc.mod_type,
+            mod_freq_khz=bc.mod_freq_khz,
+            mod_depth=bc.mod_depth,
+            mod_phase_deg=bc.mod_phase_deg,
+            pulse_enabled=bc.pulse_enabled,
+            pulse_rate_khz=bc.pulse_rate_khz,
+            duty_cycle=bc.duty_cycle,
+            identification_code=bc.identification_code,
+            identification_code_enabled=bc.identification_code_enabled,
+            identification_chip_rate_hz=bc.identification_chip_rate_hz,
+        )
+        scale = max(1e-4, float(pixel_scale_mrad))
+        spot = float((float(bc.div_h_mrad) / scale * 0.25 + float(bc.div_v_mrad) / scale * 0.25) / 2.0)
+        emitted = float(max(0.0, float(bc.power_w) / 1.5) ** 0.5 * max(0.0, float(temp_fac)))
+        if not self.is_emitting:
+            emitted = 0.0
+        return OpticalBeamState(
+            emittedIntensity=float(emitted),
+            position=(float(self.x), float(self.y)),
+            direction=(float(bc.azimuth_deg), float(bc.elevation_deg)),
+            spotSize=float(max(3.0, min(45.0, spot))),
+            wavelength_nm=float(bc.wavelength_nm),
+            power_w=float(bc.power_w),
+        )
+
     def render_to_fov(
         self,
         fov_rect: tuple[int, int, int, int],
@@ -135,6 +172,9 @@ class RemoteTerminal:
             pulse_enabled=bc.pulse_enabled,
             pulse_rate_khz=bc.pulse_rate_khz,
             duty_cycle=bc.duty_cycle,
+            identification_code=bc.identification_code,
+            identification_code_enabled=bc.identification_code_enabled,
+            identification_chip_rate_hz=bc.identification_chip_rate_hz,
         )
 
         patch = render_terminal_beacon_patch(

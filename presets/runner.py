@@ -45,8 +45,18 @@ def evaluate_telemetry(telemetry: dict, expect: dict) -> tuple[bool, str]:
 
     if kind == "lock":
         ok = det == "TARGET_CONFIRMED" and trk == "TRACKING"
+        # Plan §3: output must never expose an RT- ID; active observation
+        # is a local BEACON-N id. A legacy preset may still document which
+        # physical beacon should be selected via expect["active"]="RT-...":
+        # verify locality instead of equality (ground-truth mapping would
+        # itself be a cheat path).
+        if ok:
+            if not (isinstance(active, str) and active.startswith("BEACON-")):
+                return False, f"active id {active!r} is not a local BEACON-N observation"
+            if isinstance(active, str) and "RT-" in active:
+                return False, f"remote ID leaked into output: {active!r}"
         want_active = expect.get("active")
-        if ok and want_active and active != want_active:
+        if ok and want_active and isinstance(want_active, str) and want_active.startswith("BEACON-") and active != want_active:
             return False, f"locked wrong target {active!r}, expected {want_active!r}"
         return ok, f"detection={det} tracking={trk} active={active}"
     if kind == "acquire":

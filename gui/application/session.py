@@ -194,7 +194,7 @@ class SimulationSession:
 
         try:
             self.local_terminal.update(
-                dt, remote_scenario=getattr(self, "terminal_scenario", None),
+                dt,
                 fov_frame=getattr(self, "_last_fov_frame", None),
                 fov_capture_pose=getattr(self, "_last_capture_pose", None),
             )
@@ -213,7 +213,9 @@ class SimulationSession:
 
         if getattr(self, "terminal_scenario", None) is not None:
             try:
-                fov_frame = self.terminal_scenario.render_fov_beacons(fov_frame, self.camera)
+                fov_frame = self.terminal_scenario.render_fov_beacons(
+                    fov_frame, self.camera, pipeline=pipe, rng=self.rng, dt=dt_eff,
+                )
             except Exception as e:
                 log.debug("fov beacon render skipped: %s", e)
 

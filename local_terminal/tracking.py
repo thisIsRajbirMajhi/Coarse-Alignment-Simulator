@@ -29,9 +29,15 @@ class TargetTracker:
         self.smoothed_err_y = 0.0
         self.vel_x = 0.0
         self.vel_y = 0.0
+        self.acc_x = 0.0
+        self.acc_y = 0.0
         self._last_raw_x = 0.0
         self._last_raw_y = 0.0
         self._initialized = False
+        # Reversal handling: prediction horizon shrinks under hard
+        # acceleration so the servo stops leading with stale velocity
+        # through turns (figure-8 lobe tips). Scale set by px/s^2.
+        self.accel_ref = 800.0
 
         # PID servo state accumulators
         self._integral_x = 0.0
@@ -49,6 +55,8 @@ class TargetTracker:
         self.smoothed_err_y = 0.0
         self.vel_x = 0.0
         self.vel_y = 0.0
+        self.acc_x = 0.0
+        self.acc_y = 0.0
         self._last_raw_x = 0.0
         self._last_raw_y = 0.0
         self._initialized = False
@@ -111,6 +119,8 @@ class TargetTracker:
             self.smoothed_err_y = raw_err_y
             self.vel_x = 0.0
             self.vel_y = 0.0
+            self.acc_x = 0.0
+            self.acc_y = 0.0
             self._initialized = True
         else:
             if dt > 1e-4:
@@ -126,8 +136,21 @@ class TargetTracker:
                 curr_vx = float(max(-2000.0, min(2000.0, curr_vx)))
                 curr_vy = float(max(-2000.0, min(2000.0, curr_vy)))
                 alpha_v = 0.2
+                prev_vx, prev_vy = self.vel_x, self.vel_y
                 self.vel_x = alpha_v * curr_vx + (1.0 - alpha_v) * self.vel_x
                 self.vel_y = alpha_v * curr_vy + (1.0 - alpha_v) * self.vel_y
+                # Acceleration from filtered velocity delta (heavier lag is
+                # intentional: it must reflect sustained maneuvers, not noise).
+                try:
+                    iax = (self.vel_x - prev_vx) / dt
+                    iay = (self.vel_y - prev_vy) / dt
+                    iax = float(max(-6000.0, min(6000.0, iax)))
+                    iay = float(max(-6000.0, min(6000.0, iay)))
+                    alpha_a = 0.15
+                    self.acc_x = alpha_a * iax + (1.0 - alpha_a) * self.acc_x
+                    self.acc_y = alpha_a * iay + (1.0 - alpha_a) * self.acc_y
+                except Exception:
+                    pass
 
             self._last_raw_x = raw_err_x
             self._last_raw_y = raw_err_y
@@ -137,12 +160,21 @@ class TargetTracker:
             self.smoothed_err_x = alpha * raw_err_x + (1.0 - alpha) * self.smoothed_err_x
             self.smoothed_err_y = alpha * raw_err_y + (1.0 - alpha) * self.smoothed_err_y
 
-        # Predictive projection if enabled
+        # Predictive projection if enabled: velocity lead plus a bounded
+        # acceleration term, with the horizon shrinking automatically under
+        # hard maneuvers so reversals do not overshoot.
         pred_x = self.smoothed_err_x
         pred_y = self.smoothed_err_y
         if self.config.prediction:
-            pred_x += self.vel_x * self.config.prediction_horizon
-            pred_y += self.vel_y * self.config.prediction_horizon
+            try:
+                a_mag = math.hypot(self.acc_x, self.acc_y)
+                h_base = max(0.0, float(self.config.prediction_horizon))
+                h_eff = h_base / (1.0 + a_mag / max(1.0, float(self.accel_ref)))
+                h_eff = max(0.0, min(h_base, h_eff))
+            except Exception:
+                h_eff = max(0.0, float(self.config.prediction_horizon))
+            pred_x += self.vel_x * h_eff + 0.5 * self.acc_x * h_eff * h_eff
+            pred_y += self.vel_y * h_eff + 0.5 * self.acc_y * h_eff * h_eff
 
         # Angular error in microradians via angular model
         err_urad_x = pred_x * self.angular_model.pixel_to_angle_x

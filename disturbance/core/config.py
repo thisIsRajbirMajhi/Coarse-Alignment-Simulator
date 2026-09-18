@@ -29,6 +29,7 @@ from disturbance.core.constants import (
 
 
 # Unified limits per PDF spec Sr21.2-21.5 — max 20
+# Plus Propagation Channel limits per DisturbanceModel.txt §14.
 DISTURBANCE_LIMITS: dict[str, tuple[float, float]] = {
     # legacy 0..10
     "turbulence": (SLIDER_MIN, SLIDER_MAX),
@@ -46,13 +47,32 @@ DISTURBANCE_LIMITS: dict[str, tuple[float, float]] = {
     # camera jitter px/frame 0..20 per spec Sr21.3
     "camera_jitter": (0.0, 20.0),
     "camera_jitter_max_user": (0.0, 20.0),
+    "camera_jitter_max_x": (0.0, 20.0),
+    "camera_jitter_max_y": (0.0, 20.0),
+    "camera_jitter_frequency": (0.0, 50.0),
     # atmospheric
     "atmospheric_contrast": ATMOSPHERIC_CONTRAST_LIMITS,
     "atmospheric_brightness": ATMOSPHERIC_BRIGHTNESS_LIMITS,
+    # propagation channel (DisturbanceModel.txt §3/§14)
+    "channel_severity": (0.0, 1.0),
+    "channel_attenuation_strength": (0.0, 1.0),
+    "channel_beam_wander": (0.0, 2.0),
+    "channel_beam_spread": (0.0, 2.0),
+    "channel_intensity_fluctuation": (0.0, 2.0),
     # platform motion 0..20 per spec Sr21.5
     "platform_speed": (0.0, 20.0),
     "platform_speed_max_user": (0.0, 20.0),
+    "platform_amplitude_x": (0.0, 400.0),
+    "platform_amplitude_y": (0.0, 400.0),
+    "platform_direction": (-180.0, 180.0),
+    "platform_frequency": (0.0, 5.0),
+    "platform_phase": (-180.0, 180.0),
 }
+
+# GUI disturbance presets per DisturbanceModel.txt §15.
+CHANNEL_PRESETS: tuple[str, ...] = (
+    "Clear", "Haze", "Fog", "Rain", "Low Light", "Moderate", "Severe", "Custom",
+)
 
 DISTURBANCE_DEFAULTS: dict = {
     "turbulence": 0,
@@ -79,6 +99,29 @@ DISTURBANCE_DEFAULTS: dict = {
     # platform motion — Linear mandatory default
     "platform_profile": PLATFORM_DEFAULT_PROFILE,
     "platform_speed": 0.0,
+    # propagation channel (DisturbanceModel.txt §3/§14) — beam-state medium
+    "global_enabled": True,
+    "channel_enabled": True,
+    "channel_severity": 1.0,
+    "channel_attenuation_enabled": True,
+    "channel_attenuation_strength": 1.0,
+    "channel_attenuation_model": "Atmospheric",
+    "channel_beam_wander": 1.0,
+    "channel_beam_spread": 1.0,
+    "channel_intensity_fluctuation": 1.0,
+    # camera jitter detail (§11)
+    "camera_jitter_enabled": True,
+    "camera_jitter_max_x": 20.0,
+    "camera_jitter_max_y": 20.0,
+    "camera_jitter_profile": "Gaussian",
+    "camera_jitter_frequency": 8.0,
+    # platform motion detail (§12)
+    "platform_enabled": True,
+    "platform_amplitude_x": 110.0,
+    "platform_amplitude_y": 110.0,
+    "platform_direction": 0.0,
+    "platform_frequency": 1.0,
+    "platform_phase": 0.0,
 }
 
 
@@ -97,10 +140,45 @@ class EnvironmentDisturbanceConfig:
 
 
 @dataclass
+class PropagationChannelConfig:
+    """Optical Propagation Channel — beam-state medium (§2/§14)."""
+
+    enabled: bool = True
+    atmospheric_condition: str = ATMOSPHERIC_DEFAULT_PRESET
+    severity: float = 1.0
+    attenuation_enabled: bool = True
+    attenuation_strength: float = 1.0
+    attenuation_model: str = "Atmospheric"
+    turbulence: int = 0
+    beam_wander: float = 1.0
+    beam_spread: float = 1.0
+    intensity_fluctuation: float = 1.0
+    contrast_reduction: float = 0.0
+    brightness_reduction: float = 0.0
+
+
+@dataclass
+class PlatformMotionConfig:
+    enabled: bool = True
+    profile: str = PLATFORM_DEFAULT_PROFILE
+    amplitude_x: float = 110.0
+    amplitude_y: float = 110.0
+    speed: float = 0.0
+    direction: float = 0.0
+    frequency: float = 1.0
+    phase: float = 0.0
+
+
+@dataclass
 class CameraDisturbanceConfig:
     vibration: int = 0
     camera_motion: int = 0
     camera_jitter: float = 0.0
+    jitter_enabled: bool = True
+    jitter_max_x: float = 20.0
+    jitter_max_y: float = 20.0
+    jitter_profile: str = "Gaussian"
+    jitter_frequency: float = 8.0
     platform_profile: str = PLATFORM_DEFAULT_PROFILE
     platform_speed: float = 0.0
 
@@ -108,6 +186,7 @@ class CameraDisturbanceConfig:
 @dataclass
 class OpticalDisturbanceConfig:
     turbulence: int = 0
+    channel: PropagationChannelConfig = field(default_factory=PropagationChannelConfig)
 
 
 @dataclass
@@ -171,15 +250,40 @@ class DisturbanceConfig(BaseValidatedConfig):
 
     # Camera Jitter
     camera_jitter: float = DISTURBANCE_DEFAULTS["camera_jitter"]
+    camera_jitter_enabled: bool = DISTURBANCE_DEFAULTS["camera_jitter_enabled"]
+    camera_jitter_max_x: float = DISTURBANCE_DEFAULTS["camera_jitter_max_x"]
+    camera_jitter_max_y: float = DISTURBANCE_DEFAULTS["camera_jitter_max_y"]
+    camera_jitter_profile: str = DISTURBANCE_DEFAULTS["camera_jitter_profile"]
+    camera_jitter_frequency: float = DISTURBANCE_DEFAULTS["camera_jitter_frequency"]
 
     # Atmospheric
     atmospheric_preset: str = DISTURBANCE_DEFAULTS["atmospheric_preset"]
     atmospheric_contrast: float = DISTURBANCE_DEFAULTS["atmospheric_contrast"]
     atmospheric_brightness: float = DISTURBANCE_DEFAULTS["atmospheric_brightness"]
 
-    # Platform Motion
+    # Platform Motion (§12 — own subsystem, geometry-level)
+    platform_enabled: bool = DISTURBANCE_DEFAULTS["platform_enabled"]
     platform_profile: str = DISTURBANCE_DEFAULTS["platform_profile"]
     platform_speed: float = DISTURBANCE_DEFAULTS["platform_speed"]
+    platform_amplitude_x: float = DISTURBANCE_DEFAULTS["platform_amplitude_x"]
+    platform_amplitude_y: float = DISTURBANCE_DEFAULTS["platform_amplitude_y"]
+    platform_direction: float = DISTURBANCE_DEFAULTS["platform_direction"]
+    platform_frequency: float = DISTURBANCE_DEFAULTS["platform_frequency"]
+    platform_phase: float = DISTURBANCE_DEFAULTS["platform_phase"]
+
+    # Propagation Channel (§2/§14 — beam-state medium before the camera)
+    global_enabled: bool = DISTURBANCE_DEFAULTS["global_enabled"]
+    channel_enabled: bool = DISTURBANCE_DEFAULTS["channel_enabled"]
+    channel_severity: float = DISTURBANCE_DEFAULTS["channel_severity"]
+    channel_attenuation_enabled: bool = DISTURBANCE_DEFAULTS["channel_attenuation_enabled"]
+    channel_attenuation_strength: float = DISTURBANCE_DEFAULTS["channel_attenuation_strength"]
+    channel_attenuation_model: str = DISTURBANCE_DEFAULTS["channel_attenuation_model"]
+    channel_beam_wander: float = DISTURBANCE_DEFAULTS["channel_beam_wander"]
+    channel_beam_spread: float = DISTURBANCE_DEFAULTS["channel_beam_spread"]
+    channel_intensity_fluctuation: float = DISTURBANCE_DEFAULTS["channel_intensity_fluctuation"]
+
+    # Ownership-aligned platform view (geometry-level, separate from channel).
+    platform: PlatformMotionConfig = field(default_factory=PlatformMotionConfig)
 
     def validate(self) -> "DisturbanceConfig":
         # Accept ownership-aligned construction while retaining legacy keyword
@@ -205,6 +309,45 @@ class DisturbanceConfig(BaseValidatedConfig):
         for name in ("noise", "enable_salt_pepper", "enable_gaussian", "enable_poisson", "salt_pepper_density", "salt_pepper_ratio", "gaussian_sigma", "gaussian_sigma_max", "poisson_scale", "poisson_peak", "max_noise_std"):
             if getattr(self, name) == DISTURBANCE_DEFAULTS[name]:
                 setattr(self, name, getattr(self.sensor, name))
+        # Nested-first sync for new channel/platform/jitter fields (same pattern).
+        try:
+            _ch = self.optical.channel
+            if self.channel_enabled == DISTURBANCE_DEFAULTS["channel_enabled"]:
+                self.channel_enabled = bool(getattr(_ch, "enabled", True))
+            if self.channel_severity == DISTURBANCE_DEFAULTS["channel_severity"]:
+                self.channel_severity = float(getattr(_ch, "severity", 1.0))
+            if self.channel_attenuation_enabled == DISTURBANCE_DEFAULTS["channel_attenuation_enabled"]:
+                self.channel_attenuation_enabled = bool(getattr(_ch, "attenuation_enabled", True))
+            if self.channel_attenuation_strength == DISTURBANCE_DEFAULTS["channel_attenuation_strength"]:
+                self.channel_attenuation_strength = float(getattr(_ch, "attenuation_strength", 1.0))
+            if self.channel_attenuation_model == DISTURBANCE_DEFAULTS["channel_attenuation_model"]:
+                self.channel_attenuation_model = str(getattr(_ch, "attenuation_model", "Atmospheric"))
+            if self.channel_beam_wander == DISTURBANCE_DEFAULTS["channel_beam_wander"]:
+                self.channel_beam_wander = float(getattr(_ch, "beam_wander", 1.0))
+            if self.channel_beam_spread == DISTURBANCE_DEFAULTS["channel_beam_spread"]:
+                self.channel_beam_spread = float(getattr(_ch, "beam_spread", 1.0))
+            if self.channel_intensity_fluctuation == DISTURBANCE_DEFAULTS["channel_intensity_fluctuation"]:
+                self.channel_intensity_fluctuation = float(getattr(_ch, "intensity_fluctuation", 1.0))
+        except Exception:
+            pass
+        try:
+            _pl = self.platform
+            if self.platform_enabled == DISTURBANCE_DEFAULTS["platform_enabled"]:
+                self.platform_enabled = bool(getattr(_pl, "enabled", True))
+            if self.platform_amplitude_x == DISTURBANCE_DEFAULTS["platform_amplitude_x"]:
+                self.platform_amplitude_x = float(getattr(_pl, "amplitude_x", 110.0))
+            if self.platform_amplitude_y == DISTURBANCE_DEFAULTS["platform_amplitude_y"]:
+                self.platform_amplitude_y = float(getattr(_pl, "amplitude_y", 110.0))
+            if self.platform_direction == DISTURBANCE_DEFAULTS["platform_direction"]:
+                self.platform_direction = float(getattr(_pl, "direction", 0.0))
+            if self.platform_frequency == DISTURBANCE_DEFAULTS["platform_frequency"]:
+                self.platform_frequency = float(getattr(_pl, "frequency", 1.0))
+            if self.platform_phase == DISTURBANCE_DEFAULTS["platform_phase"]:
+                self.platform_phase = float(getattr(_pl, "phase", 0.0))
+            if self.global_enabled == DISTURBANCE_DEFAULTS["global_enabled"]:
+                self.global_enabled = bool(getattr(self.global_, "enabled", True))
+        except Exception:
+            pass
 
         # legacy 0..10 ints
         self.turbulence = int(clip_field(self.turbulence, *DISTURBANCE_LIMITS["turbulence"]))
@@ -305,14 +448,83 @@ class DisturbanceConfig(BaseValidatedConfig):
                         break
         self.platform_profile = found_prof if found_prof is not None else PLATFORM_DEFAULT_PROFILE
         self.platform_speed = float(clip_field(self.platform_speed, 0.0, 20.0))
+        self.platform_enabled = bool(getattr(self, "platform_enabled", True))
+        self.platform_amplitude_x = float(clip_field(float(getattr(self, "platform_amplitude_x", 110.0)), *DISTURBANCE_LIMITS["platform_amplitude_x"]))
+        self.platform_amplitude_y = float(clip_field(float(getattr(self, "platform_amplitude_y", 110.0)), *DISTURBANCE_LIMITS["platform_amplitude_y"]))
+        self.platform_direction = float(clip_field(float(getattr(self, "platform_direction", 0.0)), *DISTURBANCE_LIMITS["platform_direction"]))
+        self.platform_frequency = float(clip_field(float(getattr(self, "platform_frequency", 1.0)), *DISTURBANCE_LIMITS["platform_frequency"]))
+        self.platform_phase = float(clip_field(float(getattr(self, "platform_phase", 0.0)), *DISTURBANCE_LIMITS["platform_phase"]))
+
+        # Camera jitter detail (§11 — camera effect, distinct from channel wander)
+        self.camera_jitter_enabled = bool(getattr(self, "camera_jitter_enabled", True))
+        self.camera_jitter_max_x = float(clip_field(float(getattr(self, "camera_jitter_max_x", 20.0)), *DISTURBANCE_LIMITS["camera_jitter_max_x"]))
+        self.camera_jitter_max_y = float(clip_field(float(getattr(self, "camera_jitter_max_y", 20.0)), *DISTURBANCE_LIMITS["camera_jitter_max_y"]))
+        self.camera_jitter_frequency = float(clip_field(float(getattr(self, "camera_jitter_frequency", 8.0)), *DISTURBANCE_LIMITS["camera_jitter_frequency"]))
+        prof_j = str(getattr(self, "camera_jitter_profile", "Gaussian")).strip() or "Gaussian"
+        self.camera_jitter_profile = prof_j
+
+        # Propagation channel (§2/§3/§14 — beam-state medium)
+        self.global_enabled = bool(getattr(self, "global_enabled", True))
+        # legacy global_ alias
+        try:
+            self.global_.enabled = bool(self.global_enabled)
+        except Exception:
+            pass
+        self.channel_enabled = bool(getattr(self, "channel_enabled", True))
+        self.channel_severity = float(clip_field(float(getattr(self, "channel_severity", 1.0)), *DISTURBANCE_LIMITS["channel_severity"]))
+        # Clear passes (almost) ideally even at severity 1 — severity scales losses only
+        self.channel_attenuation_enabled = bool(getattr(self, "channel_attenuation_enabled", True))
+        self.channel_attenuation_strength = float(clip_field(float(getattr(self, "channel_attenuation_strength", 1.0)), *DISTURBANCE_LIMITS["channel_attenuation_strength"]))
+        model = str(getattr(self, "channel_attenuation_model", "Atmospheric")).strip()
+        valid_models = ("Fixed", "Distance Based", "Atmospheric", "Custom")
+        found_m = next((m for m in valid_models if m.lower() == model.lower()), "Atmospheric")
+        self.channel_attenuation_model = found_m
+        self.channel_beam_wander = float(clip_field(float(getattr(self, "channel_beam_wander", 1.0)), *DISTURBANCE_LIMITS["channel_beam_wander"]))
+        self.channel_beam_spread = float(clip_field(float(getattr(self, "channel_beam_spread", 1.0)), *DISTURBANCE_LIMITS["channel_beam_spread"]))
+        self.channel_intensity_fluctuation = float(clip_field(float(getattr(self, "channel_intensity_fluctuation", 1.0)), *DISTURBANCE_LIMITS["channel_intensity_fluctuation"]))
 
         # Keep the ownership-aligned view synchronized with the legacy view.
         self.optical.turbulence = self.turbulence
+        try:
+            ch = self.optical.channel
+            ch.enabled = bool(self.channel_enabled)
+            ch.atmospheric_condition = str(self.atmospheric_preset)
+            ch.severity = float(self.channel_severity)
+            ch.attenuation_enabled = bool(self.channel_attenuation_enabled)
+            ch.attenuation_strength = float(self.channel_attenuation_strength)
+            ch.attenuation_model = str(self.channel_attenuation_model)
+            ch.turbulence = int(self.turbulence)
+            ch.beam_wander = float(self.channel_beam_wander)
+            ch.beam_spread = float(self.channel_beam_spread)
+            ch.intensity_fluctuation = float(self.channel_intensity_fluctuation)
+            ch.contrast_reduction = float(self.atmospheric_contrast)
+            ch.brightness_reduction = float(self.atmospheric_brightness)
+        except Exception:
+            pass
         self.camera.vibration = self.vibration
         self.camera.camera_motion = self.camera_motion
         self.camera.camera_jitter = self.camera_jitter
+        try:
+            self.camera.jitter_enabled = bool(self.camera_jitter_enabled)
+            self.camera.jitter_max_x = float(self.camera_jitter_max_x)
+            self.camera.jitter_max_y = float(self.camera_jitter_max_y)
+            self.camera.jitter_profile = str(self.camera_jitter_profile)
+            self.camera.jitter_frequency = float(self.camera_jitter_frequency)
+        except Exception:
+            pass
         self.camera.platform_profile = self.platform_profile
         self.camera.platform_speed = self.platform_speed
+        try:
+            self.platform.enabled = bool(self.platform_enabled)
+            self.platform.profile = str(self.platform_profile)
+            self.platform.speed = float(self.platform_speed)
+            self.platform.amplitude_x = float(self.platform_amplitude_x)
+            self.platform.amplitude_y = float(self.platform_amplitude_y)
+            self.platform.direction = float(self.platform_direction)
+            self.platform.frequency = float(self.platform_frequency)
+            self.platform.phase = float(self.platform_phase)
+        except Exception:
+            pass
         self.environment.atmospheric_preset = self.atmospheric_preset
         self.environment.atmospheric_contrast = self.atmospheric_contrast
         self.environment.atmospheric_brightness = self.atmospheric_brightness
@@ -335,12 +547,29 @@ class DisturbanceConfig(BaseValidatedConfig):
     @classmethod
     def from_dict(cls, data: dict) -> "DisturbanceConfig":
         data = dict(data)
+        # Nested optical.channel may arrive as a plain dict — coerce it.
+        _opt = dict(data.pop("optical", {}))
+        _ch = _opt.pop("channel", {})
+        if isinstance(_ch, dict):
+            _ch_known = {k: v for k, v in _ch.items() if k in PropagationChannelConfig.__dataclass_fields__}
+            _opt["channel"] = PropagationChannelConfig(**_ch_known)
+        _plat = data.pop("platform", {})
+        if isinstance(_plat, dict):
+            _plat_known = {k: v for k, v in _plat.items() if k in PlatformMotionConfig.__dataclass_fields__}
+        else:
+            _plat_known = {}
+        # Filter nested dicts to known dataclass fields (forward-compat).
+        def _filter(dc_cls, d):
+            if not isinstance(d, dict):
+                return {}
+            return {k: v for k, v in d.items() if k in dc_cls.__dataclass_fields__}
         nested = {
-            "global_": GlobalDisturbanceConfig(**data.pop("global_", {})),
-            "environment": EnvironmentDisturbanceConfig(**data.pop("environment", {})),
-            "camera": CameraDisturbanceConfig(**data.pop("camera", {})),
-            "optical": OpticalDisturbanceConfig(**data.pop("optical", {})),
-            "sensor": SensorDisturbanceConfig(**data.pop("sensor", {})),
+            "global_": GlobalDisturbanceConfig(**_filter(GlobalDisturbanceConfig, data.pop("global_", {}))),
+            "environment": EnvironmentDisturbanceConfig(**_filter(EnvironmentDisturbanceConfig, data.pop("environment", {}))),
+            "camera": CameraDisturbanceConfig(**_filter(CameraDisturbanceConfig, data.pop("camera", {}))),
+            "optical": OpticalDisturbanceConfig(**{k: v for k, v in _opt.items() if k in OpticalDisturbanceConfig.__dataclass_fields__}),
+            "sensor": SensorDisturbanceConfig(**_filter(SensorDisturbanceConfig, data.pop("sensor", {}))),
+            "platform": PlatformMotionConfig(**_plat_known),
         }
         allowed = set(DISTURBANCE_DEFAULTS.keys()) | set(DISTURBANCE_LIMITS.keys()) | {"atmospheric_preset", "platform_profile", "enable_salt_pepper", "enable_gaussian", "enable_poisson"}
         unknown = [k for k in data.keys() if k not in allowed]
@@ -356,6 +585,88 @@ class DisturbanceConfig(BaseValidatedConfig):
 
     def image_noise_enabled(self) -> bool:
         return bool(self.enable_salt_pepper or self.enable_gaussian or self.enable_poisson)
+
+    # ---------- Propagation Channel helpers (DisturbanceModel.txt §14/§15) ----------
+    def propagation_channel_config(self):
+        """Build the live channel object from this config (beam-state medium)."""
+        from disturbance.optical.channel import AttenuationConfig, PropagationChannel
+        return PropagationChannel(
+            atmospheric_condition=str(self.atmospheric_preset),
+            severity=float(self.channel_severity),
+            attenuation=AttenuationConfig(
+                enabled=bool(self.channel_attenuation_enabled),
+                strength=float(self.channel_attenuation_strength),
+                model=str(self.channel_attenuation_model),
+            ),
+            turbulence=float(self.turbulence),
+            beam_wander=float(self.channel_beam_wander),
+            beam_spread=float(self.channel_beam_spread),
+            intensity_fluctuation=float(self.channel_intensity_fluctuation),
+            enabled=bool(self.channel_enabled and self.global_enabled),
+        )
+
+    def apply_preset(self, preset: str) -> "DisturbanceConfig":
+        """GUI/Pipeline presets: Clear/Haze/Fog/Rain/Low Light/Moderate/Severe/Custom."""
+        p = str(preset).strip().lower().replace("-", " ").replace("_", " ")
+        if p == "clear":
+            self.atmospheric_preset = "Clear"
+            self.channel_severity = 0.0
+            self.channel_beam_wander = 0.0
+            self.channel_beam_spread = 0.0
+            self.channel_intensity_fluctuation = 0.0
+            self.turbulence = 0
+        elif p == "haze":
+            self.atmospheric_preset = "Haze"
+            self.channel_severity = 0.6
+            self.channel_beam_wander = 0.8
+            self.channel_beam_spread = 0.8
+            self.channel_intensity_fluctuation = 0.8
+            self.turbulence = 2
+        elif p == "fog":
+            self.atmospheric_preset = "Fog"
+            self.channel_severity = 1.0
+            self.channel_beam_wander = 1.0
+            self.channel_beam_spread = 1.0
+            self.channel_intensity_fluctuation = 1.0
+            self.turbulence = 4
+        elif p == "rain":
+            self.atmospheric_preset = "Rain"
+            self.channel_severity = 0.8
+            self.channel_beam_wander = 1.0
+            self.channel_beam_spread = 1.0
+            self.channel_intensity_fluctuation = 1.0
+            self.turbulence = 3
+        elif p in ("low light", "lowlight", "low"):
+            self.atmospheric_preset = "Low light"
+            self.channel_severity = 0.9
+            self.turbulence = 1
+        elif p == "moderate":
+            self.atmospheric_preset = "Haze"
+            self.channel_severity = 0.7
+            self.enable_gaussian = True
+            self.gaussian_sigma = 6.0
+            self.camera_jitter = 5.0
+            self.platform_speed = 5.0
+            self.turbulence = 3
+        elif p == "severe":
+            self.atmospheric_preset = "Fog"
+            self.channel_severity = 1.0
+            self.enable_gaussian = True
+            self.enable_salt_pepper = True
+            self.gaussian_sigma = 12.0
+            self.salt_pepper_density = 0.10
+            self.camera_jitter = 12.0
+            self.platform_speed = 12.0
+            self.turbulence = 6
+        elif p == "custom":
+            self.atmospheric_preset = "User Defined"
+        return self.validate()
+
+    def channel_telemetry_baseline(self) -> dict:
+        try:
+            return self.propagation_channel_config().telemetry()
+        except Exception:
+            return {}
 
     # ---------- AI Training Helpers (robust-simple) ----------
     def randomize_for_training(self, rng=None, difficulty: str = "mixed") -> "DisturbanceConfig":

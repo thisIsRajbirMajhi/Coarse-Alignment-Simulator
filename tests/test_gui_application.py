@@ -85,6 +85,64 @@ def test_dashboard_renders_known_state(window):
     assert pills["Optical Turbulence"] == "2"
 
 
+def test_dashboard_renders_tracking_metrics(window):
+    from gui.presentation.view_state import DashboardState
+    st = DashboardState(
+        status="RUNNING",
+        duration_s=60.0,
+        fps=30.0,
+        jitter_ms=10.0,
+        acquisition_time_s=4.5,
+        reacquisition_time_s=1.2,
+        searching_time_s=10.0,
+        retention_rate_pct=92.0,
+        detection_rate_pct=75.0,
+        center_hit_rate_pct=88.0,
+        target_loss_rate_pct=0.5,
+        avg_track_err_px=3.0,
+        avg_track_err_mrad=0.33,
+        reacquisition_count=2,
+        target_loss_count=1,
+        target_switch_count=1,
+        rms_px=4.0,
+        rms_mrad=0.44,
+    )
+    window.dashboard.render(st)
+    pills = {k: v.text() for k, v in window.dashboard._pills.items()}
+    # Metrics.png rows
+    assert pills["Acquisition Time"] == "4.5 Sec"
+    assert pills["Re-Acquisition Time"] == "1.2 Sec"
+    assert pills["Searching Time"] == "10.0 Sec"
+    assert pills["Retention Rate"] == "92 %"
+    assert pills["Detection Rate"] == "75 %"
+    assert pills["Center Hit Rate"] == "88 %"
+    assert pills["Average Target Loss Rate"] == "0.50 /min"
+    assert pills["Average Tracking Error"] == "3 PX | 0.33 MRAD"
+    assert pills["Total Re-Acquisition Count"] == "2"
+    assert pills["Total Target Loss Count"] == "1"
+    assert pills["Total Target Switches Count"] == "1"
+    assert pills["RMS / RMSE"] == "4 PX | 0.44 MRAD"
+    # Metrics1.png rows still present
+    assert pills["Status"] == "RUNNING"
+    assert pills["Duration (s)"] == "60 Sec"
+    assert pills["Frames Per Second (FPS)"] == "30.0"
+
+
+def test_dashboard_live_metrics_accumulate(window):
+    window.controller.start()
+    for _ in range(6):
+        window.controller.step()
+    state = window.presenter.update(
+        window.controller._last_snapshot, window.session, window.controller)
+    assert state.searching_time_s is not None and state.searching_time_s >= 0
+    assert state.detection_rate_pct is not None
+    assert state.reacquisition_count >= 0 and state.target_loss_count >= 0
+    window.dashboard.render(state)
+    pills = {k: v.text() for k, v in window.dashboard._pills.items()}
+    assert pills["Searching Time"] != "—"
+    assert pills["Detection Rate"] != "—"
+
+
 def test_config_panels_produce_validated_configs(window):
     cam = window.session.camera_config
     assert cam.fov_width > 0

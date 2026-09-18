@@ -153,9 +153,17 @@ class RemoteTerminalScenario:
                 else:
                     t.config.state.communication_state = "NO_LINK"
 
-    def render_fov_beacons(self, fov_frame: np.ndarray, camera) -> np.ndarray:
+    def render_fov_beacons(self, fov_frame: np.ndarray, camera, channel=None,
+                           pipeline=None, rng=None, dt: float = 1.0 / 30.0) -> np.ndarray:
         """
-        Blends active terminal optical spots into the given FOV frame.
+        Blends terminal optical spots into the given FOV frame.
+
+        Authoritative order (§13/§17): ideal beam (Remote Terminal) →
+        Propagation Channel → received signal → camera image formation.
+        When ``pipeline`` (or ``channel``) is supplied, each beacon is routed
+        through ``propagate_beam`` so wander/attenuation/spread modify the
+        received spot — not the tracker output. Without it, legacy direct
+        blending is used (back-compat for tests/GUI).
         """
         if fov_frame is None or camera is None:
             return fov_frame
@@ -175,6 +183,30 @@ class RemoteTerminalScenario:
             patch, px, py = t.render_to_fov(fov_rect, pixel_scale_mrad=pixel_scale)
             if patch is None:
                 continue
+
+            # Route the ideal beam through the Propagation Channel when one
+            # is supplied: wander shifts the spot, attenuation/spread reshape
+            # the patch. This keeps channel effects in the optical domain.
+            if pipeline is not None or channel is not None:
+                try:
+                    ideal = t.emit_ideal_beam(pixel_scale_mrad=pixel_scale)
+                    if pipeline is not None:
+                        received = pipeline.propagate_beam(ideal, dt=dt)
+                        applier = pipeline.optical.channel
+                    else:
+                        from common.rng import get_rng as _get_rng
+                        _rng = _get_rng(rng)
+                        received = channel.propagate_beam(ideal, dt=dt, rng=_rng)
+                        applier = channel
+                    dx = float(received.position[0] - ideal.position[0])
+                    dy = float(received.position[1] - ideal.position[1])
+                    px = int(round(px + dx))
+                    py = int(round(py + dy))
+                    patch = applier.apply_to_patch(patch, received)
+                    if received.intensity <= 1e-6:
+                        continue
+                except Exception:
+                    pass
 
             ph, pw = patch.shape[:2]
             # Clip patch to FOV canvas

@@ -1,10 +1,108 @@
-# local_terminal/detection.py - Optical detection and beacon matching engine per LocalTerminal.md
+# local_terminal/detection.py - Image-only optical detection per LocalTerminal.md
+#
+# NOTE: the ground-truth DetectionEngine.evaluate_target() API
+# (beacon_power/wavelength passed directly) has been deleted. Perception is
+# image-only: detect_beacon_candidates + estimate_wavelength_nm measure spots
+# from pixels; signature scoring compares against the LOCAL config.
 from __future__ import annotations
 
 import math
 from typing import Any
 
-from local_terminal.config import DetectionConfig
+import numpy as np
+
+
+def detect_beacon_candidates(frame, *, minimum_peak: float = 40.0) -> list[dict[str, Any]]:
+    """Find bright compact optical sources using *only* the captured image.
+
+    Returned positions, size, colour and SNR are measured quantities.  This is
+    deliberately independent of ``RemoteTerminal`` or world coordinates so it
+    can be used unchanged with a real camera feed.
+    """
+    if frame is None:
+        return []
+    arr = np.asarray(frame)
+    if arr.ndim not in (2, 3) or arr.size == 0:
+        return []
+    if arr.ndim == 2:
+        bgr = np.repeat(arr[..., None], 3, axis=2)
+    else:
+        bgr = arr[..., :3]
+    image = bgr.astype(np.float32)
+    gray = image.mean(axis=2)
+    # A local scene can be bright; select peaks substantially above the robust
+    # background while retaining a fixed floor for a dark scene.
+    bg = float(np.median(gray))
+    noise = float(np.median(np.abs(gray - bg)) * 1.4826)
+    threshold = max(float(minimum_peak), bg + max(12.0, 4.0 * noise))
+    mask = (gray >= threshold).astype(np.uint8)
+    if not np.any(mask):
+        return []
+    try:
+        import cv2
+        count, labels, stats, centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    except Exception:
+        # Dependency-free fallback: the strongest pixel is still a useful
+        # acquisition measurement when OpenCV is unavailable.
+        y, x = np.unravel_index(int(np.argmax(gray)), gray.shape)
+        return [{"x": float(x), "y": float(y), "peak_dn": float(gray[y, x]),
+                 "snr_db": 0.0, "diameter_px": 1.0,
+                 "bgr": tuple(float(v) for v in image[y, x])}]
+
+    candidates: list[dict[str, Any]] = []
+    h, w = gray.shape
+    for label in range(1, count):
+        x, y, cw, ch, area = stats[label]
+        # Reject isolated hot pixels and broad bright scenery.
+        if area < 2 or area > max(400, (h * w) // 20):
+            continue
+        component = labels[y:y + ch, x:x + cw] == label
+        values = gray[y:y + ch, x:x + cw][component]
+        weights = np.maximum(values - bg, 1.0)
+        ys, xs = np.nonzero(component)
+        cx = float(x + np.average(xs, weights=weights))
+        cy = float(y + np.average(ys, weights=weights))
+        peak = float(values.max())
+        # Estimate background/noise around the source, excluding its core.
+        pad = max(5, int(max(cw, ch)))
+        bx0, bx1 = max(0, x - pad), min(w, x + cw + pad)
+        by0, by1 = max(0, y - pad), min(h, y + ch + pad)
+        border = gray[by0:by1, bx0:bx1].copy()
+        border[y - by0:y - by0 + ch, x - bx0:x - bx0 + cw][component] = np.nan
+        local_bg = float(np.nanmedian(border)) if np.isfinite(border).any() else bg
+        local_noise = float(np.nanstd(border)) if np.isfinite(border).any() else noise
+        snr = 20.0 * math.log10(max(peak - local_bg, 1e-6) / max(local_noise, 1.0))
+        colour = image[y:y + ch, x:x + cw][component]
+        candidates.append({
+            "x": cx, "y": cy, "peak_dn": peak,
+            "snr_db": float(max(0.0, min(snr, 60.0))),
+            "diameter_px": float(max(cw, ch)),
+            "bgr": tuple(float(v) for v in colour.mean(axis=0)),
+        })
+    return candidates
+
+
+def estimate_wavelength_nm(bgr: tuple[float, float, float]) -> tuple[float, float]:
+    """Estimate the renderer/camera spectral class from measured BGR colour.
+
+    The second value is a 0..1 confidence.  A production monochrome camera
+    would replace this with a filter-bank measurement; the interface remains
+    image-derived either way.
+    """
+    references = {
+        1550.0: (220.0, 240.0, 255.0), 1064.0: (245.0, 230.0, 255.0),
+        850.0: (200.0, 210.0, 255.0), 532.0: (100.0, 255.0, 120.0),
+        650.0: (80.0, 100.0, 255.0),
+    }
+    # Compare chromaticity, not absolute brightness: propagation and range
+    # change brightness dramatically but should not alter the spectral class.
+    sample = np.asarray(bgr, dtype=float)
+    sample = sample / max(float(sample.max()), 1.0)
+    wavelength, distance = min(
+        ((wl, float(np.linalg.norm(sample - np.asarray(tint) / max(tint)))) for wl, tint in references.items()),
+        key=lambda item: item[1],
+    )
+    return float(wavelength), float(np.clip(1.0 - distance / 0.4, 0.0, 1.0))
 
 
 def estimate_spot_brightness(
@@ -62,95 +160,3 @@ def estimate_spot_brightness(
         return peak, float(max(0.0, min(snr_db, 60.0)))
     except Exception:
         return 0.0, 0.0
-
-
-class DetectionEngine:
-    """
-    Evaluates detected optical beacon spots in FOV against configured target signature.
-    Performs spectral matching, spot size estimation, modulation analysis, and SNR tests.
-    """
-
-    def __init__(self, config: DetectionConfig | None = None):
-        self.config = (config or DetectionConfig()).validate()
-
-    def evaluate_target(
-        self,
-        in_fov: bool,
-        beacon_power: float,
-        beacon_wavelength: float,
-        beacon_bandwidth: float,
-        beacon_divergence_mrad: float,
-        modulation_type: str,
-        modulation_freq_khz: float,
-        estimated_snr_db: float = 12.0,
-        estimated_dn: float = 100.0,
-    ) -> dict[str, Any]:
-        """
-        Evaluate optical spot parameters against local detection criteria.
-        Returns evaluation dict with confidence score, confirmation status, and match breakdown.
-        """
-        if not in_fov or beacon_power <= 1e-6:
-            return {
-                "detected": False,
-                "confirmed": False,
-                "confidence": 0.0,
-                "snr_db": 0.0,
-                "wavelength_match": False,
-                "modulation_match": False,
-                "spot_size_match": False,
-                "intensity_match": False,
-                "reason": "Not in FOV or beacon extinguished",
-            }
-
-        # 1. Wavelength match
-        wl_diff = abs(beacon_wavelength - self.config.wavelength)
-        wl_match = wl_diff <= (self.config.bandwidth + beacon_bandwidth) * 0.5
-        wl_score = max(0.0, 1.0 - wl_diff / max(1.0, self.config.bandwidth * 2.0))
-
-        # 2. Modulation match
-        is_any_mod = self.config.modulation_type.upper() in ("ANY", "ALL", "")
-        if is_any_mod:
-            mod_type_match = True
-            freq_match = True
-            mod_match = True
-            mod_score = 1.0
-        else:
-            mod_type_match = modulation_type.upper() == self.config.modulation_type.upper()
-            freq_diff = abs(modulation_freq_khz - self.config.modulation_frequency)
-            freq_match = freq_diff <= max(1.0, self.config.modulation_frequency * 0.25)
-            mod_match = mod_type_match and freq_match
-            mod_score = (1.0 if mod_type_match else 0.0) * max(0.0, 1.0 - freq_diff / max(1.0, self.config.modulation_frequency))
-
-        # 3. Spot size match
-        spot_diff = abs(beacon_divergence_mrad - self.config.expected_spot_size)
-        spot_match = spot_diff <= self.config.expected_spot_tolerance
-        spot_score = max(0.0, 1.0 - spot_diff / max(0.1, self.config.expected_spot_tolerance * 2.0))
-
-        # 4. SNR and Intensity match
-        snr_match = estimated_snr_db >= self.config.minimum_snr
-        snr_score = min(1.0, max(0.0, estimated_snr_db / max(1.0, self.config.minimum_snr * 1.5)))
-
-        intensity_match = estimated_dn >= self.config.intensity_threshold
-        intensity_score = 1.0 if intensity_match else 0.0
-
-        # Weighted aggregate confidence
-        confidence = (
-            0.35 * wl_score
-            + 0.25 * mod_score
-            + 0.20 * spot_score
-            + 0.20 * snr_score
-        ) * intensity_score
-
-        confirmed = confidence >= self.config.confidence_threshold and wl_match and snr_match
-
-        return {
-            "detected": in_fov,
-            "confirmed": confirmed,
-            "confidence": float(confidence),
-            "snr_db": float(estimated_snr_db),
-            "wavelength_match": wl_match,
-            "modulation_match": mod_match,
-            "spot_size_match": spot_match,
-            "intensity_match": intensity_match,
-            "reason": "OK" if confirmed else "Confidence below threshold",
-        }

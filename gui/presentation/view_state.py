@@ -32,6 +32,14 @@ def fmt_px_mrad(px: float | None, mrad: float | None) -> str:
     return f"{px:.0f} PX | {mrad:.2f} MRAD"
 
 
+def fmt_per_min(v: float | None) -> str:
+    return "—" if v is None else f"{v:.2f} /min"
+
+
+def fmt_count(v: int | None) -> str:
+    return "—" if v is None else str(int(v))
+
+
 @dataclass
 class DashboardState:
     # Simulator runtime & performance

@@ -1,4 +1,16 @@
-# gui/panels/disturbances_panel.py - Disturbance & Noise — Simplified (no redundant params)
+# gui/panels/disturbances_panel.py - Disturbance & Noise — preset-first, tabbed UI
+#
+# Design: most users only need a scenario preset + strength. The panel is
+# therefore organized as:
+#   1. Header card: master switch + scenario preset + live summary + reset
+#   2. Three tabs following the physics pipeline: Air & Light → Camera & Motion → Sensor Noise
+#   3. "Details" toggles reveal expert sliders (attenuation model, beam gains,
+#      noise ratios/peaks, platform amplitude) instead of showing ~19 sliders at once.
+#
+# Back-compat: every config widget keeps its attribute name, `sliders` dict
+# remains (hidden 0 values) so `disturbances_panel.sliders['Vibration']` etc
+# still exist, and collect_config()/set_config()/get_config()/configChanged
+# behave exactly as before.
 
 from PyQt5.QtCore import Qt, pyqtSignal
 
@@ -6,13 +18,14 @@ from gui.panels.base import BaseConfigPanel
 from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QDoubleSpinBox,
     QFrame,
     QGridLayout,
     QGroupBox,
+    QHBoxLayout,
     QLabel,
-    QSpinBox,
+    QTabWidget,
     QVBoxLayout,
+    QWidget,
     QSlider,
 )
 
@@ -24,20 +37,14 @@ from disturbance.core.constants import (
 
 class DisturbancesPanel(BaseConfigPanel):
     """
-    Simplified Disturbances tab — spec-only, no redundant controls.
+    Preset-first disturbances tab.
 
-    Groups:
-      B Image Noise — S&P 10% + Gaussian σ (20px + user 1..50) + Poisson (multi-select, one or more at once)
-      C Camera Jitter — ±20 px/frame + user to 50
-      D Atmospheric — Clear/Haze/Fog/User Defined + contrast/brightness (user only when User Defined)
-      E Platform Motion — Linear (default mandatory) + 6 optionals + speed 0..20 (+user 50)
+    Tabs:
+      Air & Light — weather condition + severity + turbulence (beam path)
+      Camera & Motion — jitter + platform trajectory (camera geometry)
+      Sensor Noise — Gaussian / Salt & Pepper / Poisson toggles (sensor)
 
-    Removed redundant:
-      - Legacy 0..10 Turbulence/Vibration/Camera Motion/Noise sliders (superseded by new precise controls)
-      - Alias Max Std spin (mirrors Gaussian max)
-      - Duplicate slider+spin pairs (kept single spin per param)
-      - Poisson scale (Poisson is toggle-only per spec)
-    Back-compat: `sliders` dict remains (hidden 0 values) so `disturbances_panel.sliders['Vibration']` etc still exist.
+    Expert sliders live behind per-tab "Details" checkboxes.
     """
 
     configChanged = pyqtSignal(object)
@@ -56,237 +63,485 @@ class DisturbancesPanel(BaseConfigPanel):
             self.sliders[key] = s
             s.valueChanged.connect(lambda _: self._emit_config())
         self._building = False
+        self._applying_preset = False
         self._build_ui()
         self.set_config(self._initial, emit=False)
 
+    # ------------------------------------------------------------------ build
     def _build_ui(self) -> None:
         self._building = True
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(10)
 
-        banner = QFrame()
-        banner.setStyleSheet("QFrame { background: #ffffff; border:1px solid #e5e7eb; border-radius:6px; }")
-        bl = QVBoxLayout(banner)
-        bl.setContentsMargins(10, 8, 10, 8)
-        bl.setSpacing(3)
+        # ── Header: preset-first control ──
+        hero = QFrame()
+        hero.setStyleSheet("QFrame { background: #ffffff; border:1px solid #e5e7eb; border-radius:6px; }")
+        hl = QVBoxLayout(hero)
+        hl.setContentsMargins(10, 8, 10, 8)
+        hl.setSpacing(6)
         bt = QLabel("Disturbance & Noise")
         bt.setStyleSheet("color:#111827; font-weight:700; font-size:11px; background: transparent;")
         bt.setAlignment(Qt.AlignCenter)
-        bl.addWidget(bt)
-        bs = QLabel("S&P 10% · Gaussian σ 20px+User · Poisson · Jitter ±20px · Atmosphere 4 presets · Platform 7 profiles")
+        hl.addWidget(bt)
+        bs = QLabel("Air & Light → Camera & Motion → Sensor Noise")
         bs.setStyleSheet("color:#6b7280; font-size:10px; background: transparent;")
         bs.setWordWrap(True)
         bs.setAlignment(Qt.AlignCenter)
-        bl.addWidget(bs)
-        layout.addWidget(banner)
+        hl.addWidget(bs)
 
-        # ── B — Image Noise ──
-        img_box = QGroupBox("Image Noise — one or more at once")
-        img_grid = QGridLayout(img_box)
-        img_grid.setContentsMargins(12, 18, 12, 12)
-        img_grid.setHorizontalSpacing(8)
-        img_grid.setVerticalSpacing(8)
-        img_grid.setColumnStretch(1, 1)
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        self.chk_global_enabled = QCheckBox("Enable")
+        self.chk_global_enabled.setChecked(True)
+        self.chk_global_enabled.setToolTip("Master switch — bypasses channel, camera and sensor stages")
+        self.chk_global_enabled.setStyleSheet("color:#374151; font-size:11px; font-weight:700; background: transparent;")
+        row.addWidget(self.chk_global_enabled)
+        row.addWidget(self._label("Scenario"))
+        self.combo_channel_preset = QComboBox()
+        try:
+            from disturbance.core.config import CHANNEL_PRESETS as _CHP
+            self.combo_channel_preset.addItems(list(_CHP))
+        except Exception:
+            self.combo_channel_preset.addItems(["Clear", "Haze", "Fog", "Rain", "Low Light", "Moderate", "Severe", "Custom"])
+        self.combo_channel_preset.setCurrentText("Clear")
+        self.combo_channel_preset.setMinimumHeight(26)
+        self.combo_channel_preset.setToolTip("One-click setup: Clear/Haze/Fog/Rain/Low Light/Moderate/Severe/Custom")
+        row.addWidget(self.combo_channel_preset, 1)
+        self.btn_reset = self._make_reset_button("Reset")
+        self.btn_reset.setMaximumWidth(90)
+        row.addWidget(self.btn_reset)
+        hl.addLayout(row)
 
-        self.chk_salt_pepper = QCheckBox("Salt && Pepper (~10%)")
-        self.chk_salt_pepper.setToolTip("10% of pixels to 0/255 (density configurable)")
-        self.chk_gaussian = QCheckBox("Gaussian")
-        self.chk_gaussian.setToolTip("Additive N(0,σ²), σ=StdDev")
-        self.chk_poisson = QCheckBox("Poisson")
-        self.chk_poisson.setToolTip("Shot noise — Poisson(rate) scaled")
-        for cb in [self.chk_salt_pepper, self.chk_gaussian, self.chk_poisson]:
-            cb.setStyleSheet("color:#374151; font-size:11px;")
-        img_grid.addWidget(self.chk_salt_pepper, 0, 0)
-        img_grid.addWidget(self.chk_gaussian, 0, 1)
-        img_grid.addWidget(self.chk_poisson, 0, 2)
+        self.label_summary = QLabel("")
+        self.label_summary.setStyleSheet("color:#1e40af; font-size:10px; background: transparent;")
+        self.label_summary.setWordWrap(True)
+        self.label_summary.setAlignment(Qt.AlignCenter)
+        hl.addWidget(self.label_summary)
+        layout.addWidget(hero)
 
-        # S&P params — only visible when S&P checked
-        self.label_salt_density = self._label("S&P density")
-        img_grid.addWidget(self.label_salt_density, 1, 0)
-        self.slider_salt_density = QSlider(Qt.Horizontal)
-        self.slider_salt_density.setRange(0, 20)  # 0.0 to 0.20 step 0.01
-        self.slider_salt_density.setValue(10)
-        self.slider_salt_density.setToolTip("Salt & Pepper density 0..0.20 — 10 = 10%")
-        self.label_salt_density_val = QLabel("0.10")
-        self.label_salt_density_val.setMinimumHeight(26)
-        self.label_salt_density_val.setStyleSheet("color:#374151; font-size:11px;")
-        img_grid.addWidget(self.slider_salt_density, 1, 1)
-        img_grid.addWidget(self.label_salt_density_val, 1, 2)
-        
-        # extra S&P param: salt vs pepper ratio
-        self.label_salt_ratio = self._label("S/P ratio")
-        img_grid.addWidget(self.label_salt_ratio, 1, 3)
-        self.slider_salt_ratio = QSlider(Qt.Horizontal)
-        self.slider_salt_ratio.setRange(0, 100)  # 0.0 to 1.0 step 0.01
-        self.slider_salt_ratio.setValue(50)
-        self.slider_salt_ratio.setToolTip("Salt vs Pepper ratio 0..1")
-        self.label_salt_ratio_val = QLabel("0.50")
-        self.label_salt_ratio_val.setMinimumHeight(26)
-        self.label_salt_ratio_val.setStyleSheet("color:#374151; font-size:11px;")
-        img_grid.addWidget(self.slider_salt_ratio, 1, 4)
-        img_grid.addWidget(self.label_salt_ratio_val, 1, 5)
-
-        # Gaussian params — only visible when Gaussian checked
-        self.label_gaussian_sigma = self._label("Gaussian σ")
-        img_grid.addWidget(self.label_gaussian_sigma, 2, 0)
-        self.slider_gaussian_sigma = QSlider(Qt.Horizontal)
-        self.slider_gaussian_sigma.setRange(0, 200)  # 0.0 to 20.0 per spec Sr21.2 step 0.1
-        self.slider_gaussian_sigma.setValue(80)
-        self.slider_gaussian_sigma.setToolTip("Gaussian σ 0..20 px per spec")
-        self.label_gaussian_sigma_val = QLabel("8.0 px")
-        self.label_gaussian_sigma_val.setMinimumHeight(26)
-        self.label_gaussian_sigma_val.setStyleSheet("color:#374151; font-size:11px;")
-        img_grid.addWidget(self.slider_gaussian_sigma, 2, 1)
-        img_grid.addWidget(self.label_gaussian_sigma_val, 2, 2)
-
-        self.label_gaussian_max = self._label("Max σ (User)")
-        img_grid.addWidget(self.label_gaussian_max, 2, 3)
-        self.slider_gaussian_max = QSlider(Qt.Horizontal)
-        self.slider_gaussian_max.setRange(10, 200)  # 1.0 to 20.0 per spec Sr21.2 step 0.1
-        self.slider_gaussian_max.setValue(200)
-        self.slider_gaussian_max.setToolTip("Gaussian max σ 1..20 px per spec")
-        self.label_gaussian_max_val = QLabel("20.0 px")
-        self.label_gaussian_max_val.setMinimumHeight(26)
-        self.label_gaussian_max_val.setStyleSheet("color:#374151; font-size:11px;")
-        img_grid.addWidget(self.slider_gaussian_max, 2, 4)
-        img_grid.addWidget(self.label_gaussian_max_val, 2, 5)
-
-        # Poisson params — only visible when Poisson checked
-        self.label_poisson_scale = self._label("Poisson scale")
-        img_grid.addWidget(self.label_poisson_scale, 3, 0)
-        self.slider_poisson_scale = QSlider(Qt.Horizontal)
-        self.slider_poisson_scale.setRange(5, 50)  # 0.5 to 5.0 step 0.1
-        self.slider_poisson_scale.setValue(10)
-        self.slider_poisson_scale.setToolTip("Poisson scale 0.5..5.0")
-        self.label_poisson_scale_val = QLabel("1.0×")
-        self.label_poisson_scale_val.setMinimumHeight(26)
-        self.label_poisson_scale_val.setStyleSheet("color:#374151; font-size:11px;")
-        img_grid.addWidget(self.slider_poisson_scale, 3, 1)
-        img_grid.addWidget(self.label_poisson_scale_val, 3, 2)
-
-        self.label_poisson_peak = self._label("Peak")
-        img_grid.addWidget(self.label_poisson_peak, 3, 3)
-        self.slider_poisson_peak = QSlider(Qt.Horizontal)
-        self.slider_poisson_peak.setRange(30, 255)
-        self.slider_poisson_peak.setValue(100)
-        self.slider_poisson_peak.setToolTip("Poisson peak 30..255")
-        self.label_poisson_peak_val = QLabel("100")
-        self.label_poisson_peak_val.setMinimumHeight(26)
-        self.label_poisson_peak_val.setStyleSheet("color:#374151; font-size:11px;")
-        img_grid.addWidget(self.slider_poisson_peak, 3, 4)
-        img_grid.addWidget(self.label_poisson_peak_val, 3, 5)
-
-        hint = QLabel("Only selected types show params — select multiple to stack as Gaussian → Poisson → S&P.")
-        hint.setWordWrap(True)
-        hint.setStyleSheet("color:#64748b; font-size:10px; font-style:italic;")
-        img_grid.addWidget(hint, 4, 0, 1, 6)
-        layout.addWidget(img_box)
-
-        # ── C — Camera Jitter ──
-        jitter_box = QGroupBox("Camera Jitter — ± px / frame")
-        jitter_grid = QGridLayout(jitter_box)
-        jitter_grid.setContentsMargins(12, 18, 12, 12)
-        jitter_grid.setHorizontalSpacing(8)
-        jitter_grid.setVerticalSpacing(8)
-        jitter_grid.setColumnStretch(1, 1)
-        jitter_grid.addWidget(self._label("Jitter"), 0, 0)
-        self.slider_jitter = QSlider(Qt.Horizontal)
-        self.slider_jitter.setRange(0, 200)  # 0.0 to 20.0 per spec Sr21.3 step 0.1
-        self.slider_jitter.setValue(0)
-        self.slider_jitter.setToolTip("Jitter ±0..20 px/frame per spec")
-        self.label_jitter_val = QLabel("0.0 px")
-        self.label_jitter_val.setMinimumHeight(26)
-        self.label_jitter_val.setStyleSheet("color:#374151; font-size:11px;")
-        jitter_grid.addWidget(self.slider_jitter, 0, 1)
-        jitter_grid.addWidget(self.label_jitter_val, 0, 2)
-        layout.addWidget(jitter_box)
-
-        # ── D — Atmospheric — per PDF Sr21.4 Clear/Haze/Fog/Rain/Low light/User Defined
-        atmo_box = QGroupBox("Atmospheric — Clear / Haze / Fog / Rain / Low light / User Defined")
-        atmo_grid = QGridLayout(atmo_box)
-        atmo_grid.setContentsMargins(12, 18, 12, 12)
-        atmo_grid.setHorizontalSpacing(8)
-        atmo_grid.setVerticalSpacing(8)
-        atmo_grid.setColumnStretch(1, 1)
-        atmo_grid.addWidget(self._label("Preset"), 0, 0)
-        self.combo_atmospheric = QComboBox()
-        self.combo_atmospheric.addItems(list(ATMOSPHERIC_PRESETS))
-        self.combo_atmospheric.setCurrentText("Clear")
-        self.combo_atmospheric.setMinimumHeight(26)
-        atmo_grid.addWidget(self.combo_atmospheric, 0, 1)
-        atmo_grid.addWidget(self._label("Contrast ↓"), 0, 2)
-        self.slider_atmo_contrast = QSlider(Qt.Horizontal)
-        self.slider_atmo_contrast.setRange(0, 100)
-        self.slider_atmo_contrast.setValue(0)
-        self.slider_atmo_contrast.setToolTip("Atmosphere contrast 0..100%")
-        self.label_atmo_contrast_val = QLabel("0%")
-        self.label_atmo_contrast_val.setMinimumHeight(26)
-        self.label_atmo_contrast_val.setStyleSheet("color:#374151; font-size:11px;")
-        atmo_grid.addWidget(self.slider_atmo_contrast, 0, 3)
-        atmo_grid.addWidget(self.label_atmo_contrast_val, 0, 4)
-        atmo_grid.addWidget(self._label("Brightness ↓"), 1, 0)
-        self.slider_atmo_brightness = QSlider(Qt.Horizontal)
-        self.slider_atmo_brightness.setRange(0, 100)
-        self.slider_atmo_brightness.setValue(0)
-        self.slider_atmo_brightness.setToolTip("Atmosphere brightness 0..100%")
-        self.label_atmo_brightness_val = QLabel("0%")
-        self.label_atmo_brightness_val.setMinimumHeight(26)
-        self.label_atmo_brightness_val.setStyleSheet("color:#374151; font-size:11px;")
-        atmo_grid.addWidget(self.slider_atmo_brightness, 1, 1)
-        atmo_grid.addWidget(self.label_atmo_brightness_val, 1, 2)
-        self.label_atmo_hint = QLabel("Clear 0/0 · Haze 15/10 · Fog 38/22 · Rain 22/14 · Low light 28/38")
-        self.label_atmo_hint.setStyleSheet("color:#64748b; font-size:10px; font-style:italic;")
-        self.label_atmo_hint.setWordWrap(True)
-        atmo_grid.addWidget(self.label_atmo_hint, 2, 0, 1, 4)
-        layout.addWidget(atmo_box)
-
-        # ── E — Platform Motion ──
-        plat_box = QGroupBox("Platform Motion — Linear (Default) + 6 optionals — ±20 px/frame MAX")
-        plat_grid = QGridLayout(plat_box)
-        plat_grid.setContentsMargins(12, 18, 12, 12)
-        plat_grid.setHorizontalSpacing(8)
-        plat_grid.setVerticalSpacing(8)
-        plat_grid.setColumnStretch(1, 1)
-        plat_grid.addWidget(self._label("Profile"), 0, 0)
-        self.combo_platform = QComboBox()
-        self.combo_platform.addItems(list(PLATFORM_PROFILES))
-        self.combo_platform.setCurrentText("Linear")
-        self.combo_platform.setMinimumHeight(26)
-        plat_grid.addWidget(self.combo_platform, 0, 1)
-        plat_grid.addWidget(self._label("Speed"), 0, 2)
-        self.slider_platform_speed = QSlider(Qt.Horizontal)
-        self.slider_platform_speed.setRange(0, 200)  # 0.0 to 20.0 per spec Sr21.5 step 0.1
-        self.slider_platform_speed.setValue(0)
-        self.slider_platform_speed.setToolTip("Platform speed 0..20 px/f per spec")
-        self.label_platform_speed_val = QLabel("0.0 px/f")
-        self.label_platform_speed_val.setMinimumHeight(26)
-        self.label_platform_speed_val.setStyleSheet("color:#374151; font-size:11px;")
-        plat_grid.addWidget(self.slider_platform_speed, 0, 3)
-        plat_grid.addWidget(self.label_platform_speed_val, 0, 4)
-        plat_hint = QLabel("Linear is mandatory default. All profiles dt-aware.")
-        plat_hint.setStyleSheet("color:#64748b; font-size:10px; font-style:italic;")
-        plat_hint.setWordWrap(True)
-        plat_grid.addWidget(plat_hint, 1, 0, 1, 5)
-        layout.addWidget(plat_box)
-
-        # Reset button
-        self.btn_reset = self._make_reset_button("Reset Disturbances")
-        layout.addWidget(self.btn_reset)
+        # ── Tabs ──
+        self.tabs = QTabWidget()
+        layout.addWidget(self.tabs, 1)
+        self._build_air_tab()
+        self._build_camera_tab()
+        self._build_sensor_tab()
 
         layout.addStretch()
         self._wire_signals()
         self._building = False
         self._sync_atmo_enabled()
         self._sync_image_noise_visibility()
+        self._refresh_summary()
         # Highlight sliders on drag + connect reset
         self._enhance_slider_highlight()
         self.btn_reset.clicked.connect(self._on_reset)
 
+    # ------------------------------------------------------------ tab: air --
+    def _build_air_tab(self) -> None:
+        tab = QWidget()
+        tl = QVBoxLayout(tab)
+        tl.setContentsMargins(4, 6, 4, 6)
+        tl.setSpacing(10)
+
+        # Weather — the only two controls most users need
+        wx_box = QGroupBox("Weather")
+        wx = QGridLayout(wx_box)
+        wx.setContentsMargins(12, 18, 12, 12)
+        wx.setHorizontalSpacing(8)
+        wx.setVerticalSpacing(8)
+        wx.setColumnStretch(1, 1)
+        wx.addWidget(self._label("Condition"), 0, 0)
+        self.combo_atmospheric = QComboBox()
+        self.combo_atmospheric.addItems(list(ATMOSPHERIC_PRESETS))
+        self.combo_atmospheric.setCurrentText("Clear")
+        self.combo_atmospheric.setMinimumHeight(26)
+        self.combo_atmospheric.setToolTip("Beam path: Clear / Haze / Fog / Rain / Low light / User Defined")
+        wx.addWidget(self.combo_atmospheric, 0, 1)
+        wx.addWidget(self._label("Severity"), 1, 0)
+        self.slider_channel_severity = QSlider(Qt.Horizontal)
+        self.slider_channel_severity.setRange(0, 100)
+        self.slider_channel_severity.setValue(100)
+        self.slider_channel_severity.setToolTip("Severity 0..100% — scales attenuation/contrast/visibility loss")
+        self.label_channel_severity_val = QLabel("100%")
+        self.label_channel_severity_val.setMinimumHeight(26)
+        self.label_channel_severity_val.setStyleSheet("color:#374151; font-size:11px;")
+        wx.addWidget(self.slider_channel_severity, 1, 1)
+        wx.addWidget(self.label_channel_severity_val, 1, 2)
+        wx.addWidget(self._label("Contrast ↓"), 2, 0)
+        self.slider_atmo_contrast = QSlider(Qt.Horizontal)
+        self.slider_atmo_contrast.setRange(0, 100)
+        self.slider_atmo_contrast.setValue(0)
+        self.slider_atmo_contrast.setToolTip("Contrast reduction 0..100% (editable when User Defined)")
+        self.label_atmo_contrast_val = QLabel("0%")
+        self.label_atmo_contrast_val.setMinimumHeight(26)
+        self.label_atmo_contrast_val.setStyleSheet("color:#374151; font-size:11px;")
+        wx.addWidget(self.slider_atmo_contrast, 2, 1)
+        wx.addWidget(self.label_atmo_contrast_val, 2, 2)
+        wx.addWidget(self._label("Brightness ↓"), 3, 0)
+        self.slider_atmo_brightness = QSlider(Qt.Horizontal)
+        self.slider_atmo_brightness.setRange(0, 100)
+        self.slider_atmo_brightness.setValue(0)
+        self.slider_atmo_brightness.setToolTip("Brightness reduction 0..100% (editable when User Defined)")
+        self.label_atmo_brightness_val = QLabel("0%")
+        self.label_atmo_brightness_val.setMinimumHeight(26)
+        self.label_atmo_brightness_val.setStyleSheet("color:#374151; font-size:11px;")
+        wx.addWidget(self.slider_atmo_brightness, 3, 1)
+        wx.addWidget(self.label_atmo_brightness_val, 3, 2)
+        self.label_atmo_hint = QLabel("Clear 0/0 · Haze 15/10 · Fog 38/22 · Rain 22/14 · Low light 28/38")
+        self.label_atmo_hint.setStyleSheet("color:#64748b; font-size:10px; font-style:italic;")
+        self.label_atmo_hint.setWordWrap(True)
+        wx.addWidget(self.label_atmo_hint, 4, 0, 1, 3)
+        tl.addWidget(wx_box)
+
+        # Turbulence — single beam-distortion slider
+        tb_box = QGroupBox("Turbulence — beam distortion")
+        tb = QGridLayout(tb_box)
+        tb.setContentsMargins(12, 18, 12, 12)
+        tb.setHorizontalSpacing(8)
+        tb.setVerticalSpacing(8)
+        tb.setColumnStretch(1, 1)
+        tb.addWidget(self._label("Strength"), 0, 0)
+        self.slider_turbulence = QSlider(Qt.Horizontal)
+        self.slider_turbulence.setRange(0, 10)
+        self.slider_turbulence.setValue(0)
+        self.slider_turbulence.setToolTip("Turbulence 0..10 — drives seeing blur, wander, scintillation")
+        self.label_turbulence_val = QLabel("0")
+        self.label_turbulence_val.setMinimumHeight(26)
+        self.label_turbulence_val.setStyleSheet("color:#374151; font-size:11px;")
+        tb.addWidget(self.slider_turbulence, 0, 1)
+        tb.addWidget(self.label_turbulence_val, 0, 2)
+        tb.addWidget(self._hint("Shimmers the beacon: the spot wobbles and twinkles."), 1, 0, 1, 3)
+        tl.addWidget(tb_box)
+
+        # Details — expert beam controls, hidden by default
+        self.chk_channel_enabled = QCheckBox("Enable Channel")
+        self.chk_channel_enabled.setChecked(True)
+        self.chk_channel_enabled.setToolTip("Ideal beam → channel → received signal")
+        self.chk_channel_enabled.setStyleSheet("color:#374151; font-size:11px;")
+        tl.addWidget(self.chk_channel_enabled)
+        self.chk_air_details = QCheckBox("Show beam details (attenuation, wander, spread)")
+        self.chk_air_details.setStyleSheet("color:#64748b; font-size:11px;")
+        tl.addWidget(self.chk_air_details)
+        self.air_details = QWidget()
+        ad = QGridLayout(self.air_details)
+        ad.setContentsMargins(0, 0, 0, 0)
+        ad.setHorizontalSpacing(8)
+        ad.setVerticalSpacing(8)
+        ad.setColumnStretch(1, 1)
+        det_box = QGroupBox("Beam details")
+        dg = QGridLayout(det_box)
+        dg.setContentsMargins(12, 18, 12, 12)
+        dg.setHorizontalSpacing(8)
+        dg.setVerticalSpacing(8)
+        dg.setColumnStretch(1, 1)
+        dg.addWidget(self._label("Attenuation"), 0, 0)
+        self.slider_channel_attenuation = QSlider(Qt.Horizontal)
+        self.slider_channel_attenuation.setRange(0, 100)
+        self.slider_channel_attenuation.setValue(100)
+        self.slider_channel_attenuation.setToolTip("Attenuation strength 0..1 (received = emitted × factor)")
+        self.label_channel_attenuation_val = QLabel("1.00")
+        self.label_channel_attenuation_val.setMinimumHeight(26)
+        self.label_channel_attenuation_val.setStyleSheet("color:#374151; font-size:11px;")
+        dg.addWidget(self.slider_channel_attenuation, 0, 1)
+        self.combo_attenuation_model = QComboBox()
+        self.combo_attenuation_model.addItems(["Fixed", "Distance Based", "Atmospheric", "Custom"])
+        self.combo_attenuation_model.setCurrentText("Atmospheric")
+        self.combo_attenuation_model.setMinimumHeight(26)
+        dg.addWidget(self.combo_attenuation_model, 0, 2)
+        dg.addWidget(self.label_channel_attenuation_val, 0, 3)
+        dg.addWidget(self._label("Wander"), 1, 0)
+        self.slider_beam_wander = QSlider(Qt.Horizontal)
+        self.slider_beam_wander.setRange(0, 200)
+        self.slider_beam_wander.setValue(100)
+        self.slider_beam_wander.setToolTip("Beam wander gain 0..2 — shifts the spot (light path, not camera)")
+        self.label_beam_wander_val = QLabel("1.00×")
+        self.label_beam_wander_val.setMinimumHeight(26)
+        self.label_beam_wander_val.setStyleSheet("color:#374151; font-size:11px;")
+        dg.addWidget(self.slider_beam_wander, 1, 1)
+        dg.addWidget(self.label_beam_wander_val, 1, 2)
+        dg.addWidget(self._label("Spread"), 2, 0)
+        self.slider_beam_spread = QSlider(Qt.Horizontal)
+        self.slider_beam_spread.setRange(0, 200)
+        self.slider_beam_spread.setValue(100)
+        self.slider_beam_spread.setToolTip("Beam spread gain 0..2 — widens the apparent spot")
+        self.label_beam_spread_val = QLabel("1.00×")
+        self.label_beam_spread_val.setMinimumHeight(26)
+        self.label_beam_spread_val.setStyleSheet("color:#374151; font-size:11px;")
+        dg.addWidget(self.slider_beam_spread, 2, 1)
+        dg.addWidget(self.label_beam_spread_val, 2, 2)
+        dg.addWidget(self._label("Twinkle"), 3, 0)
+        self.slider_intensity_fluct = QSlider(Qt.Horizontal)
+        self.slider_intensity_fluct.setRange(0, 200)
+        self.slider_intensity_fluct.setValue(100)
+        self.slider_intensity_fluct.setToolTip("Intensity fluctuation gain 0..2 (scintillation)")
+        self.label_intensity_fluct_val = QLabel("1.00×")
+        self.label_intensity_fluct_val.setMinimumHeight(26)
+        self.label_intensity_fluct_val.setStyleSheet("color:#374151; font-size:11px;")
+        dg.addWidget(self.slider_intensity_fluct, 3, 1)
+        dg.addWidget(self.label_intensity_fluct_val, 3, 2)
+        ad.addWidget(det_box)
+        self.air_details.setLayout(ad)
+        self.air_details.setVisible(False)
+        tl.addWidget(self.air_details)
+        tl.addStretch()
+        self.tabs.addTab(tab, "Air & Light")
+
+    # --------------------------------------------------------- tab: camera --
+    def _build_camera_tab(self) -> None:
+        tab = QWidget()
+        tl = QVBoxLayout(tab)
+        tl.setContentsMargins(4, 6, 4, 6)
+        tl.setSpacing(10)
+
+        jit_box = QGroupBox("Camera shake — ± px / frame")
+        jg = QGridLayout(jit_box)
+        jg.setContentsMargins(12, 18, 12, 12)
+        jg.setHorizontalSpacing(8)
+        jg.setVerticalSpacing(8)
+        jg.setColumnStretch(1, 1)
+        self.chk_jitter_enabled = QCheckBox("Enable shake")
+        self.chk_jitter_enabled.setChecked(True)
+        self.chk_jitter_enabled.setStyleSheet("color:#374151; font-size:11px;")
+        jg.addWidget(self.chk_jitter_enabled, 0, 0)
+        jg.addWidget(self._label("Amount"), 0, 1)
+        self.slider_jitter = QSlider(Qt.Horizontal)
+        self.slider_jitter.setRange(0, 200)  # 0.0 to 20.0 per spec Sr21.3 step 0.1
+        self.slider_jitter.setValue(0)
+        self.slider_jitter.setToolTip("Jitter ±0..20 px/frame — shakes the camera (different from beam wander)")
+        self.label_jitter_val = QLabel("0.0 px")
+        self.label_jitter_val.setMinimumHeight(26)
+        self.label_jitter_val.setStyleSheet("color:#374151; font-size:11px;")
+        jg.addWidget(self.slider_jitter, 0, 2)
+        jg.addWidget(self.label_jitter_val, 0, 3)
+        tl.addWidget(jit_box)
+
+        plat_box = QGroupBox("Platform motion — ±20 px/frame max")
+        pg = QGridLayout(plat_box)
+        pg.setContentsMargins(12, 18, 12, 12)
+        pg.setHorizontalSpacing(8)
+        pg.setVerticalSpacing(8)
+        pg.setColumnStretch(2, 1)
+        self.chk_platform_enabled = QCheckBox("Enable drift")
+        self.chk_platform_enabled.setChecked(True)
+        self.chk_platform_enabled.setStyleSheet("color:#374151; font-size:11px;")
+        pg.addWidget(self.chk_platform_enabled, 0, 0)
+        pg.addWidget(self._label("Path"), 0, 1)
+        self.combo_platform = QComboBox()
+        self.combo_platform.addItems(list(PLATFORM_PROFILES))
+        self.combo_platform.setCurrentText("Linear")
+        self.combo_platform.setMinimumHeight(26)
+        self.combo_platform.setToolTip("Linear (default) + Circular / Random / Spiral / Figure 8 / Sin / Zig-Zag")
+        pg.addWidget(self.combo_platform, 0, 2)
+        pg.addWidget(self._label("Speed"), 1, 0)
+        self.slider_platform_speed = QSlider(Qt.Horizontal)
+        self.slider_platform_speed.setRange(0, 200)  # 0.0 to 20.0 per spec Sr21.5 step 0.1
+        self.slider_platform_speed.setValue(0)
+        self.slider_platform_speed.setToolTip("Platform speed 0..20 px/frame")
+        self.label_platform_speed_val = QLabel("0.0 px/f")
+        self.label_platform_speed_val.setMinimumHeight(26)
+        self.label_platform_speed_val.setStyleSheet("color:#374151; font-size:11px;")
+        pg.addWidget(self.slider_platform_speed, 1, 1, 1, 2)
+        pg.addWidget(self.label_platform_speed_val, 1, 3)
+        pg.addWidget(self._hint("Linear drifts straight; Random jitters the path; Figure 8 sweeps loops."), 2, 0, 1, 4)
+        tl.addWidget(plat_box)
+
+        self.chk_cam_details = QCheckBox("Show motion details (amplitude, direction)")
+        self.chk_cam_details.setStyleSheet("color:#64748b; font-size:11px;")
+        tl.addWidget(self.chk_cam_details)
+        self.cam_details = QWidget()
+        cd = QGridLayout(self.cam_details)
+        cd.setContentsMargins(0, 0, 0, 0)
+        cd.setHorizontalSpacing(8)
+        cd.setVerticalSpacing(8)
+        cd.setColumnStretch(1, 1)
+        det_box = QGroupBox("Motion details")
+        mg = QGridLayout(det_box)
+        mg.setContentsMargins(12, 18, 12, 12)
+        mg.setHorizontalSpacing(8)
+        mg.setVerticalSpacing(8)
+        mg.setColumnStretch(1, 1)
+        mg.addWidget(self._label("Amplitude X"), 0, 0)
+        self.slider_platform_amp_x = QSlider(Qt.Horizontal)
+        self.slider_platform_amp_x.setRange(0, 400)
+        self.slider_platform_amp_x.setValue(110)
+        self.slider_platform_amp_x.setToolTip("Platform amplitude X (px)")
+        self.label_platform_amp_x_val = QLabel("110 px")
+        self.label_platform_amp_x_val.setMinimumHeight(26)
+        self.label_platform_amp_x_val.setStyleSheet("color:#374151; font-size:11px;")
+        mg.addWidget(self.slider_platform_amp_x, 0, 1)
+        mg.addWidget(self.label_platform_amp_x_val, 0, 2)
+        mg.addWidget(self._label("Amplitude Y"), 1, 0)
+        self.slider_platform_amp_y = QSlider(Qt.Horizontal)
+        self.slider_platform_amp_y.setRange(0, 400)
+        self.slider_platform_amp_y.setValue(110)
+        self.slider_platform_amp_y.setToolTip("Platform amplitude Y (px)")
+        self.label_platform_amp_y_val = QLabel("110 px")
+        self.label_platform_amp_y_val.setMinimumHeight(26)
+        self.label_platform_amp_y_val.setStyleSheet("color:#374151; font-size:11px;")
+        mg.addWidget(self.slider_platform_amp_y, 1, 1)
+        mg.addWidget(self.label_platform_amp_y_val, 1, 2)
+        mg.addWidget(self._label("Direction"), 2, 0)
+        self.slider_platform_direction = QSlider(Qt.Horizontal)
+        self.slider_platform_direction.setRange(-180, 180)
+        self.slider_platform_direction.setValue(0)
+        self.slider_platform_direction.setToolTip("Platform direction (deg)")
+        self.label_platform_direction_val = QLabel("0°")
+        self.label_platform_direction_val.setMinimumHeight(26)
+        self.label_platform_direction_val.setStyleSheet("color:#374151; font-size:11px;")
+        mg.addWidget(self.slider_platform_direction, 2, 1)
+        mg.addWidget(self.label_platform_direction_val, 2, 2)
+        cd.addWidget(det_box)
+        self.cam_details.setLayout(cd)
+        self.cam_details.setVisible(False)
+        tl.addWidget(self.cam_details)
+        tl.addStretch()
+        self.tabs.addTab(tab, "Camera & Motion")
+
+    # --------------------------------------------------------- tab: sensor --
+    def _build_sensor_tab(self) -> None:
+        tab = QWidget()
+        tl = QVBoxLayout(tab)
+        tl.setContentsMargins(4, 6, 4, 6)
+        tl.setSpacing(10)
+
+        tl.addWidget(self._hint("Pick one or more noise types — they stack as Gaussian → Poisson → Salt & Pepper."))
+
+        # Gaussian card
+        g_box = QGroupBox("Smooth grain")
+        gg = QGridLayout(g_box)
+        gg.setContentsMargins(12, 18, 12, 12)
+        gg.setHorizontalSpacing(8)
+        gg.setVerticalSpacing(8)
+        gg.setColumnStretch(1, 1)
+        self.chk_gaussian = QCheckBox("Gaussian")
+        self.chk_gaussian.setToolTip("Smooth static — strength sets grain size (σ)")
+        self.chk_gaussian.setStyleSheet("color:#374151; font-size:11px; font-weight:700;")
+        gg.addWidget(self.chk_gaussian, 0, 0)
+        self.label_gaussian_sigma = self._label("Strength")
+        gg.addWidget(self.label_gaussian_sigma, 0, 1)
+        self.slider_gaussian_sigma = QSlider(Qt.Horizontal)
+        self.slider_gaussian_sigma.setRange(0, 200)  # 0.0 to 20.0 step 0.1
+        self.slider_gaussian_sigma.setValue(80)
+        self.slider_gaussian_sigma.setToolTip("Grain strength σ 0..20")
+        self.label_gaussian_sigma_val = QLabel("8.0 px")
+        self.label_gaussian_sigma_val.setMinimumHeight(26)
+        self.label_gaussian_sigma_val.setStyleSheet("color:#374151; font-size:11px;")
+        gg.addWidget(self.slider_gaussian_sigma, 0, 2)
+        gg.addWidget(self.label_gaussian_sigma_val, 0, 3)
+        self.label_gaussian_max = self._label("Max σ")
+        gg.addWidget(self.label_gaussian_max, 1, 1)
+        self.slider_gaussian_max = QSlider(Qt.Horizontal)
+        self.slider_gaussian_max.setRange(10, 200)
+        self.slider_gaussian_max.setValue(200)
+        self.slider_gaussian_max.setToolTip("Allowed ceiling for grain strength")
+        self.label_gaussian_max_val = QLabel("20.0 px")
+        self.label_gaussian_max_val.setMinimumHeight(26)
+        self.label_gaussian_max_val.setStyleSheet("color:#374151; font-size:11px;")
+        gg.addWidget(self.slider_gaussian_max, 1, 2)
+        gg.addWidget(self.label_gaussian_max_val, 1, 3)
+        tl.addWidget(g_box)
+
+        # Salt & pepper card
+        sp_box = QGroupBox("Dead / hot pixels")
+        sg = QGridLayout(sp_box)
+        sg.setContentsMargins(12, 18, 12, 12)
+        sg.setHorizontalSpacing(8)
+        sg.setVerticalSpacing(8)
+        sg.setColumnStretch(1, 1)
+        self.chk_salt_pepper = QCheckBox("Salt && Pepper")
+        self.chk_salt_pepper.setToolTip("Random black/white speckles — strength sets how many")
+        self.chk_salt_pepper.setStyleSheet("color:#374151; font-size:11px; font-weight:700;")
+        sg.addWidget(self.chk_salt_pepper, 0, 0)
+        self.label_salt_density = self._label("Amount")
+        sg.addWidget(self.label_salt_density, 0, 1)
+        self.slider_salt_density = QSlider(Qt.Horizontal)
+        self.slider_salt_density.setRange(0, 20)  # 0.0 to 0.20 step 0.01
+        self.slider_salt_density.setValue(10)
+        self.slider_salt_density.setToolTip("Speckle amount 0..20% — 10 = 10% of pixels")
+        self.label_salt_density_val = QLabel("0.10")
+        self.label_salt_density_val.setMinimumHeight(26)
+        self.label_salt_density_val.setStyleSheet("color:#374151; font-size:11px;")
+        sg.addWidget(self.slider_salt_density, 0, 2)
+        sg.addWidget(self.label_salt_density_val, 0, 3)
+        self.label_salt_ratio = self._label("White/black")
+        sg.addWidget(self.label_salt_ratio, 1, 1)
+        self.slider_salt_ratio = QSlider(Qt.Horizontal)
+        self.slider_salt_ratio.setRange(0, 100)
+        self.slider_salt_ratio.setValue(50)
+        self.slider_salt_ratio.setToolTip("Balance of white vs black speckles")
+        self.label_salt_ratio_val = QLabel("0.50")
+        self.label_salt_ratio_val.setMinimumHeight(26)
+        self.label_salt_ratio_val.setStyleSheet("color:#374151; font-size:11px;")
+        sg.addWidget(self.slider_salt_ratio, 1, 2)
+        sg.addWidget(self.label_salt_ratio_val, 1, 3)
+        tl.addWidget(sp_box)
+
+        # Poisson card
+        p_box = QGroupBox("Low-light flicker")
+        pg = QGridLayout(p_box)
+        pg.setContentsMargins(12, 18, 12, 12)
+        pg.setHorizontalSpacing(8)
+        pg.setVerticalSpacing(8)
+        pg.setColumnStretch(1, 1)
+        self.chk_poisson = QCheckBox("Poisson")
+        self.chk_poisson.setToolTip("Photon shot noise — visible in dark scenes")
+        self.chk_poisson.setStyleSheet("color:#374151; font-size:11px; font-weight:700;")
+        pg.addWidget(self.chk_poisson, 0, 0)
+        self.label_poisson_scale = self._label("Strength")
+        pg.addWidget(self.label_poisson_scale, 0, 1)
+        self.slider_poisson_scale = QSlider(Qt.Horizontal)
+        self.slider_poisson_scale.setRange(5, 50)  # 0.5 to 5.0 step 0.1
+        self.slider_poisson_scale.setValue(10)
+        self.slider_poisson_scale.setToolTip("Flicker strength 0.5..5.0")
+        self.label_poisson_scale_val = QLabel("1.0×")
+        self.label_poisson_scale_val.setMinimumHeight(26)
+        self.label_poisson_scale_val.setStyleSheet("color:#374151; font-size:11px;")
+        pg.addWidget(self.slider_poisson_scale, 0, 2)
+        pg.addWidget(self.label_poisson_scale_val, 0, 3)
+        self.label_poisson_peak = self._label("Peak")
+        pg.addWidget(self.label_poisson_peak, 1, 1)
+        self.slider_poisson_peak = QSlider(Qt.Horizontal)
+        self.slider_poisson_peak.setRange(30, 255)
+        self.slider_poisson_peak.setValue(100)
+        self.slider_poisson_peak.setToolTip("Brightness level the flicker is calibrated to")
+        self.label_poisson_peak_val = QLabel("100")
+        self.label_poisson_peak_val.setMinimumHeight(26)
+        self.label_poisson_peak_val.setStyleSheet("color:#374151; font-size:11px;")
+        pg.addWidget(self.slider_poisson_peak, 1, 2)
+        pg.addWidget(self.label_poisson_peak_val, 1, 3)
+        tl.addWidget(p_box)
+
+        self.chk_sensor_details = QCheckBox("Show fine-tuning (ceilings, balance, peak)")
+        self.chk_sensor_details.setStyleSheet("color:#64748b; font-size:11px;")
+        tl.addWidget(self.chk_sensor_details)
+        tl.addStretch()
+        self.tabs.addTab(tab, "Sensor Noise")
+        self._sync_sensor_details(False)
+
+    # ---------------------------------------------------------------- wiring
     def _wire_signals(self) -> None:
         for cb in [self.chk_salt_pepper, self.chk_gaussian, self.chk_poisson]:
             cb.toggled.connect(lambda _: self._sync_image_noise_visibility())
             cb.toggled.connect(lambda _: self._emit_config())
+        self.chk_global_enabled.toggled.connect(lambda _: self._emit_config())
+        self.chk_channel_enabled.toggled.connect(lambda _: self._emit_config())
+        self.chk_jitter_enabled.toggled.connect(lambda _: self._emit_config())
+        self.chk_platform_enabled.toggled.connect(lambda _: self._emit_config())
+        self.combo_channel_preset.currentTextChanged.connect(self._on_channel_preset_changed)
+        self.combo_attenuation_model.currentTextChanged.connect(lambda _: self._emit_config())
+        self.slider_channel_severity.valueChanged.connect(lambda _: self._emit_config())
+        self.slider_channel_severity.valueChanged.connect(lambda val: self.label_channel_severity_val.setText(f"{val}%"))
+        self.slider_channel_attenuation.valueChanged.connect(lambda _: self._emit_config())
+        self.slider_channel_attenuation.valueChanged.connect(lambda val: self.label_channel_attenuation_val.setText(f"{val/100:.2f}"))
+        self.slider_turbulence.valueChanged.connect(lambda _: self._emit_config())
+        self.slider_turbulence.valueChanged.connect(lambda val: self.label_turbulence_val.setText(str(val)))
+        self.slider_beam_wander.valueChanged.connect(lambda _: self._emit_config())
+        self.slider_beam_wander.valueChanged.connect(lambda val: self.label_beam_wander_val.setText(f"{val/100:.2f}×"))
+        self.slider_beam_spread.valueChanged.connect(lambda _: self._emit_config())
+        self.slider_beam_spread.valueChanged.connect(lambda val: self.label_beam_spread_val.setText(f"{val/100:.2f}×"))
+        self.slider_intensity_fluct.valueChanged.connect(lambda _: self._emit_config())
+        self.slider_intensity_fluct.valueChanged.connect(lambda val: self.label_intensity_fluct_val.setText(f"{val/100:.2f}×"))
         self.slider_salt_density.valueChanged.connect(lambda _: self._emit_config())
         self.slider_salt_density.valueChanged.connect(lambda val: self.label_salt_density_val.setText(f"{val/100:.2f}"))
         self.slider_salt_ratio.valueChanged.connect(lambda _: self._emit_config())
@@ -309,6 +564,47 @@ class DisturbancesPanel(BaseConfigPanel):
         self.combo_platform.currentTextChanged.connect(lambda _: self._emit_config())
         self.slider_platform_speed.valueChanged.connect(lambda _: self._emit_config())
         self.slider_platform_speed.valueChanged.connect(lambda val: self.label_platform_speed_val.setText(f"{val/10:.1f} px/f"))
+        self.slider_platform_amp_x.valueChanged.connect(lambda _: self._emit_config())
+        self.slider_platform_amp_x.valueChanged.connect(lambda val: self.label_platform_amp_x_val.setText(f"{val} px"))
+        self.slider_platform_amp_y.valueChanged.connect(lambda _: self._emit_config())
+        self.slider_platform_amp_y.valueChanged.connect(lambda val: self.label_platform_amp_y_val.setText(f"{val} px"))
+        self.slider_platform_direction.valueChanged.connect(lambda _: self._emit_config())
+        self.slider_platform_direction.valueChanged.connect(lambda val: self.label_platform_direction_val.setText(f"{val}°"))
+        self.chk_air_details.toggled.connect(lambda on: self.air_details.setVisible(bool(on)))
+        self.chk_cam_details.toggled.connect(lambda on: self.cam_details.setVisible(bool(on)))
+        self.chk_sensor_details.toggled.connect(lambda on: self._sync_sensor_details(bool(on)))
+
+    def _sync_sensor_details(self, show: bool) -> None:
+        """Fine-tuning rows are hidden until the user asks for them."""
+        for w in [self.label_gaussian_max, self.slider_gaussian_max, self.label_gaussian_max_val,
+                  self.label_salt_ratio, self.slider_salt_ratio, self.label_salt_ratio_val,
+                  self.label_poisson_scale, self.slider_poisson_scale, self.label_poisson_scale_val,
+                  self.label_poisson_peak, self.slider_poisson_peak, self.label_poisson_peak_val]:
+            w.setVisible(show)
+        # Strength rows still follow their noise-type toggle.
+        self._sync_image_noise_visibility()
+
+    def _on_channel_preset_changed(self, preset: str):
+        # Apply the §15 disturbance preset to the whole panel, then refresh.
+        self._applying_preset = True
+        try:
+            cfg = self.collect_config().apply_preset(preset)
+        except Exception:
+            self._applying_preset = False
+            return
+        # Keep the preset combo on the chosen entry while other widgets sync.
+        self.set_config(cfg, emit=False)
+        try:
+            self.combo_channel_preset.blockSignals(True)
+            idx = self.combo_channel_preset.findText(str(preset))
+            if idx >= 0:
+                self.combo_channel_preset.setCurrentIndex(idx)
+            else:
+                self.combo_channel_preset.setCurrentText(str(preset))
+        finally:
+            self.combo_channel_preset.blockSignals(False)
+            self._applying_preset = False
+        self._emit_config()
 
     def _on_gaussian_sigma_changed(self):
         if self.slider_gaussian_sigma.value() > self.slider_gaussian_max.value():
@@ -325,16 +621,25 @@ class DisturbancesPanel(BaseConfigPanel):
         self._emit_config()
 
     def _sync_image_noise_visibility(self):
-        """Only selected types show their parameter rows."""
+        """Only selected types show their strength rows."""
+        show_details = bool(getattr(self, "chk_sensor_details", None) is not None
+                            and self.chk_sensor_details.isChecked())
         is_sp = bool(self.chk_salt_pepper.isChecked())
         is_g = bool(self.chk_gaussian.isChecked())
         is_p = bool(self.chk_poisson.isChecked())
-        for w in [self.label_salt_density, self.slider_salt_density, self.label_salt_ratio, self.slider_salt_ratio]:
-            w.setVisible(is_sp)
-        for w in [self.label_gaussian_sigma, self.slider_gaussian_sigma, self.label_gaussian_max, self.slider_gaussian_max]:
-            w.setVisible(is_g)
-        for w in [self.label_poisson_scale, self.slider_poisson_scale, self.label_poisson_peak, self.slider_poisson_peak]:
-            w.setVisible(is_p)
+        self.label_salt_density.setVisible(is_sp)
+        self.slider_salt_density.setVisible(is_sp)
+        self.label_salt_density_val.setVisible(is_sp)
+        for w in [self.label_salt_ratio, self.slider_salt_ratio, self.label_salt_ratio_val]:
+            w.setVisible(is_sp and show_details)
+        self.label_gaussian_sigma.setVisible(is_g)
+        self.slider_gaussian_sigma.setVisible(is_g)
+        self.label_gaussian_sigma_val.setVisible(is_g)
+        for w in [self.label_gaussian_max, self.slider_gaussian_max, self.label_gaussian_max_val]:
+            w.setVisible(is_g and show_details)
+        for w in [self.label_poisson_scale, self.slider_poisson_scale, self.label_poisson_scale_val,
+                  self.label_poisson_peak, self.slider_poisson_peak, self.label_poisson_peak_val]:
+            w.setVisible(is_p and show_details)
 
     def _sync_atmo_enabled(self):
         is_user = str(self.combo_atmospheric.currentText()) == "User Defined"
@@ -357,10 +662,47 @@ class DisturbancesPanel(BaseConfigPanel):
         self._sync_atmo_enabled()
         self._emit_config()
 
+    def _refresh_summary(self) -> None:
+        """One-line plain-language recap of what is currently active."""
+        try:
+            cfg = self.collect_config()
+        except Exception:
+            return
+        if not bool(getattr(cfg, "global_enabled", True)):
+            self.label_summary.setText("All disturbances off — clean signal.")
+            return
+        parts = [str(cfg.atmospheric_preset)]
+        try:
+            sev = int(float(getattr(cfg, "channel_severity", 1.0)) * 100)
+            if str(cfg.atmospheric_preset) != "Clear":
+                parts.append(f"{sev}%")
+        except Exception:
+            pass
+        if int(getattr(cfg, "turbulence", 0)):
+            parts.append(f"turbulence {int(cfg.turbulence)}")
+        if float(getattr(cfg, "camera_jitter", 0.0)) > 1e-9:
+            parts.append(f"shake {float(cfg.camera_jitter):.1f}px")
+        noises = []
+        if bool(cfg.enable_gaussian):
+            noises.append(f"grain σ{float(cfg.gaussian_sigma):.1f}")
+        if bool(cfg.enable_salt_pepper):
+            noises.append(f"speckle {float(cfg.salt_pepper_density) * 100:.0f}%")
+        if bool(cfg.enable_poisson):
+            noises.append("flicker")
+        if noises:
+            parts.append(" + ".join(noises))
+        if float(getattr(cfg, "platform_speed", 0.0)) > 1e-9:
+            parts.append(f"drift {cfg.platform_profile} {float(cfg.platform_speed):.1f}px/f")
+        if len(parts) <= 1 and str(cfg.atmospheric_preset) == "Clear":
+            self.label_summary.setText("Clear air — no visible effect.")
+        else:
+            self.label_summary.setText(" · ".join(parts))
+
     def collect_config(self) -> DisturbanceConfig:
-        # Hidden legacy sliders are 0 (removed from UI)
+        # Hidden legacy sliders are 0 (removed from UI); channel turbulence
+        # slider is authoritative for the legacy turbulence field.
         cfg = DisturbanceConfig(
-            turbulence=int(self.sliders["Turbulence"].value()),
+            turbulence=int(self.slider_turbulence.value()),
             vibration=int(self.sliders["Vibration"].value()),
             camera_motion=int(self.sliders["Camera Motion"].value()),
             noise=int(self.sliders["Noise"].value()),
@@ -375,11 +717,24 @@ class DisturbancesPanel(BaseConfigPanel):
             poisson_peak=self.slider_poisson_peak.value(),
             max_noise_std=self.slider_gaussian_max.value() / 10.0,
             camera_jitter=self.slider_jitter.value() / 10.0,
+            camera_jitter_enabled=bool(self.chk_jitter_enabled.isChecked()),
             atmospheric_preset=str(self.combo_atmospheric.currentText()),
             atmospheric_contrast=self.slider_atmo_contrast.value(),
             atmospheric_brightness=self.slider_atmo_brightness.value(),
+            platform_enabled=bool(self.chk_platform_enabled.isChecked()),
             platform_profile=str(self.combo_platform.currentText()),
             platform_speed=self.slider_platform_speed.value() / 10.0,
+            platform_amplitude_x=float(self.slider_platform_amp_x.value()),
+            platform_amplitude_y=float(self.slider_platform_amp_y.value()),
+            platform_direction=float(self.slider_platform_direction.value()),
+            global_enabled=bool(self.chk_global_enabled.isChecked()),
+            channel_enabled=bool(self.chk_channel_enabled.isChecked()),
+            channel_severity=self.slider_channel_severity.value() / 100.0,
+            channel_attenuation_strength=self.slider_channel_attenuation.value() / 100.0,
+            channel_attenuation_model=str(self.combo_attenuation_model.currentText()),
+            channel_beam_wander=self.slider_beam_wander.value() / 100.0,
+            channel_beam_spread=self.slider_beam_spread.value() / 100.0,
+            channel_intensity_fluctuation=self.slider_intensity_fluct.value() / 100.0,
         )
         return cfg.validate()
 
@@ -387,11 +742,17 @@ class DisturbancesPanel(BaseConfigPanel):
         cfg = cfg.validate()
         widgets = [
             self.chk_salt_pepper, self.chk_gaussian, self.chk_poisson,
+            self.chk_global_enabled, self.chk_channel_enabled, self.chk_jitter_enabled,
+            self.chk_platform_enabled, self.combo_channel_preset, self.combo_attenuation_model,
+            self.slider_channel_severity, self.slider_channel_attenuation,
+            self.slider_turbulence, self.slider_beam_wander, self.slider_beam_spread,
+            self.slider_intensity_fluct,
             self.slider_salt_density, self.slider_salt_ratio,
             self.slider_gaussian_sigma, self.slider_gaussian_max,
             self.slider_poisson_scale, self.slider_poisson_peak,
             self.slider_jitter, self.combo_atmospheric, self.slider_atmo_contrast, self.slider_atmo_brightness,
             self.combo_platform, self.slider_platform_speed,
+            self.slider_platform_amp_x, self.slider_platform_amp_y, self.slider_platform_direction,
         ]
         for w in widgets:
             w.blockSignals(True)
@@ -421,6 +782,26 @@ class DisturbancesPanel(BaseConfigPanel):
             self.label_poisson_peak_val.setText(str(getattr(cfg, "poisson_peak", 100)))
             self.slider_jitter.setValue(int(cfg.camera_jitter * 10))
             self.label_jitter_val.setText(f"{cfg.camera_jitter:.1f} px")
+            self.chk_jitter_enabled.setChecked(bool(getattr(cfg, "camera_jitter_enabled", True)))
+            self.chk_global_enabled.setChecked(bool(getattr(cfg, "global_enabled", True)))
+            self.chk_channel_enabled.setChecked(bool(getattr(cfg, "channel_enabled", True)))
+            self.chk_platform_enabled.setChecked(bool(getattr(cfg, "platform_enabled", True)))
+            self.slider_channel_severity.setValue(int(float(getattr(cfg, "channel_severity", 1.0)) * 100))
+            self.label_channel_severity_val.setText(f"{int(float(getattr(cfg, 'channel_severity', 1.0)) * 100)}%")
+            self.slider_channel_attenuation.setValue(int(float(getattr(cfg, "channel_attenuation_strength", 1.0)) * 100))
+            self.label_channel_attenuation_val.setText(f"{float(getattr(cfg, 'channel_attenuation_strength', 1.0)):.2f}")
+            idxm = self.combo_attenuation_model.findText(str(getattr(cfg, "channel_attenuation_model", "Atmospheric")))
+            if idxm >= 0:
+                self.combo_attenuation_model.setCurrentIndex(idxm)
+            self.slider_turbulence.setValue(int(cfg.turbulence))
+            self.label_turbulence_val.setText(str(int(cfg.turbulence)))
+            self.sliders["Turbulence"].setValue(int(cfg.turbulence))
+            self.slider_beam_wander.setValue(int(float(getattr(cfg, "channel_beam_wander", 1.0)) * 100))
+            self.label_beam_wander_val.setText(f"{float(getattr(cfg, 'channel_beam_wander', 1.0)):.2f}×")
+            self.slider_beam_spread.setValue(int(float(getattr(cfg, "channel_beam_spread", 1.0)) * 100))
+            self.label_beam_spread_val.setText(f"{float(getattr(cfg, 'channel_beam_spread', 1.0)):.2f}×")
+            self.slider_intensity_fluct.setValue(int(float(getattr(cfg, "channel_intensity_fluctuation", 1.0)) * 100))
+            self.label_intensity_fluct_val.setText(f"{float(getattr(cfg, 'channel_intensity_fluctuation', 1.0)):.2f}×")
             idx = self.combo_atmospheric.findText(str(cfg.atmospheric_preset))
             if idx >= 0:
                 self.combo_atmospheric.setCurrentIndex(idx)
@@ -445,19 +826,32 @@ class DisturbancesPanel(BaseConfigPanel):
                 self.combo_platform.setCurrentText(str(cfg.platform_profile))
             self.slider_platform_speed.setValue(int(cfg.platform_speed * 10))
             self.label_platform_speed_val.setText(f"{cfg.platform_speed:.1f} px/f")
+            self.slider_platform_amp_x.setValue(int(float(getattr(cfg, "platform_amplitude_x", 110.0))))
+            self.label_platform_amp_x_val.setText(f"{float(getattr(cfg, 'platform_amplitude_x', 110.0)):.0f} px")
+            self.slider_platform_amp_y.setValue(int(float(getattr(cfg, "platform_amplitude_y", 110.0))))
+            self.label_platform_amp_y_val.setText(f"{float(getattr(cfg, 'platform_amplitude_y', 110.0)):.0f} px")
+            self.slider_platform_direction.setValue(int(float(getattr(cfg, "platform_direction", 0.0))))
+            self.label_platform_direction_val.setText(f"{float(getattr(cfg, 'platform_direction', 0.0)):.0f}°")
             self._sync_atmo_enabled()
-            self._sync_image_noise_visibility()
+            self._sync_sensor_details(bool(self.chk_sensor_details.isChecked()))
         finally:
             for w in widgets:
                 w.blockSignals(False)
             for s in self.sliders.values():
                 s.blockSignals(False)
+        self._refresh_summary()
         if emit:
             self._emit_config()
 
     def _enhance_slider_highlight(self):
         # Add pressed/released highlighting for all sliders (light theme highlight)
         for slider, label in [
+            (self.slider_channel_severity, self.label_channel_severity_val),
+            (self.slider_channel_attenuation, self.label_channel_attenuation_val),
+            (self.slider_turbulence, self.label_turbulence_val),
+            (self.slider_beam_wander, self.label_beam_wander_val),
+            (self.slider_beam_spread, self.label_beam_spread_val),
+            (self.slider_intensity_fluct, self.label_intensity_fluct_val),
             (self.slider_salt_density, self.label_salt_density_val),
             (self.slider_salt_ratio, self.label_salt_ratio_val),
             (self.slider_gaussian_sigma, self.label_gaussian_sigma_val),
@@ -468,6 +862,9 @@ class DisturbancesPanel(BaseConfigPanel):
             (self.slider_atmo_contrast, self.label_atmo_contrast_val),
             (self.slider_atmo_brightness, self.label_atmo_brightness_val),
             (self.slider_platform_speed, self.label_platform_speed_val),
+            (self.slider_platform_amp_x, self.label_platform_amp_x_val),
+            (self.slider_platform_amp_y, self.label_platform_amp_y_val),
+            (self.slider_platform_direction, self.label_platform_direction_val),
         ]:
             slider.sliderPressed.connect(lambda lbl=label: lbl.setStyleSheet("color:#1e40af; font-weight:700; background:#dbeafe; border:2px solid #3b82f6; border-radius:4px; padding:2px 4px; font-size:11px;"))
             slider.sliderReleased.connect(lambda lbl=label: lbl.setStyleSheet("color:#374151; font-size:11px;"))
@@ -478,8 +875,24 @@ class DisturbancesPanel(BaseConfigPanel):
     def _emit_config(self) -> None:
         if getattr(self, "_building", False):
             return
+        # Any manual tweak means the setup no longer matches a named preset.
+        if not getattr(self, "_applying_preset", False):
+            try:
+                combo = getattr(self, "combo_channel_preset", None)
+                if combo is not None and str(combo.currentText()) != "Custom":
+                    combo.blockSignals(True)
+                    idx = combo.findText("Custom")
+                    if idx >= 0:
+                        combo.setCurrentIndex(idx)
+                    combo.blockSignals(False)
+            except Exception:
+                pass
         try:
             cfg = self.collect_config()
+            try:
+                self._refresh_summary()
+            except Exception:
+                pass
             self.configChanged.emit(cfg)
         except Exception:
             pass

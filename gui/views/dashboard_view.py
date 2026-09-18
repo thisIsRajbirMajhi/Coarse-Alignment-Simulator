@@ -4,7 +4,10 @@ import logging
 
 from PyQt5.QtWidgets import QFrame, QGridLayout, QLabel, QVBoxLayout, QWidget
 
-from gui.presentation.view_state import DashboardState, fmt_dim, fmt_ms, fmt_px
+from gui.presentation.view_state import (
+    DashboardState, fmt_count, fmt_dim, fmt_ms, fmt_pct, fmt_per_min,
+    fmt_px, fmt_px_mrad, fmt_time_s,
+)
 
 log = logging.getLogger(__name__)
 
@@ -30,12 +33,24 @@ class DashboardView(QWidget):
         "Duration (s)",
         "Frames Per Second (FPS)",
         "Jitter",
+        "Acquisition Time",
+        "Re-Acquisition Time",
+        "Searching Time",
+        "Retention Rate",
         "Camera Pan",
         "Camera Tilt",
         "FOV Size",
         "World Size",
     ]
     RIGHT_METRICS = [
+        "Detection Rate",
+        "Center Hit Rate",
+        "Average Target Loss Rate",
+        "Average Tracking Error",
+        "Total Re-Acquisition Count",
+        "Total Target Loss Count",
+        "Total Target Switches Count",
+        "RMS / RMSE",
         "Atmospheric Preset",
         "Platform Profile",
         "Platform Speed",
@@ -88,6 +103,18 @@ class DashboardView(QWidget):
             "Duration (s)": f"{state.duration_s:.0f} Sec",
             "Frames Per Second (FPS)": f"{state.fps:.1f}",
             "Jitter": fmt_ms(state.jitter_ms),
+            "Acquisition Time": fmt_time_s(state.acquisition_time_s),
+            "Re-Acquisition Time": fmt_time_s(state.reacquisition_time_s),
+            "Searching Time": fmt_time_s(state.searching_time_s),
+            "Retention Rate": fmt_pct(state.retention_rate_pct),
+            "Detection Rate": fmt_pct(state.detection_rate_pct),
+            "Center Hit Rate": fmt_pct(state.center_hit_rate_pct),
+            "Average Target Loss Rate": fmt_per_min(state.target_loss_rate_pct),
+            "Average Tracking Error": fmt_px_mrad(state.avg_track_err_px, state.avg_track_err_mrad),
+            "Total Re-Acquisition Count": fmt_count(state.reacquisition_count),
+            "Total Target Loss Count": fmt_count(state.target_loss_count),
+            "Total Target Switches Count": fmt_count(state.target_switch_count),
+            "RMS / RMSE": fmt_px_mrad(state.rms_px, state.rms_mrad),
             "Camera Pan": fmt_px(state.pan),
             "Camera Tilt": fmt_px(state.tilt),
             "FOV Size": fmt_dim(state.fov_w, state.fov_h),
@@ -104,6 +131,18 @@ class DashboardView(QWidget):
             if k in self._pills:
                 self._pills[k].setText(v)
 
+        def _rate_color(v: float | None, good_high: bool = True):
+            if v is None:
+                return None
+            if good_high:
+                return _GREEN if v >= 80 else (_AMBER if v >= 50 else _RED)
+            return _GREEN if v <= 0 else (_AMBER if v <= 1.0 else _RED)
+
+        def _err_color(px: float | None):
+            if px is None:
+                return None
+            return _GREEN if px <= 5.0 else (_AMBER if px <= 15.0 else _RED)
+
         try:
             colors = {
                 "Status": {
@@ -116,6 +155,12 @@ class DashboardView(QWidget):
                 "Jitter": _GREEN if state.jitter_ms is not None and state.jitter_ms <= 16.7
                           else (_AMBER if state.jitter_ms is not None and state.jitter_ms <= 33.0
                                 else (_RED if state.jitter_ms is not None else None)),
+                "Retention Rate": _rate_color(state.retention_rate_pct, True),
+                "Detection Rate": _rate_color(state.detection_rate_pct, True),
+                "Center Hit Rate": _rate_color(state.center_hit_rate_pct, True),
+                "Average Target Loss Rate": _rate_color(state.target_loss_rate_pct, False),
+                "Average Tracking Error": _err_color(state.avg_track_err_px),
+                "RMS / RMSE": _err_color(state.rms_px),
             }
             for k, c in colors.items():
                 if k in self._pills:

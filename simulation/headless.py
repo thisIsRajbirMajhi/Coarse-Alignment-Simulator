@@ -151,7 +151,12 @@ class HeadlessSimulation:
 
         if hasattr(self, "terminal_scenario") and self.terminal_scenario is not None:
             try:
-                fov_frame = self.terminal_scenario.render_fov_beacons(fov_frame, self.camera)
+                # Beam-state propagation: ideal beacons → channel → received
+                # spots, before camera/image-formation and sensor stages.
+                fov_frame = self.terminal_scenario.render_fov_beacons(
+                    fov_frame, self.camera,
+                    pipeline=self._disturbance_pipeline, rng=self.rng, dt=dt_eff,
+                )
             except Exception:
                 pass
 
@@ -244,7 +249,7 @@ class HeadlessSimulation:
                 pass
         try:
             self.local_terminal.update(
-                dt_wall, remote_scenario=getattr(self, "terminal_scenario", None),
+                dt_wall,
                 fov_frame=self._last_frame,
                 fov_capture_pose=getattr(self, "_last_capture_pose", None),
             )

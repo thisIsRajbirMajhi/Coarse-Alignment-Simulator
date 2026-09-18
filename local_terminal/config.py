@@ -410,14 +410,20 @@ class DetectionConfig:
     bandwidth: float = 10.0               # nm
     intensity_threshold: float = 0.0      # DN / power threshold
     minimum_snr: float = 8.0              # dB
-    expected_spot_size: float = 2.0       # mrad (covers 1 mrad beacon default and 3 mrad test targets)
-    expected_spot_tolerance: float = 1.5  # mrad (accepts 0.5..3.5 mrad out-of-box)
+    expected_spot_size: float = 1.0       # mrad (measured spot = rendered div*0.25 + min-patch; 1.0±1.5 covers div 1..3)
+    expected_spot_tolerance: float = 1.5  # mrad (accepts 0..2.5 mrad out-of-box)
     expected_spot_unit: str = "mrad"
     modulation_type: str = "AM"           # AM | PM | OOK | PPM
     modulation_frequency: float = 10.0    # kHz
     modulation_unit: str = "kHz"
     confidence_threshold: float = 0.85
-    target_id_filter: str = ""            # optional filter for specific remote terminal ID, "" = any matching
+    # Expected code is receiver configuration, not a reference to a simulator
+    # object.  Empty disables code correlation.
+    identification_code: str = ""
+    identification_code_chip_rate_hz: float = 8.0
+    code_correlation_threshold: float = 0.75
+    code_persistence: int = 2
+    target_id_filter: str = ""            # legacy alias; do not use for identity
 
     def validate(self) -> DetectionConfig:
         self.wavelength = float(max(400.0, min(self.wavelength, 2000.0)))
@@ -431,6 +437,10 @@ class DetectionConfig:
         self.modulation_frequency = float(max(0.0, min(self.modulation_frequency, 1000.0)))
         self.modulation_unit = str(self.modulation_unit or "kHz").strip()
         self.confidence_threshold = float(max(0.0, min(self.confidence_threshold, 1.0)))
+        self.identification_code = str(self.identification_code or "").strip()[:32]
+        self.identification_code_chip_rate_hz = float(max(0.5, min(self.identification_code_chip_rate_hz, 30.0)))
+        self.code_correlation_threshold = float(max(0.0, min(self.code_correlation_threshold, 1.0)))
+        self.code_persistence = int(max(1, min(self.code_persistence, 20)))
         self.target_id_filter = str(self.target_id_filter or "").strip()
         return self
 

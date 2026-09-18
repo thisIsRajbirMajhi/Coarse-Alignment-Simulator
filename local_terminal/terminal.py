@@ -10,7 +10,10 @@ import numpy as np
 from common.rng import get_rng
 from local_terminal.acquisition import AcquisitionScanner
 from local_terminal.config import LocalTerminalConfig
-from local_terminal.detection import DetectionEngine
+from local_terminal.detection import detect_beacon_candidates, estimate_wavelength_nm
+from local_terminal.models import CameraFrame, UpdateInput
+from local_terminal.states import LocalTerminalState as _PipelineState
+from local_terminal.system import LocalTerminalSystem
 from local_terminal.tracking import TargetTracker
 
 
@@ -66,10 +69,20 @@ class LocalTerminal:
         # Sensor vignetting
         self.vignetting = float(self.config.vignetting)
 
-        # Operational Subsystems
+        # Operational Subsystems (perception is delegated to the
+        # LocalTerminalSystem image-only pipeline).
         self.scanner = AcquisitionScanner(self.config.acquisition, rng=self._rng)
-        self.detector = DetectionEngine(self.config.detection)
         self.tracker = TargetTracker(self.config.tracking, self.config.angular_model)
+        # Thirteen-module pipeline orchestrator (Plan §4). Strict image-only
+        # boundary: it never receives remote scenario/world truth.
+        self.system = LocalTerminalSystem(config=self.config, scene_bounds=scene_bounds,
+                                          rng=self._rng)
+        # Share the scanner instance so GUI scan state stays consistent.
+        try:
+            self.system.search.scanner = self.scanner
+        except Exception:
+            pass
+        self._frame_seq = 0
 
         # Operational telemetry & autonomy state
         self._target_locked = False
@@ -83,6 +96,10 @@ class LocalTerminal:
         self._last_cam_vel_y = 0.0
         self._confirm_counts: dict[str, int] = {}
         self._last_tracked_id: str | None = None
+        # Local observation tracks are created from pixels; they intentionally
+        # never contain a RemoteTerminal id or world position.
+        self._observation_tracks: dict[str, dict[str, Any]] = {}
+        self._next_observation_track_id = 1
 
         self._clamp_search_region_to_reachable()
         if self.config.acquisition.mode.upper() in ("SEARCH", "AUTO", "AUTO_ACQUISITION"):
@@ -259,6 +276,10 @@ class LocalTerminal:
         else:
             due = self._time + latency_s
             self._pending.append((due, float(d_pan), float(d_tilt), float(dt)))
+            # Bound the queue (§36): drop oldest under sustained overload
+            # so memory stays flat and commands stay fresh.
+            while len(self._pending) > 32:
+                self._pending.popleft()
 
     def _clamp_search_region_to_reachable(self) -> None:
         """Clip deg search region to what the PTZ can actually reach.
@@ -298,16 +319,16 @@ class LocalTerminal:
     def update(
         self,
         dt: float,
-        remote_scenario: Any | None = None,
         controller: Any | None = None,
         fov_frame=None,
         fov_capture_pose: tuple[float, float] | None = None,
+        **kwargs: Any,
     ) -> None:
         """Advance time, process latency queue, and execute acquisition/detection/tracking.
 
-        fov_frame: previous captured frame (H,W,3 uint8) for image-gated
-        detection. Optional — without it detection falls back to analytic
-        stubs so existing callers/tests are unaffected.
+        fov_frame: previous captured frame (H,W,3 uint8).  Autonomous
+        detection is image-only; without a frame the terminal keeps searching
+        and never substitutes scenario/world-model ground truth.
         fov_capture_pose: (pan, tilt) at which fov_frame was captured. The
         latency queue drains before detection, so the pose may have moved
         since capture; the spot measurement is shifted back accordingly.
@@ -334,9 +355,13 @@ class LocalTerminal:
             self._last_cam_vel_x = 0.0
             self._last_cam_vel_y = 0.0
 
+        # Fail closed: world truth must never reach the receiver, even
+        # via a stale keyword from old call sites.
+        if "remote_scenario" in kwargs:
+            raise TypeError("remote_scenario was removed: LocalTerminal is image-only")
         # Step operations
         self.step_operations(
-            dt, remote_scenario=remote_scenario, controller=controller,
+            dt, controller=controller,
             fov_frame=fov_frame, fov_capture_pose=fov_capture_pose,
         )
 
@@ -386,9 +411,14 @@ class LocalTerminal:
         self.fov_height = int(config.camera.resolution_height)
         self.set_vignetting(float(config.vignetting))
         self.scanner.config = config.acquisition
-        self.detector.config = config.detection
         self.tracker.config = config.tracking
         self.tracker.angular_model = config.angular_model
+        try:
+            self.system.refresh_config(config)
+            self.system.search.scanner = self.scanner
+            self.system.scene_bounds = self.scene_bounds
+        except Exception:
+            pass
         self._clamp_to_range()
         self._clamp_search_region_to_reachable()
 
@@ -445,20 +475,100 @@ class LocalTerminal:
     # -----------------------------------------------------------------
     # Operational Cycle: Acquisition, Detection, Tracking, Link State
     # -----------------------------------------------------------------
+    def _image_candidates(self, frame, dt: float) -> list[dict[str, Any]]:
+        """Measure and associate beacon candidates from the received frame."""
+        raw = detect_beacon_candidates(frame, minimum_peak=max(30.0, self.config.detection.intensity_threshold))
+        active: set[str] = set()
+        for candidate in raw:
+            nearest_id, nearest_distance = None, float("inf")
+            for track_id, track in self._observation_tracks.items():
+                distance = math.hypot(candidate["x"] - track["x"], candidate["y"] - track["y"])
+                if distance < nearest_distance:
+                    nearest_id, nearest_distance = track_id, distance
+            if nearest_id is None or nearest_distance > 25.0:
+                nearest_id = f"BEACON-{self._next_observation_track_id}"
+                self._next_observation_track_id += 1
+                self._observation_tracks[nearest_id] = {"x": candidate["x"], "y": candidate["y"], "history": []}
+            track = self._observation_tracks[nearest_id]
+            track["x"], track["y"] = candidate["x"], candidate["y"]
+            history = track.setdefault("history", [])
+            history.append((float(self._time), float(candidate["peak_dn"])))
+            del history[:-96]
+            # The renderer exposes modulation as intensity variation.  This
+            # observable score is intentionally conservative: it does not
+            # claim a modulation match until several samples have arrived.
+            if len(history) >= 4:
+                samples = np.asarray([sample[1] for sample in history], dtype=float)
+                mean = max(1.0, float(np.mean(samples)))
+                modulation_score = float(np.clip(np.std(samples) / mean * 3.0, 0.0, 1.0))
+            else:
+                modulation_score = 0.0
+            modulation_hz = 0.0
+            if len(history) >= 8 and modulation_score >= 0.03:
+                samples = np.asarray([sample[1] for sample in history], dtype=float)
+                sample_dt = float(np.median(np.diff([sample[0] for sample in history])))
+                if sample_dt > 1e-5:
+                    spectrum = np.abs(np.fft.rfft(samples - samples.mean()))
+                    if spectrum.size > 1:
+                        peak_bin = int(np.argmax(spectrum[1:]) + 1)
+                        modulation_hz = float(np.fft.rfftfreq(samples.size, sample_dt)[peak_bin])
+            code_correlation = self._code_correlation(history)
+            wavelength, spectral_score = estimate_wavelength_nm(candidate["bgr"])
+            candidate.update({
+                "terminal_id": nearest_id, "wavelength_nm": wavelength,
+                "spectral_score": spectral_score, "modulation_score": modulation_score,
+                "modulation_hz": modulation_hz,
+                "code_correlation": code_correlation,
+            })
+            active.add(nearest_id)
+        # Tracks are receiver-side memory only.  Retain them briefly through a
+        # dropout so reacquisition can keep a stable local identity.
+        for track_id in list(self._observation_tracks):
+            if track_id not in active:
+                track = self._observation_tracks[track_id]
+                track["misses"] = int(track.get("misses", 0)) + 1
+                if track["misses"] > 45:
+                    del self._observation_tracks[track_id]
+            else:
+                self._observation_tracks[track_id]["misses"] = 0
+        return raw
+
+    def _code_correlation(self, history: list[tuple[float, float]]) -> float | None:
+        """Correlate sampled intensity with this receiver's expected OOK code.
+
+        This knows only the locally configured code and a shared simulation
+        clock; it has no access to a remote terminal object or configuration.
+        """
+        code = self.config.detection.identification_code
+        if not code or len(history) < 12:
+            return None
+        bits = "".join(f"{ord(ch):08b}" for ch in code)
+        rate = float(self.config.detection.identification_code_chip_rate_hz)
+        expected = np.asarray([1.0 if bits[int(t * rate) % len(bits)] == "1" else 0.25 for t, _ in history], dtype=float)
+        observed = np.asarray([value for _, value in history], dtype=float)
+        expected -= expected.mean()
+        observed -= observed.mean()
+        denom = float(np.linalg.norm(expected) * np.linalg.norm(observed))
+        return float(np.clip(np.dot(expected, observed) / denom, -1.0, 1.0)) if denom > 1e-6 else 0.0
+
     def step_operations(
         self,
         dt: float,
-        remote_scenario: Any | None = None,
         controller: Any | None = None,
         fov_frame=None,
         fov_capture_pose: tuple[float, float] | None = None,
+        **kwargs: Any,
     ) -> None:
         """Step autonomous acquisition, optical detection, closed-loop tracking, and comms.
 
-        fov_frame: previous captured frame for image-gated detection
-        (peak DN / SNR measured at each candidate spot). Optional.
-        fov_capture_pose: pose at capture; compensates queue-drain motion.
+        STRICT IMAGE-ONLY BOUNDARY (Plan §1, §38): perception derives solely
+        from ``fov_frame`` + PTZ pose/velocity + local configuration.
+        World truth is never accepted: passing ``remote_scenario`` raises
+        TypeError (fail closed). ``fov_frame=None`` means no observation
+        this cycle (search runs).
         """
+        if "remote_scenario" in kwargs:
+            raise TypeError("remote_scenario was removed: LocalTerminal is image-only")
         if self.config.state.power_state != "ON":
             self.config.state.operational_state = "OFF"
             self.config.state.ptz_state = "IDLE"
@@ -468,350 +578,194 @@ class LocalTerminal:
             self.config.state.link_state = "NO_LINK"
             return
 
-        x0, y0, x1, y1 = self.get_fov_rect()
-        target_in_fov = False
-        spot_center_fov: tuple[float, float] | None = None
-        beacon_eval: dict[str, Any] = {
-            "detected": False,
-            "confirmed": False,
-            "confidence": 0.0,
-            "snr_db": 0.0,
-        }
-        self.candidate_evaluations.clear()
+        # Keep pipeline config in sync (GUI may mutate self.config live).
+        try:
+            self.system.refresh_config(self.config)
+        except Exception:
+            pass
+        try:
+            self.system.search.scanner = self.scanner
+        except Exception:
+            pass
 
-        # -------------------------------------------------------------
-        # 1. Multi-Target Detection & Signature Discrimination
-        # -------------------------------------------------------------
-        if remote_scenario is not None:
-            visible = []
-            if hasattr(remote_scenario, "get_visible_terminals"):
-                visible = remote_scenario.get_visible_terminals(self)
-            elif hasattr(remote_scenario, "terminals"):
-                visible = [t for t in remote_scenario.terminals if x0 <= t.x <= x1 and y0 <= t.y <= y1]
+        # Build CameraFrame input (Plan §2). Invalid/None frame = no observation.
+        self._frame_seq += 1
+        cam_frame = None
+        try:
+            if fov_frame is not None:
+                import numpy as _np
+                arr = _np.asarray(fov_frame)
+                if arr.size > 0 and arr.ndim in (2, 3):
+                    cam_frame = CameraFrame.from_image(arr, frame_id=self._frame_seq,
+                                                       timestamp=float(self._time))
+        except Exception:
+            cam_frame = None
 
-            evaluated_candidates = []
-            for t in visible:
-                b_cfg = getattr(t.config, "beacon", None)
-                if b_cfg is None:
-                    continue
+        cam_vel = (float(self._last_cam_vel_x), float(self._last_cam_vel_y))
+        pose = (float(self.pan), float(self.tilt))
+        try:
+            out = self.system.update(UpdateInput(timestamp=float(self._time), delta_time=float(dt),
+                                                 camera_frame=cam_frame, current_ptz_pose=pose,
+                                                 current_ptz_velocity=cam_vel,
+                                                 local_configuration=self.config))
+        except Exception:
+            return
 
-                div_mrad = getattr(b_cfg, "divergence_mrad", None)
-                if div_mrad is None:
-                    div_mrad = getattr(b_cfg, "div_h_mrad", 3.0)
-
-                mod_f = getattr(b_cfg, "mod_freq_khz", None)
-                if mod_f is None:
-                    pr = getattr(b_cfg, "pulse_rate_hz", None)
-                    mod_f = pr * 0.001 if pr is not None else getattr(b_cfg, "pulse_rate_khz", 10.0)
-
-                # Image-gated measurement: when a frame is available, use
-                # measured peak/SNR at the candidate spot instead of stubs
-                # so washed-out/occluded beacons correctly fail.
-                spot_guess = (float(t.x - x0), float(t.y - y0))
-                if fov_frame is not None and t.is_emitting:
+        # --- Translate pipeline output to actuator + legacy telemetry ---
+        # PTZ motion owns the single move path (search / track / coast).
+        try:
+            cmd = out.ptz_command
+            if cmd is not None:
+                pan_lo, pan_hi = self._effective_pan_range()
+                tilt_lo, tilt_hi = self._effective_tilt_range()
+                tgt_pan = float(max(pan_lo, min(pan_hi, cmd.target_pan)))
+                tgt_tilt = float(max(tilt_lo, min(tilt_hi, cmd.target_tilt)))
+                if out.local_terminal_state == _PipelineState.TRACKING and controller is not None:
                     try:
-                        from local_terminal.detection import estimate_spot_brightness as _est
-                        guess = spot_guess
-                        if fov_capture_pose is not None:
-                            import math as _math
-                            dx = float(fov_capture_pose[0]) - float(self.pan)
-                            dy = float(fov_capture_pose[1]) - float(self.tilt)
-                            # Slewing fast: frame too stale to measure, use stubs.
-                            if _math.hypot(dx, dy) > 25.0:
-                                peak_dn, snr_db = 180.0, 15.0
-                            else:
-                                guess = (spot_guess[0] + dx, spot_guess[1] + dy)
-                                peak_dn, snr_db = _est(fov_frame, guess)
-                        else:
-                            peak_dn, snr_db = _est(fov_frame, guess)
-                        # Fall back to stubs only when measurement is degenerate
-                        # (e.g. first frame not yet captured).
-                        if peak_dn <= 0.0 and snr_db <= 0.0:
-                            peak_dn, snr_db = 180.0, 15.0
+                        err = (out.tracking_status.tracking_error_x,
+                               out.tracking_status.tracking_error_y)
+                        action = controller.step(err, float(dt))
+                        self.move(float(action[0]), float(action[1]), float(dt))
                     except Exception:
-                        peak_dn, snr_db = 180.0, 15.0
+                        self.move(float(tgt_pan - self.pan), float(tgt_tilt - self.tilt), float(dt))
                 else:
-                    peak_dn = 180.0 if t.is_emitting else 0.0
-                    snr_db = 15.0 if t.is_emitting else 0.0
-                cand_eval = self.detector.evaluate_target(
-                    in_fov=True,
-                    beacon_power=b_cfg.power_w if t.is_emitting else 0.0,
-                    beacon_wavelength=getattr(b_cfg, "wavelength_nm", 1550.0),
-                    beacon_bandwidth=getattr(b_cfg, "bandwidth_nm", 10.0),
-                    beacon_divergence_mrad=float(div_mrad),
-                    modulation_type=getattr(b_cfg, "mod_type", "AM"),
-                    modulation_freq_khz=float(mod_f),
-                    estimated_snr_db=float(snr_db),
-                    estimated_dn=float(peak_dn),
-                )
+                    self.move(float(tgt_pan - self.pan), float(tgt_tilt - self.tilt), float(dt))
+        except Exception:
+            pass
 
-                t_id = getattr(getattr(t.config, "identity", None), "id", f"RT-{id(t)}")
-
-                # Apply target ID filter if user specified one
-                id_filter = getattr(self.config.detection, "target_id_filter", "")
-                if id_filter and id_filter.strip() and t_id != id_filter.strip():
-                    cand_eval["confirmed"] = False
-                    cand_eval["reason"] = f"Filtered out (expected {id_filter})"
-
-                eval_entry = {
-                    "terminal_id": t_id,
-                    "terminal": t,
-                    "pos": (float(t.x), float(t.y)),
-                    "spot_fov": (float(t.x - x0), float(t.y - y0)),
-                    "evaluation": cand_eval,
-                    "confidence": float(cand_eval.get("confidence", 0.0)),
-                    "confirmed": bool(cand_eval.get("confirmed", False)),
-                }
-                evaluated_candidates.append(eval_entry)
-
-            self.candidate_evaluations = [
-                {
-                    "terminal_id": c["terminal_id"],
-                    "confidence": c["confidence"],
-                    "confirmed": c["confirmed"],
-                    "fov_x": c["spot_fov"][0],
-                    "fov_y": c["spot_fov"][1],
-                    "wavelength_match": c["evaluation"].get("wavelength_match", False),
-                    "modulation_match": c["evaluation"].get("modulation_match", False),
-                    "spot_size_match": c["evaluation"].get("spot_size_match", False),
-                    "reason": c["evaluation"].get("reason", "OK"),
-                }
-                for c in evaluated_candidates
-            ]
-
-            # Autonomous Candidate Selection & Identification with hysteresis:
-            # a new target needs 2 consecutive confirmations to take over,
-            # preventing flicker between equal-confidence candidates.
-            target_candidate = None
-            for c in evaluated_candidates:
-                tid = c["terminal_id"]
-                if c["confirmed"]:
-                    self._confirm_counts[tid] = int(self._confirm_counts.get(tid, 0)) + 1
-                else:
-                    self._confirm_counts[tid] = 0
-            for tid in list(self._confirm_counts.keys()):
-                if all(tid != c["terminal_id"] for c in evaluated_candidates):
-                    self._confirm_counts.pop(tid, None)
-
-            # Case A: keep active target if still visible and confirmed.
-            if self.active_target_id is not None:
-                for c in evaluated_candidates:
-                    if c["terminal_id"] == self.active_target_id:
-                        if c["confirmed"]:
-                            target_candidate = c
-                        break
-                if target_candidate is None and self.active_target_id is not None:
-                    # Active vanished: keep id during coast, drop only on loss.
-                    pass
-
-            # Case B: track best confirmed candidate immediately for
-            # responsiveness, but only reassign identity once stable
-            # (2 consecutive frames) to avoid ID flicker.
-            if target_candidate is None:
-                confirmed_candidates = [c for c in evaluated_candidates if c["confirmed"]]
-                if confirmed_candidates:
-                    confirmed_candidates.sort(key=lambda c: c["confidence"], reverse=True)
-                    best = confirmed_candidates[0]
-                    target_candidate = best
-                    if self.active_target_id is None or self._confirm_counts.get(best["terminal_id"], 0) >= 2:
-                        self.active_target_id = target_candidate["terminal_id"]
-
-            # FOV margin: edge grazes (within 15 px of the border) stay
-            # DETECTING/DISCRIMINATING — confirming them causes
-            # lock-then-instantly-lose churn as the spot exits mid-slew.
-            _FOV_MARGIN = 15.0
-            _margin_rejected_id: str | None = None
-            if target_candidate is not None:
-                _sx, _sy = target_candidate["spot_fov"]
-                if not (_FOV_MARGIN <= _sx <= self.fov_width - _FOV_MARGIN
-                        and _FOV_MARGIN <= _sy <= self.fov_height - _FOV_MARGIN):
-                    _margin_rejected_id = target_candidate["terminal_id"]
-                    target_candidate = None
-
-            if target_candidate is not None:
-                target_in_fov = True
-                spot_center_fov = target_candidate["spot_fov"]
-                beacon_eval = target_candidate["evaluation"]
-            elif evaluated_candidates:
-                # Decoys, non-matching candidates, or margin-rejected edge
-                # grazes visible in FOV — never confirm from this branch.
-                target_in_fov = True
-                beacon_eval = dict(evaluated_candidates[0]["evaluation"])
-                if _margin_rejected_id is not None:
-                    beacon_eval["confirmed"] = False
-                    beacon_eval["reason"] = "Spot too close to FOV edge"
-                    # Keep identity sticky so the sweep continues toward it.
-                    self.active_target_id = _margin_rejected_id
-            else:
-                beacon_eval = self.detector.evaluate_target(
-                    in_fov=False, beacon_power=0.0, beacon_wavelength=1550,
-                    beacon_bandwidth=10, beacon_divergence_mrad=3.0,
-                    modulation_type="AM", modulation_freq_khz=10.0,
-                )
-
-        self._last_detection_eval = beacon_eval
-        target_confirmed = bool(beacon_eval.get("confirmed", False))
-
-        if target_confirmed:
-            self.config.state.detection_state = "TARGET_CONFIRMED"
-        elif self.candidate_evaluations:
-            self.config.state.detection_state = "DISCRIMINATING"
-        elif target_in_fov:
-            self.config.state.detection_state = "DETECTING"
-        else:
-            self.config.state.detection_state = "NO_TARGET"
-
-        # -------------------------------------------------------------
-        # 2. Autonomous Acquisition & Scanning
-        # -------------------------------------------------------------
-        acq_mode = self.config.acquisition.mode.upper()
-        is_autonomous_acq = acq_mode in ("AUTO", "SEARCH", "AUTO_ACQUISITION")
-
-        if target_confirmed:
-            self.config.state.acquisition_state = "ACQUIRED"
-            self.scanner.stop()
-            self._reacquire_dwell = 0.0
-        elif is_autonomous_acq:
-            # Never scan while the tracking loop owns motion (TRACKING or
-            # REACQUIRING coast). Scanning on the first dropout frame used
-            # to queue a rail-bound jump that fought the coast command.
-            if self.config.state.tracking_state not in ("REACQUIRING", "TRACKING"):
-                if self.config.state.acquisition_state != "SEARCHING":
-                    self.scanner.start()
-                    self.config.state.acquisition_state = "SEARCHING"
-
-                d_pan_deg, d_tilt_deg, timed_out = self.scanner.update(dt)
-                if timed_out and acq_mode == "SEARCH":
-                    self.scanner.stop()
-                    self.config.state.acquisition_state = "IDLE"
-                else:
-                    self._clamp_search_region_to_reachable()
-                    scale_x = self.config.angular_model.pixel_to_angle_x * 0.001
-                    scale_y = self.config.angular_model.pixel_to_angle_y * 0.001
-                    px_per_deg_x = 17.453292519943295 / max(1e-6, scale_x)
-                    px_per_deg_y = 17.453292519943295 / max(1e-6, scale_y)
-
-                    target_pan = float(self.config.ptz.home_pan) + float(d_pan_deg) * px_per_deg_x
-                    target_tilt = float(self.config.ptz.home_tilt) + float(d_tilt_deg) * px_per_deg_y
-                    # Clamp scan goal to reachable range BEFORE stepping so the
-                    # scanner doesn't wind up at the rails.
-                    pan_lo, pan_hi = self._effective_pan_range()
-                    tilt_lo, tilt_hi = self._effective_tilt_range()
-                    target_pan = float(max(pan_lo, min(pan_hi, target_pan)))
-                    target_tilt = float(max(tilt_lo, min(tilt_hi, target_tilt)))
-                    step_pan = float(target_pan - self.pan)
-                    step_tilt = float(target_tilt - self.tilt)
-                    self.move(step_pan, step_tilt, dt)
-
-        # -------------------------------------------------------------
-        # 3. Continuous Autonomous Tracking & Reacquisition Loop
-        # -------------------------------------------------------------
-        trk_mode = self.config.tracking.mode.upper()
-        can_track = trk_mode in ("AUTO", "TRACKING")
-
-        if can_track and target_confirmed and spot_center_fov is not None:
-            if self.config.state.tracking_state != "TRACKING":
-                # Fresh lock: drop scan-velocity + stale servo history so the
-                # first corrections go toward the target (accel limiter and
-                # integral otherwise start from fast-scan state and can push
-                # backwards). A new target id also re-inits the estimator.
-                self._last_vx = 0.0
-                self._last_vy = 0.0
-                _new_id = target_candidate["terminal_id"] if target_candidate is not None else None
-                if _new_id != getattr(self, "_last_tracked_id", None):
-                    self.tracker.reset()
-                    self._last_tracked_id = _new_id
-            self.config.state.tracking_state = "TRACKING"
-            self._reacquire_dwell = 0.0
-            cam_vel = (float(getattr(self, "_last_cam_vel_x", 0.0)), float(getattr(self, "_last_cam_vel_y", 0.0)))
-            tracking_res = self.tracker.update(dt, True, spot_center_fov, (self.fov_width, self.fov_height), camera_vel_px_s=cam_vel)
-            self._last_tracking_eval = tracking_res
-
-            err_px_x, err_px_y = tracking_res["error_px"]
-
-            if controller is not None:
-                try:
-                    action = controller.step((err_px_x, err_px_y), dt)
-                    self.move(float(action[0]), float(action[1]), dt)
-                except Exception:
-                    act_x, act_y = self.tracker.compute_control(err_px_x, err_px_y, dt)
-                    self.move(act_x, act_y, dt)
-            else:
-                act_x, act_y = self.tracker.compute_control(err_px_x, err_px_y, dt)
-                self.move(act_x, act_y, dt)
-
-        elif self.config.state.tracking_state in ("TRACKING", "REACQUIRING") and not target_confirmed:
-            # Autonomous reacquisition: coast along target velocity for up to 1.5s
-            self._reacquire_dwell += dt
-            tracking_res = self.tracker.update(dt, False, None, (self.fov_width, self.fov_height))
-            self._last_tracking_eval = tracking_res
-
-            if self._reacquire_dwell <= 1.5:
+        # Legacy mirror state for GUI/tests.
+        st = out.local_terminal_state
+        try:
+            if st == _PipelineState.FAULT:
+                self.config.state.operational_state = "FAULT"
+                self.config.state.acquisition_state = "IDLE"
+            elif st == _PipelineState.SEARCHING:
+                self.config.state.acquisition_state = "SEARCHING"
+            elif st in (_PipelineState.DETECTING,):
+                self.config.state.acquisition_state = "SEARCHING"
+            elif st == _PipelineState.VERIFYING:
+                self.config.state.acquisition_state = "ACQUIRING"
+            elif st in (_PipelineState.ACQUIRED, _PipelineState.TRACKING,
+                        _PipelineState.DEGRADED, _PipelineState.REACQUIRING):
+                self.config.state.acquisition_state = "ACQUIRED"
+            elif st == _PipelineState.LOST:
+                self.config.state.acquisition_state = "SEARCHING"
+            elif st == _PipelineState.IDLE:
+                self.config.state.acquisition_state = "IDLE"
+        except Exception:
+            pass
+        try:
+            if st != _PipelineState.FAULT and self.config.state.operational_state == "FAULT":
+                self.config.state.operational_state = "STANDBY"
+        except Exception:
+            pass
+        try:
+            if st == _PipelineState.FAULT:
+                self.config.state.detection_state = "NO_TARGET"
+            elif st == _PipelineState.SEARCHING:
+                self.config.state.detection_state = "DETECTING" if out.candidate_tracks else "NO_TARGET"
+            elif st == _PipelineState.DETECTING:
+                self.config.state.detection_state = "DETECTING"
+            elif st == _PipelineState.VERIFYING:
+                self.config.state.detection_state = "DISCRIMINATING"
+            elif st in (_PipelineState.ACQUIRED, _PipelineState.TRACKING,
+                        _PipelineState.DEGRADED, _PipelineState.REACQUIRING):
+                self.config.state.detection_state = "TARGET_CONFIRMED" if out.tracking_status.target_acquired or out.tracking_status.target_visible else "DISCRIMINATING"
+            elif st == _PipelineState.LOST:
+                self.config.state.detection_state = "NO_TARGET"
+        except Exception:
+            pass
+        try:
+            if st == _PipelineState.TRACKING:
+                self.config.state.tracking_state = "TRACKING"
+            elif st == _PipelineState.REACQUIRING:
                 self.config.state.tracking_state = "REACQUIRING"
-                # Predictive velocity coasting
-                coast_x = float(self.tracker.vel_x * dt)
-                coast_y = float(self.tracker.vel_y * dt)
-                self.move(coast_x, coast_y, dt)
-            else:
-                # Target lost: reset target and autonomously resume search
-                # around last-known pose (not region edge) for fast re-find.
-                self.active_target_id = None
-                self._confirm_counts.clear()
-                self._reacquire_dwell = 0.0
+            elif st == _PipelineState.LOST:
                 self.config.state.tracking_state = "LOST"
-
-                lost_action = self.config.tracking.lost_target_behavior.upper()
-                self._last_vx = 0.0
-                self._last_vy = 0.0
-                self._last_tracked_id = None
-                if lost_action in ("RESUME_SEARCH", "AUTO"):
-                    try:
-                        px_per_deg_x = 17.453292519943295 / max(
-                            1e-6, float(self.config.angular_model.pixel_to_angle_x) * 0.001)
-                        px_per_deg_y = 17.453292519943295 / max(
-                            1e-6, float(self.config.angular_model.pixel_to_angle_y) * 0.001)
-                        off_pan = (float(self.pan) - float(self.config.ptz.home_pan)) / px_per_deg_x
-                        off_tilt = (float(self.tilt) - float(self.config.ptz.home_tilt)) / px_per_deg_y
-                        self.scanner.start_at(off_pan, off_tilt)
-                    except Exception:
-                        self.scanner.start()
-                    self.config.state.acquisition_state = "SEARCHING"
-                    self.config.state.tracking_state = "OFF"
-                elif lost_action == "RETURN_HOME":
-                    self.go_home()
-                    self.config.state.tracking_state = "OFF"
-                elif lost_action == "HOLD_POSITION":
-                    # Hold: keep last pose, stay LOST until a target re-confirms.
-                    self.config.state.tracking_state = "LOST"
-        else:
-            if not target_confirmed:
-                self.config.state.tracking_state = "OFF"
-
-        # -------------------------------------------------------------
-        # 4. Optical Communication Link State Machine
-        # -------------------------------------------------------------
-        if target_confirmed and spot_center_fov is not None:
-            cx, cy = self.fov_width * 0.5, self.fov_height * 0.5
-            dist_to_center = math.hypot(spot_center_fov[0] - cx, spot_center_fov[1] - cy)
-            tol_px = min(self.fov_width, self.fov_height) * 0.15
-
-            if dist_to_center <= tol_px:
-                self._lock_dwell_time += dt
-                if self._lock_dwell_time >= 1.2:
-                    self.config.state.link_state = "CONNECTED"
-                elif self._lock_dwell_time >= 0.5:
-                    self.config.state.link_state = "HANDSHAKE"
-                elif self._lock_dwell_time >= 0.2:
-                    self.config.state.link_state = "OPTICAL_LOCK"
+            elif st == _PipelineState.DEGRADED:
+                self.config.state.tracking_state = "TRACKING"
             else:
-                self._lock_dwell_time = max(0.0, self._lock_dwell_time - dt * 2.0)
-                if self._lock_dwell_time < 0.2:
-                    self.config.state.link_state = "NO_LINK"
-        else:
-            self._lock_dwell_time = 0.0
-            self.config.state.link_state = "NO_LINK"
+                # Preserve LOST latch briefly handled by pipeline; else OFF.
+                if self.config.state.tracking_state not in ("REACQUIRING",):
+                    self.config.state.tracking_state = "OFF"
+        except Exception:
+            pass
 
-        self.config.communication.link_state = self.config.state.link_state
+        # Candidate evaluations: local BEACON-N IDs only (never RT- IDs).
+        try:
+            self.candidate_evaluations = [
+                {"terminal_id": t.observation_id, "confidence": float(t.confidence),
+                 "confirmed": bool(t.lifecycle_state.value in ("IDENTIFIED", "SELECTED", "ACQUIRED", "TRACKING")),
+                 "fov_x": float(t.meas_x), "fov_y": float(t.meas_y),
+                 "wavelength_match": bool(t.signature.spectral_score >= 0.5),
+                 "modulation_match": bool(t.signature.temporal_score >= 0.2),
+                 "spot_size_match": bool(t.signature.spatial_score >= 0.5),
+                 "code_match": bool((t.signature.code_score is None) or (t.signature.code_score >= 0.5)),
+                 "code_correlation": t.signature.code_score,
+                 "reason": "OK", "lifecycle": t.lifecycle_state.value,
+                 "overall_score": float(t.signature.overall_score), "snr_db": float(t.meas_snr)}
+                for t in out.candidate_tracks
+            ]
+        except Exception:
+            self.candidate_evaluations = []
+        self.active_target_id = out.active_observation_id
+        try:
+            self._reacquire_dwell = float(out.telemetry.get("reacq_elapsed", 0.0) or 0.0)
+        except Exception:
+            self._reacquire_dwell = 0.0
+        # Mirror estimator/controller state into legacy tracker for GUI/debug.
+        try:
+            self.tracker.vel_x = float(out.target_state.velocity_x)
+            self.tracker.vel_y = float(out.target_state.velocity_y)
+            self._last_tracking_eval = {"active": True, "locked": bool(out.tracking_status.target_acquired),
+                                        "error_px": (float(out.tracking_status.tracking_error_x),
+                                                     float(out.tracking_status.tracking_error_y)),
+                                        "lost_time": float(out.telemetry.get("reacq_elapsed", 0.0) or 0.0)}
+        except Exception:
+            pass
+        try:
+            best = None
+            for t in out.candidate_tracks:
+                if t.observation_id == out.active_observation_id:
+                    best = t
+                    break
+            if best is not None:
+                self._last_detection_eval = {"detected": True, "confirmed": bool(out.tracking_status.target_acquired),
+                                             "confidence": float(best.confidence), "snr_db": float(best.meas_snr)}
+            elif out.candidate_tracks:
+                t0 = out.candidate_tracks[0]
+                self._last_detection_eval = {"detected": True, "confirmed": False,
+                                             "confidence": float(t0.confidence), "snr_db": float(t0.meas_snr)}
+            else:
+                self._last_detection_eval = {"detected": False, "confirmed": False, "confidence": 0.0, "snr_db": 0.0}
+        except Exception:
+            pass
+
+        # Optical link FSM from centered dwell (legacy thresholds preserved).
+        try:
+            if out.tracking_status.target_centered:
+                self._lock_dwell_time += float(dt)
+            elif out.target_state.valid:
+                cx, cy = self.fov_width * 0.5, self.fov_height * 0.5
+                d = math.hypot(out.target_state.filtered_x - cx, out.target_state.filtered_y - cy)
+                if d <= min(self.fov_width, self.fov_height) * 0.15:
+                    self._lock_dwell_time += float(dt)
+                else:
+                    self._lock_dwell_time = max(0.0, self._lock_dwell_time - float(dt) * 2.0)
+            else:
+                self._lock_dwell_time = 0.0
+            if out.tracking_status.target_acquired and self._lock_dwell_time >= 1.2:
+                self.config.state.link_state = "CONNECTED"
+            elif out.tracking_status.target_acquired and self._lock_dwell_time >= 0.5:
+                self.config.state.link_state = "HANDSHAKE"
+            elif out.tracking_status.target_acquired and self._lock_dwell_time >= 0.2:
+                self.config.state.link_state = "OPTICAL_LOCK"
+            elif not out.tracking_status.target_acquired:
+                self._lock_dwell_time = 0.0
+                self.config.state.link_state = "NO_LINK"
+            self.config.communication.link_state = self.config.state.link_state
+        except Exception:
+            pass
 
     # -----------------------------------------------------------------
     # Telemetry Output
@@ -880,4 +834,3 @@ class LocalTerminal:
                 "dwell_time": float(self._lock_dwell_time),
             },
         }
-
