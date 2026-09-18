@@ -63,8 +63,11 @@ class CandidateAssociationManager:
     def _cost(self, det: DetectionCandidate, track: CandidateTrack,
               pred: tuple[float, float]) -> float | None:
         """Association cost, or None when outside the spatial gate."""
-        dist = math.hypot(det.centroid_x - pred[0], det.centroid_y - pred[1])
-        if dist > self.gate_px:
+        dist_pred = math.hypot(det.centroid_x - pred[0], det.centroid_y - pred[1])
+        dist_meas = math.hypot(det.centroid_x - track.meas_x, det.centroid_y - track.meas_y)
+        dist = min(dist_pred, dist_meas)
+        gate = self.gate_px * 2.0 if track.lifecycle_state in (CandidateState.TRACKING, CandidateState.ACQUIRED) else self.gate_px
+        if dist > gate:
             return None
         size_err = abs(det.apparent_diameter - track.meas_spot_px) / max(1.0, self.size_tol_px)
         snr_err = abs(det.local_snr - track.meas_snr) / max(1.0, self.snr_tol_db)

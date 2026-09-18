@@ -64,18 +64,20 @@ class SignatureAnalyzer:
         # video-rate envelope (both in Hz), not against the kHz carrier.
         exp_hz = self._expected_visual_hz()
         req = self.signature.temporal_type.upper()
+        recent_std = float(np.std(samples[-8:])) / max(1.0, float(np.mean(samples[-8:]))) if len(samples) >= 8 else mod_conf
         if req in ("", "ANY", "ALL"):
             temporal = 1.0 if mod_conf > 0.0 else 0.3
         elif req == "NONE":
-            temporal = 1.0 if mod_conf < 0.03 else 0.0
+            temporal = 1.0 if (mod_conf < 0.03 or recent_std < 0.02) else 0.0
         else:
-            observed_mod = "AM" if mod_conf >= 0.03 else "NONE"
+            is_modulating = (mod_conf >= 0.03 and (len(samples) < 8 or recent_std >= 0.02))
+            observed_mod = "AM" if is_modulating else "NONE"
             # AM-family envelopes are all variance; discriminate by rate.
             freq_score = max(0.0, 1.0 - abs(est_hz - exp_hz) / max(1.0, 4.0))
-            temporal = (0.4 + 0.6 * freq_score) if mod_conf >= 0.03 else 0.0
+            temporal = (0.4 + 0.6 * freq_score) if is_modulating else 0.0
             if req != observed_mod and req in ("PM", "OOK", "PPM") and observed_mod == "AM":
                 # Variance alone cannot separate AM from PM/OOK: demand rate.
-                temporal = 0.6 * freq_score if mod_conf >= 0.03 else 0.0
+                temporal = 0.6 * freq_score if is_modulating else 0.0
         track.temporal.estimated_frequency = est_hz
         track.temporal.frequency_confidence = freq_conf
         track.temporal.modulation_confidence = mod_conf
@@ -149,6 +151,24 @@ class SignatureAnalyzer:
         return scores
 
     def confirmed(self, track: CandidateTrack) -> tuple[bool, str]:
+        """Check whether the track passes the identification gate.
+
+        Phase-2 priority logic:
+        - identity_matched=True  → immediately confirmed (identity is authoritative)
+        - is_impostor=True       → immediately rejected (wrong ID, hard fail)
+        - identity_reason=NO_DATA → fall back to optical signature scoring (Phase-1)
+        - BUILDING / LOW_CONF    → allow optical path as interim gate
+        """
+        # Phase-2: identity lock shortcut
+        ss = track.signal_state
+        if track.identity_matched:
+            # Decoded identity confirmed — pass with identity confidence
+            return True, "Identity confirmed: " + ss.identity_reason
+        if track.is_impostor:
+            return False, "Identity REJECTED: " + ss.identity_reason
+
+        # Phase-1 optical fallback (used when no beacon protocol configured or
+        # identity data still accumulating)
         sig = self.signature
         s = track.signature
         if s.spectral_score < 0.25:
@@ -166,10 +186,12 @@ class SignatureAnalyzer:
         except Exception:
             pass
         req = sig.temporal_type.upper()
-        if req not in ("", "ANY", "ALL") and s.temporal_score < 0.05:
+        if req not in ("", "ANY", "ALL"):
             # need a short trace before AM claim
             if len(track.temporal.intensity_history) < 4:
                 return False, "Temporal signature not yet confirmed"
+            if s.temporal_score < 0.05:
+                return False, "Temporal signature mismatch"
         if sig.identification_code and (s.code_score is None or s.code_score < sig.code_threshold):
             return False, "Identification code not correlated"
         if track.meas_snr < sig.minimum_snr_db:
@@ -177,3 +199,4 @@ class SignatureAnalyzer:
         if s.overall_score < sig.minimum_score:
             return False, "Combined signature confidence below threshold"
         return True, "OK"
+

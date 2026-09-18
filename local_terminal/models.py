@@ -3,6 +3,9 @@
 # Architectural rule: the Local Terminal only ever receives CameraFrame +
 # PTZ pose/velocity + local configuration. It must NEVER receive remote
 # position/velocity/ID/beaconState/signature/world coordinates.
+#
+# Phase-2 additions: BeamProfile, SignalState, DecodedFrameSummary,
+# IdentityDecisionSummary embedded in CandidateTrack.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -177,6 +180,48 @@ class SignatureScores:
 
 
 # ---------------------------------------------------------------------
+# Phase-2: Beam + Signal + Identity data contracts (image-only boundary preserved)
+# ---------------------------------------------------------------------
+@dataclass
+class BeamProfile:
+    """Optical characterisation of a candidate beacon from image measurements."""
+    wavelength_nm:    float = 0.0   # estimated wavelength (nm)
+    power_dn:         float = 0.0   # integrated peak DN in the spot aperture
+    spot_mrad:        float = 0.0   # spot angular diameter in mrad
+    modulation_depth: float = 0.0   # (peak-floor)/peak ratio [0..1]
+    mod_freq_hz:      float = 0.0   # estimated video-rate modulation freq (Hz)
+    snr_db:           float = 0.0   # local SNR at the spot (dB)
+
+
+@dataclass
+class SignalState:
+    """Communication-path state for a candidate track."""
+    # High-level decode state
+    state: str = "IDLE"             # IDLE | SAMPLING | SYNCED | DECODING | VALID | LOST
+    chip_rate_hz: float = 0.0
+    modulation_depth: float = 0.0
+    chip_snr_db: float = 0.0
+    bit_error_estimate: float = 1.0
+    num_chip_samples: int = 0
+    # Latest frame (from FrameDecoder)
+    frame_valid: bool = False
+    decoded_terminal_id_byte: int = 0
+    decoded_network_id: int = 0
+    decoded_sequence: int = -1
+    decoded_capabilities: int = 0
+    decode_confidence: float = 0.0
+    consecutive_valid: int = 0
+    total_attempts: int = 0
+    total_successes: int = 0
+    # Identity decision (from IdentityMatcher)
+    identity_matched: bool = False
+    identity_reason: str = "NO_DATA"   # OK | ID_MISMATCH | NET_MISMATCH | REPLAY | LOW_CONF | CRC_FAIL | NO_DATA
+    identity_confidence: float = 0.0
+    # Continuous-tracking identity check
+    identity_fail_streak: int = 0   # consecutive frames where matched dropped to False during TRACKING
+
+
+# ---------------------------------------------------------------------
 # §13 Candidate track data model (local BEACON-N identity only)
 # ---------------------------------------------------------------------
 @dataclass
@@ -208,6 +253,12 @@ class CandidateTrack:
     confidence: float = 0.0
     confirm_count: int = 0  # consecutive signature confirmations
     timestamps: list[float] = field(default_factory=list)
+    # ── Phase-2: communication path ────────────────────────────────────────
+    beam_profile: BeamProfile = field(default_factory=BeamProfile)
+    signal_state: SignalState = field(default_factory=SignalState)
+    # Cached FrameDecoder + IdentityMatcher outputs (set by system.py)
+    _decoded_frame: Any = field(default=None, repr=False, compare=False)
+    _identity_decision: Any = field(default=None, repr=False, compare=False)
 
     def touch(self, ts: float) -> None:
         ts = float(ts)
@@ -215,6 +266,16 @@ class CandidateTrack:
             self.first_seen_timestamp = ts
         self.last_seen_timestamp = ts
         self.age = max(0.0, ts - self.first_seen_timestamp)
+
+    @property
+    def identity_matched(self) -> bool:
+        """Shortcut: True when the identity path confirmed this track."""
+        return bool(self.signal_state.identity_matched)
+
+    @property
+    def is_impostor(self) -> bool:
+        """Decoded a valid frame but ID or network does not match profile."""
+        return self.signal_state.identity_reason in ("ID_MISMATCH", "NET_MISMATCH")
 
 
 # ---------------------------------------------------------------------

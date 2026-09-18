@@ -4,6 +4,12 @@
 # cameraFrame, currentPTZPose, currentPTZVelocity, localConfiguration).
 # It must NEVER receive remote position/velocity/ID/beaconState/signature/
 # world coordinates. All perception derives from the image.
+#
+# Phase-2 additions:
+#   Step 4b — BeamCharacterizer  (optical properties from image)
+#   Step 4c — SignalAnalyzer + FrameDecoder + IdentityMatcher (comm path)
+#   Step 4d — CandidateLifecycle.apply_identity_result (identity-driven lifecycle)
+#   Step 7b — Continuous identity verification during TRACKING
 from __future__ import annotations
 
 import math
@@ -13,14 +19,18 @@ from local_terminal.acquisition_mgr import AcquisitionConfig2, AcquisitionManage
 from local_terminal.association import CandidateAssociationManager
 from local_terminal.candidate_detector import CandidateDetector
 from local_terminal.estimator import TrackStateEstimator
+from local_terminal.frame_decoder import FrameDecoder
 from local_terminal.frame_processor import FrameProcessor
+from local_terminal.identity_matcher import IdentityMatcher, TargetProfile
 from local_terminal.lifecycle import CandidateLifecycleManager
 from local_terminal.models import (
     AcquisitionResult,
+    BeamProfile,
     CameraFrame,
     CandidateTrack,
     PTZCommand,
     SearchCommand,
+    SignalState,
     TargetIdentificationSignature,
     TargetState,
     TrackingStatus,
@@ -29,6 +39,7 @@ from local_terminal.models import (
 )
 from local_terminal.reacquisition import ReacquisitionConfig, ReacquisitionManager
 from local_terminal.search_manager import SearchManager
+from local_terminal.signal_analyzer import SignalAnalyzer
 from local_terminal.signature import SignatureAnalyzer
 from local_terminal.state_machine import LocalStateMachine
 from local_terminal.states import CandidateState, LocalTerminalState
@@ -96,6 +107,13 @@ class LocalTerminalSystem:
         self.acquisition_threshold = float(sig.minimum_score)
         self.tracking_retention_threshold = 0.70
         self.reacquisition_threshold = 0.80
+        # Phase-2: communication path components
+        self._signal_analyzer = SignalAnalyzer()
+        self._frame_decoder = FrameDecoder()
+        self._target_profile: TargetProfile = self._build_target_profile(config)
+        self._id_matcher = IdentityMatcher(self._target_profile)
+        self._id_check_counter: int = 0   # for periodic identity re-check during tracking
+
 
     # -- config helpers -------------------------------------------------
     def _build_signature(self, config: Any) -> TargetIdentificationSignature:
@@ -117,6 +135,16 @@ class LocalTerminalSystem:
         except Exception:
             pass
         return AcquisitionConfig2()
+
+    def _build_target_profile(self, config: Any) -> TargetProfile:
+        """Build TargetProfile from config; falls back to wildcard (accept any)."""
+        try:
+            det = getattr(config, "detection", None)
+            if det is not None and hasattr(det, "build_target_profile"):
+                return det.build_target_profile()
+        except Exception:
+            pass
+        return TargetProfile()  # wildcard: accept any terminal
 
     def refresh_config(self, config: Any) -> None:
         self.config = config
@@ -143,6 +171,13 @@ class LocalTerminalSystem:
         except Exception:
             pass
         self.acquisition_threshold = float(self.signature_cfg.minimum_score)
+        # Phase-2: refresh identity pipeline
+        try:
+            self._target_profile = self._build_target_profile(config)
+            self._id_matcher.update_profile(self._target_profile)
+        except Exception:
+            pass
+
 
     # -- main step ------------------------------------------------------
     def update(self, inp: UpdateInput) -> UpdateOutput:
@@ -267,8 +302,65 @@ class LocalTerminalSystem:
                         tr.confidence = float(ema)
                     except Exception:
                         pass
+
+                    # ── Step 4b: Beam Profile (optical characterisation) ─────────
+                    try:
+                        tr.beam_profile = BeamProfile(
+                            power_dn=float(tr.meas_intensity),
+                            snr_db=float(tr.meas_snr),
+                            spot_mrad=float(tr.meas_spot_px * px_scale),
+                            modulation_depth=float(tr.signature.temporal_score),
+                        )
+                    except Exception:
+                        pass
+
+                    # ── Step 4c: Communication path — signal + decode + identity ─
+                    try:
+                        hist = list(tr.temporal.intensity_history)
+                        times = list(tr.temporal.timestamps) if tr.temporal.timestamps else []
+                        chip_rate = float(getattr(self._target_profile, "chip_rate_hz", 8.0))
+                        sig_meas = self._signal_analyzer.analyze(hist, times, chip_rate)
+                        # Update SignalState from signal measurement
+                        ss = tr.signal_state
+                        ss.chip_rate_hz = float(sig_meas.estimated_chip_rate_hz)
+                        ss.modulation_depth = float(sig_meas.modulation_depth)
+                        ss.chip_snr_db = float(sig_meas.chip_snr_db)
+                        ss.bit_error_estimate = float(sig_meas.bit_error_estimate)
+                        ss.num_chip_samples = int(sig_meas.num_samples)
+                        if sig_meas.sufficient_data:
+                            ss.state = "DECODING"
+                        elif sig_meas.num_samples >= 20:
+                            ss.state = "SAMPLING"
+                        # Frame decoder
+                        df = self._frame_decoder.update(
+                            tr.observation_id, sig_meas, tr._decoded_frame)
+                        tr._decoded_frame = df
+                        ss.frame_valid = bool(df.valid)
+                        ss.decoded_terminal_id_byte = int(df.terminal_id_byte)
+                        ss.decoded_network_id = int(df.network_id)
+                        ss.decoded_sequence = int(df.sequence_number)
+                        ss.decoded_capabilities = int(df.capabilities)
+                        ss.decode_confidence = float(df.confidence)
+                        ss.consecutive_valid = int(df.consecutive_valid)
+                        ss.total_attempts = int(df.attempt_count)
+                        ss.total_successes = int(df.success_count)
+                        if df.valid:
+                            ss.state = "VALID"
+                        # Identity matcher
+                        decision = self._id_matcher.match(tr.observation_id, df)
+                        tr._identity_decision = decision
+                        ss.identity_matched = bool(decision.matched)
+                        ss.identity_reason = str(decision.reason)
+                        ss.identity_confidence = float(decision.confidence)
+                        # Hard-reject impostors immediately
+                        if tr.is_impostor:
+                            tr.lifecycle_state = CandidateState.REJECTED
+                    except Exception:
+                        pass
+
                     sig_ok, _ = self.signature.confirmed(tr)
                     score_ok = tr.signature.overall_score >= self.signature_cfg.minimum_score
+
                     # Multi-frame persistence (§16), windowed not consecutive:
                     # an AM dip must not reset the count. The acquisition
                     # window is authoritative; the streak mirrors it.
@@ -508,6 +600,30 @@ class LocalTerminalSystem:
                                                  CandidateState.IDENTIFIED, CandidateState.DEGRADED):
                     selection.lifecycle_state = CandidateState.TRACKING
                 tracking_ok = True
+
+            # ── Step 7b: Continuous identity verification (Phase-2) ──────────
+            # Every frame we check whether the decoded identity is still valid.
+            # If it fails for max_identity_fail_streak consecutive frames →
+            # impostor-swap or link loss → force REACQUIRING.
+            try:
+                ss = selection.signal_state
+                max_streak = int(getattr(self._target_profile, "max_identity_fail_streak", 10))
+                # Only check when we have an active identity profile (non-wildcard)
+                profile_has_id = (int(self._target_profile.expected_terminal_id_byte) != 0)
+                if profile_has_id and ss.state in ("VALID", "DECODING"):
+                    if not ss.identity_matched and ss.identity_reason not in ("NO_DATA", "BUILDING"):
+                        ss.identity_fail_streak += 1
+                    else:
+                        ss.identity_fail_streak = 0
+                    if ss.identity_fail_streak >= max_streak:
+                        # Identity lost or swapped → force reacquisition
+                        degraded = True
+                        tracking_ok = False
+                        selection.lifecycle_state = CandidateState.DEGRADED
+                        ss.state = "LOST"
+            except Exception:
+                pass
+
             try:
                 cx, cy = self.controller.compute_control(float(perr_x), float(perr_y), dt)
             except Exception:
@@ -518,6 +634,7 @@ class LocalTerminalSystem:
                                  pan_velocity=float(cx) / max(dt, 1e-3),
                                  tilt_velocity=float(cy) / max(dt, 1e-3))
         elif power_on and self.active_observation_id is not None:
+
             # --- loss path: DEGRADED -> REACQUIRING -> LOST (§§25-27) ---
             # Require 3 consecutive non-acquired frames before declaring
             # reacquisition so single-frame decoy spikes do not trip it.

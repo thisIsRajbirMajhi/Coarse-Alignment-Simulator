@@ -463,6 +463,67 @@ class DetectionConfig:
             return cls(**_filter_dataclass_fields(cls, d)).validate()
         return cls().validate()
 
+    def build_target_profile(self) -> "TargetProfile":
+        """Construct a TargetProfile from this DetectionConfig (backward compat)."""
+        return TargetProfile(
+            expected_terminal_id=self.identification_code,
+            expected_network_id=0,
+            min_decode_confidence=float(self.code_correlation_threshold),
+            min_consecutive_valid=int(self.code_persistence),
+            chip_rate_hz=float(self.identification_code_chip_rate_hz),
+        ).validate()
+
+
+# =====================================================================
+# 10b. TARGET PROFILE (Phase-2 identity configuration)
+# =====================================================================
+@dataclass
+class TargetProfile:
+    """What the local terminal expects to receive from the authorised target beacon.
+
+    Configured locally; never fetched from a RemoteTerminal object.
+    This is the sole authoritative source for identity decisions.
+    """
+    # Identity fields ─────────────────────────────────────────────────
+    # The expected remote terminal ID string (e.g. 'RT-001').
+    # Empty string or '0' → accept any (wildcard).
+    expected_terminal_id:      str   = ""
+    # Numeric byte form; derived from expected_terminal_id on validate().
+    expected_terminal_id_byte: int   = 0
+    # Network/group byte. 0 → accept any.
+    expected_network_id:       int   = 0
+    # Capabilities that MUST be present. 0 → no requirement.
+    required_capabilities:     int   = 0
+
+    # Decode quality gates ─────────────────────────────────────────────
+    chip_rate_hz:           float = 8.0     # expected chip rate (bps)
+    min_decode_confidence:  float = 0.40    # fraction of CRC-passing frames in sliding window
+    min_consecutive_valid:  int   = 2       # consecutive valid frames before IDENTIFIED
+
+    # Replay guard ─────────────────────────────────────────────────────
+    require_sequence_advance: bool = True
+
+    # Tracking identity retention ──────────────────────────────────────
+    # Frames of identity failure tolerated during TRACKING before forcing REACQUIRING.
+    max_identity_fail_streak: int = 10
+
+    def validate(self) -> "TargetProfile":
+        if self.expected_terminal_id:
+            try:
+                from local_terminal.beacon_frame import terminal_id_to_byte
+                self.expected_terminal_id_byte = terminal_id_to_byte(self.expected_terminal_id)
+            except Exception:
+                pass
+        self.chip_rate_hz = float(max(0.5, min(self.chip_rate_hz, 30.0)))
+        self.min_decode_confidence = float(max(0.0, min(self.min_decode_confidence, 1.0)))
+        self.min_consecutive_valid = int(max(1, self.min_consecutive_valid))
+        self.max_identity_fail_streak = int(max(1, self.max_identity_fail_streak))
+        return self
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> "TargetProfile":
+        return cls(**_filter_dataclass_fields(cls, data)).validate() if isinstance(data, dict) else cls().validate()
+
 
 # =====================================================================
 # 11. TRACKING CONFIG

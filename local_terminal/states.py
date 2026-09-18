@@ -14,7 +14,8 @@ class LocalTerminalState(str, Enum):
     IDLE = "IDLE"
     SEARCHING = "SEARCHING"
     DETECTING = "DETECTING"
-    VERIFYING = "VERIFYING"
+    DECODING = "DECODING"          # Phase-2: beacon signal being decoded
+    VERIFYING = "VERIFYING"        # Phase-2: identity verified, spatial lock pending
     ACQUIRED = "ACQUIRED"
     TRACKING = "TRACKING"
     DEGRADED = "DEGRADED"
@@ -43,6 +44,10 @@ class CandidateState(str, Enum):
     SEEN = "SEEN"
     TENTATIVE = "TENTATIVE"
     VALIDATING = "VALIDATING"
+    # Phase-2 communication-path states
+    SIGNAL_DETECTED = "SIGNAL_DETECTED"    # modulated signal observed
+    DECODING = "DECODING"                  # actively decoding beacon frames
+    IDENTITY_UNKNOWN = "IDENTITY_UNKNOWN"  # decoded but ID not yet confirmed
     IDENTIFIED = "IDENTIFIED"
     SELECTED = "SELECTED"
     ACQUIRED = "ACQUIRED"

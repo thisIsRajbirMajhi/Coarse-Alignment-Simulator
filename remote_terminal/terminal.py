@@ -8,6 +8,7 @@ import numpy as np
 
 from remote_terminal.config import RemoteTerminalConfig
 from remote_terminal.optics import compute_temporal_factor, render_terminal_beacon_patch
+from remote_terminal.beacon_encoder import BeaconEncoder, BeaconEncoderConfig
 
 
 class RemoteTerminal:
@@ -31,6 +32,13 @@ class RemoteTerminal:
         self.pitch = float(self.config.position.pitch)
         self.yaw = float(self.config.position.yaw)
         self.sim_time = 0.0
+        # Phase-2: beacon encoder for structured identity frames
+        bc = self.config.beacon
+        self._encoder = BeaconEncoder(BeaconEncoderConfig(
+            terminal_id=str(self.config.identity.id),
+            network_id=0,
+            chip_rate_hz=float(getattr(bc, "identification_chip_rate_hz", 8.0)),
+        ))
         self._sync_states()
 
     def _sync_states(self) -> None:
@@ -99,6 +107,14 @@ class RemoteTerminal:
 
     def update(self, dt: float) -> None:
         self.sim_time += dt
+        bc = self.config.beacon
+        target_id = str(self.config.identity.id)
+        chip_rate = float(getattr(bc, "identification_chip_rate_hz", 8.0))
+        if self._encoder.config.terminal_id != target_id or self._encoder.config.chip_rate_hz != chip_rate:
+            self._encoder.config.terminal_id = target_id
+            self._encoder.config.chip_rate_hz = chip_rate
+            self._encoder._rebuild()
+        self._encoder.update(self.sim_time)
         self._sync_states()
 
     def emit_ideal_beam(self, pixel_scale_mrad: float = 0.035):
@@ -120,10 +136,9 @@ class RemoteTerminal:
             pulse_enabled=bc.pulse_enabled,
             pulse_rate_khz=bc.pulse_rate_khz,
             duty_cycle=bc.duty_cycle,
-            identification_code=bc.identification_code,
-            identification_code_enabled=bc.identification_code_enabled,
-            identification_chip_rate_hz=bc.identification_chip_rate_hz,
         )
+        if getattr(bc, "identification_code_enabled", True) and bc.mod_type != "NONE":
+            temp_fac *= self._encoder.get_intensity_factor(self.sim_time)
         scale = max(1e-4, float(pixel_scale_mrad))
         spot = float((float(bc.div_h_mrad) / scale * 0.25 + float(bc.div_v_mrad) / scale * 0.25) / 2.0)
         emitted = float(max(0.0, float(bc.power_w) / 1.5) ** 0.5 * max(0.0, float(temp_fac)))
@@ -172,10 +187,9 @@ class RemoteTerminal:
             pulse_enabled=bc.pulse_enabled,
             pulse_rate_khz=bc.pulse_rate_khz,
             duty_cycle=bc.duty_cycle,
-            identification_code=bc.identification_code,
-            identification_code_enabled=bc.identification_code_enabled,
-            identification_chip_rate_hz=bc.identification_chip_rate_hz,
         )
+        if getattr(bc, "identification_code_enabled", True) and bc.mod_type != "NONE":
+            temp_fac *= self._encoder.get_intensity_factor(self.sim_time)
 
         patch = render_terminal_beacon_patch(
             power_w=bc.power_w,
