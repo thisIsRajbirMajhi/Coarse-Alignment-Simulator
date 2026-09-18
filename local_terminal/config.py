@@ -336,11 +336,25 @@ class RealismConfig:
 # =====================================================================
 # 9. ACQUISITION CONFIG
 # =====================================================================
+def normalize_search_pattern(pattern: object) -> str:
+    """Canonicalize acquisition pattern names incl. common aliases.
+
+    Figure-8: "FIGURE-8" | "FIGURE 8" | "FIG8" -> "FIGURE_8".
+    """
+    p = str(pattern or "").strip()
+    if p.upper().replace("-", "_").replace(" ", "_") in ("FIGURE_8", "FIG8"):
+        return "FIGURE_8"
+    for canonical in ("RANDOM", "RASTER", "SPIRAL", "SECTOR", "GRID", "CUSTOM", "FIGURE_8"):
+        if p.upper() == canonical:
+            return canonical
+    return p
+
+
 @dataclass
 class AcquisitionConfig:
     """Target search mode, scanning patterns, search boundaries, and speed."""
     mode: str = "AUTO"                    # MANUAL | SEARCH | AUTO | AUTO_ACQUISITION | TARGET_POINTING
-    search_pattern: str = "RANDOM"        # RANDOM | RASTER | SPIRAL | SECTOR | GRID | CUSTOM
+    search_pattern: str = "RANDOM"        # RANDOM | RASTER | SPIRAL | SECTOR | GRID | CUSTOM | FIGURE_8
     search_region_pan_min: float = -20.0  # deg
     search_region_pan_max: float = 20.0   # deg
     search_region_tilt_min: float = -10.0 # deg
@@ -350,9 +364,10 @@ class AcquisitionConfig:
 
     def validate(self) -> AcquisitionConfig:
         modes = {"MANUAL", "SEARCH", "AUTO", "AUTO_ACQUISITION", "TARGET_POINTING"}
-        patterns = {"RANDOM", "RASTER", "SPIRAL", "SECTOR", "GRID", "CUSTOM"}
+        patterns = {"RANDOM", "RASTER", "SPIRAL", "SECTOR", "GRID", "CUSTOM", "FIGURE_8"}
         if self.mode not in modes:
             self.mode = "AUTO"
+        self.search_pattern = normalize_search_pattern(self.search_pattern)
         if self.search_pattern not in patterns:
             self.search_pattern = "RANDOM"
         self.search_region_pan_min = float(self.search_region_pan_min)
@@ -395,8 +410,8 @@ class DetectionConfig:
     bandwidth: float = 10.0               # nm
     intensity_threshold: float = 0.0      # DN / power threshold
     minimum_snr: float = 8.0              # dB
-    expected_spot_size: float = 3.0       # mrad
-    expected_spot_tolerance: float = 0.5  # mrad
+    expected_spot_size: float = 2.0       # mrad (covers 1 mrad beacon default and 3 mrad test targets)
+    expected_spot_tolerance: float = 1.5  # mrad (accepts 0.5..3.5 mrad out-of-box)
     expected_spot_unit: str = "mrad"
     modulation_type: str = "AM"           # AM | PM | OOK | PPM
     modulation_frequency: float = 10.0    # kHz
@@ -423,6 +438,8 @@ class DetectionConfig:
     def from_dict(cls, data: dict[str, Any] | None) -> DetectionConfig:
         if isinstance(data, dict):
             d = dict(data)
+            if "targetIdFilter" in d and "target_id_filter" not in d:
+                d["target_id_filter"] = d["targetIdFilter"]
             ss = d.get("expectedSpotSize") or d.get("expected_spot_size")
             if isinstance(ss, dict):
                 if "value" in ss: d["expected_spot_size"] = ss["value"]
@@ -447,7 +464,7 @@ class TrackingConfig:
     algorithm: str = "CENTROID"           # CENTROID | PEAK | KALMAN
     update_rate: int = 30                 # Hz
     prediction: bool = True
-    prediction_horizon: float = 0.5       # s
+    prediction_horizon: float = 0.15      # s (0.5s overshoots with noisy vel estimates)
     smoothing: float = 0.2
     lost_target_behavior: str = "RESUME_SEARCH"  # RESUME_SEARCH | HOLD_POSITION | RETURN_HOME
     kp: float = 0.25                      # Proportional gain
@@ -714,6 +731,9 @@ class LocalTerminalConfig:
     @pixel_scale_mrad.setter
     def pixel_scale_mrad(self, val: float) -> None:
         self.angular_model.pixel_to_angle_x = float(val) * 1000.0
+        self.angular_model.pixel_to_angle_y = float(val) * 1000.0
+        self.angular_model.angle_to_pixel_x = float(1.0 / self.angular_model.pixel_to_angle_x)
+        self.angular_model.angle_to_pixel_y = float(1.0 / self.angular_model.pixel_to_angle_y)
 
     @property
     def max_accel_deg(self) -> float:
@@ -859,6 +879,7 @@ class LocalTerminalConfig:
                         "unit": self.detection.modulation_unit,
                     },
                     "confidenceThreshold": self.detection.confidence_threshold,
+                    "targetIdFilter": self.detection.target_id_filter,
                 },
                 "tracking": {
                     "mode": self.tracking.mode,

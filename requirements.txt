@@ -3,5 +3,8 @@ numpy>=1.26,<2.6
 opencv-python>=4.8,<5.1
 PyQt5==5.15.11
 
+# Optional: Gymnasium wrapper for RL training (simulation/env.py works without it)
+# gymnasium>=0.29
+
 # Testing & development
 pytest>=8.0

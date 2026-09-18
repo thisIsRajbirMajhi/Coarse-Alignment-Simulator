@@ -74,9 +74,106 @@ class Renderer:
         cv2.circle(img, (cx, cy), 1, (255, 255, 255), -1, cv2.LINE_AA)
         Renderer.draw_corner_brackets(img, margin=4, length=max(8, min(w, h) // 20), color=(180, 180, 180), thickness=1)
 
+    # Tracker-point colors (BGR): lock-state aware.
+    TRACKER_COLORS: dict[str, tuple[int, int, int]] = {
+        "LOCKED": (80, 210, 90),
+        "TRACKING": (80, 210, 90),
+        "REACQUIRING": (60, 190, 255),
+        "DISCRIMINATING": (220, 190, 80),
+        "DETECTING": (220, 190, 80),
+        "SEARCHING": (150, 150, 150),
+        "IDLE": (150, 150, 150),
+    }
+
+    @staticmethod
+    def tracker_point_color(autonomy_state: str) -> tuple[int, int, int]:
+        """BGR color for the tracker marker from autonomy state (LOCKED green ...)."""
+        try:
+            return Renderer.TRACKER_COLORS.get(str(autonomy_state).upper(), (150, 150, 150))
+        except Exception:
+            return (150, 150, 150)
+
+    @staticmethod
+    def tracker_marker_from_telemetry(telemetry, fov_size: tuple[int, int] | None = None):
+        """Extract (x, y, color, label) tracker point from local-terminal telemetry.
+
+        Prefers the active target, else the best confirmed candidate, else the
+        first visible candidate (dim). Returns None when nothing trackable.
+        Pure helper — never raises, safe with None/partial telemetry.
+        """
+        try:
+            if not isinstance(telemetry, dict):
+                return None
+            autonomy = telemetry.get("autonomy") or {}
+            candidates = autonomy.get("candidates") or []
+            if not candidates:
+                return None
+            active_id = autonomy.get("active_target_id")
+            state = str(autonomy.get("state") or "IDLE")
+            pick = None
+            if active_id is not None:
+                for c in candidates:
+                    if c.get("terminal_id") == active_id:
+                        pick = c
+                        break
+            if pick is None:
+                confirmed = [c for c in candidates if c.get("confirmed")]
+                if confirmed:
+                    confirmed.sort(key=lambda c: float(c.get("confidence", 0.0)), reverse=True)
+                    pick = confirmed[0]
+            if pick is None:
+                pick = candidates[0]
+            x = float(pick.get("fov_x", 0.0))
+            y = float(pick.get("fov_y", 0.0))
+            if fov_size is not None:
+                fw, fh = int(fov_size[0]), int(fov_size[1])
+                if not (0 <= x < fw and 0 <= y < fh):
+                    return None
+            color = Renderer.tracker_point_color(state)
+            label = f"{pick.get('terminal_id', 'RT')} {state}"
+            return (x, y, color, label)
+        except Exception:
+            return None
+
+    @staticmethod
+    def draw_tracker_point(img: np.ndarray, spot: tuple[float, float],
+                           color: tuple[int, int, int] = (80, 210, 90),
+                           label: str | None = None) -> None:
+        """Draw the tracker point: diamond marker + error line from center + label."""
+        h, w = img.shape[:2]
+        sx, sy = int(round(float(spot[0]))), int(round(float(spot[1])))
+        sx = max(0, min(w - 1, sx))
+        sy = max(0, min(h - 1, sy))
+        cx, cy = w // 2, h // 2
+        # Error vector from FOV center to tracked spot (thin, dimmer).
+        try:
+            dim = tuple(max(0, min(255, int(c * 0.55))) for c in color)
+            cv2.line(img, (cx, cy), (sx, sy), dim, 1, cv2.LINE_AA)
+        except Exception:
+            pass
+        # Diamond outline + filled core.
+        r = max(7, min(w, h) // 40)
+        pts = np.array([[sx, sy - r], [sx + r, sy], [sx, sy + r], [sx - r, sy]], np.int32)
+        cv2.polylines(img, [pts], True, color, 2, cv2.LINE_AA)
+        cv2.circle(img, (sx, sy), 2, color, -1, cv2.LINE_AA)
+        if label:
+            try:
+                (tw, th), _ = cv2.getTextSize(str(label), cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
+                tx = max(2, min(w - tw - 4, sx + r + 4))
+                ty = max(th + 4, sy - r - 4)
+                cv2.rectangle(img, (tx - 2, ty - th - 3), (tx + tw + 2, ty + 2), (10, 10, 10), -1)
+                cv2.putText(img, str(label), (tx, ty - 1), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1, cv2.LINE_AA)
+            except Exception:
+                pass
+
     @staticmethod
     def render_viewport(fov_frame: np.ndarray, camera=None, *args, **kwargs) -> np.ndarray:
-        """Render FOV viewport with standard crosshair and framing reticle."""
+        """Render FOV viewport: crosshair + framing reticle + tracker point.
+
+        Tracker telemetry may be passed as ``telemetry=`` kwarg (local-terminal
+        telemetry dict) or derived from ``camera`` when it carries one. Extra
+        positional/keyword args are ignored for backward compatibility.
+        """
         display = fov_frame.copy()
         h, w = display.shape[:2]
         cx, cy = w // 2, h // 2
@@ -85,6 +182,14 @@ class Renderer:
         arm = max(12, min(w, h) // 12)
         Renderer.draw_reticle(display, (cx, cy), gap=gap, arm=arm, color=(230, 230, 230), thickness=1)
         Renderer.draw_corner_brackets(display, margin=4, length=max(8, min(w, h) // 20), color=(180, 180, 180), thickness=1)
+
+        telemetry = kwargs.get("telemetry", None)
+        if telemetry is None and len(args) >= 1 and isinstance(args[0], dict):
+            telemetry = args[0]
+        marker = Renderer.tracker_marker_from_telemetry(telemetry, (w, h))
+        if marker is not None:
+            x, y, color, label = marker
+            Renderer.draw_tracker_point(display, (x, y), color=color, label=label)
         return display
 
     @staticmethod

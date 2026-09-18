@@ -79,7 +79,12 @@ class LocalTerminal:
         self.active_target_id: str | None = None
         self.candidate_evaluations: list[dict[str, Any]] = []
         self._reacquire_dwell: float = 0.0
+        self._last_cam_vel_x = 0.0
+        self._last_cam_vel_y = 0.0
+        self._confirm_counts: dict[str, int] = {}
+        self._last_tracked_id: str | None = None
 
+        self._clamp_search_region_to_reachable()
         if self.config.acquisition.mode.upper() in ("SEARCH", "AUTO", "AUTO_ACQUISITION"):
             self.scanner.start()
             self.config.state.acquisition_state = "SEARCHING"
@@ -139,12 +144,15 @@ class LocalTerminal:
         max_delta = max_rate * float(dt)
         return float(np.clip(delta, -max_delta, max_delta))
 
-    def _accel_limit(self, desired_v: float, last_v: float, dt: float) -> float:
+    def _accel_limit(self, desired_v: float, last_v: float, dt: float, is_pan: bool = True) -> float:
         if dt <= 1e-9:
             return float(desired_v)
         try:
             max_accel_deg = float(self.config.realism.max_acceleration)
-            scale_mrad = float(self.config.angular_model.pixel_to_angle_x) * 0.001
+            scale_mrad = float(
+                self.config.angular_model.pixel_to_angle_x if is_pan
+                else self.config.angular_model.pixel_to_angle_y
+            ) * 0.001
             px_per_deg = 17.453292519943295 / max(1e-6, scale_mrad)
             max_accel = max_accel_deg * px_per_deg
             max_dv = max_accel * float(dt)
@@ -193,8 +201,8 @@ class LocalTerminal:
         if dt > 1e-9:
             des_vx = float(d_pan) / float(dt)
             des_vy = float(d_tilt) / float(dt)
-            lim_vx = self._accel_limit(des_vx, self._last_vx, dt)
-            lim_vy = self._accel_limit(des_vy, self._last_vy, dt)
+            lim_vx = self._accel_limit(des_vx, self._last_vx, dt, is_pan=True)
+            lim_vy = self._accel_limit(des_vy, self._last_vy, dt, is_pan=False)
             d_pan = float(lim_vx * dt)
             d_tilt = float(lim_vy * dt)
             self._last_vx = float(lim_vx)
@@ -214,13 +222,19 @@ class LocalTerminal:
         else:
             self.config.state.ptz_state = "IDLE"
 
-        # Encoder noise bias (OU process)
+        # Encoder noise bias (OU process, dt-normalized so stats don't
+        # depend on frame rate: bias += (1-a)*n with a=exp(-dt/tau)).
         sigma_enc = float(self.config.realism.encoder_sigma)
         if sigma_enc > 1e-9:
+            import math as _math
+
+            tau_enc = 0.05
+            a_enc = _math.exp(-float(dt) / tau_enc) if dt > 1e-9 else 0.9
+            w_enc = _math.sqrt(max(0.0, 1.0 - a_enc * a_enc))
             npx = float(np.clip(self._rng.normal(0, sigma_enc), -sigma_enc * 3, sigma_enc * 3))
             npy = float(np.clip(self._rng.normal(0, sigma_enc), -sigma_enc * 3, sigma_enc * 3))
-            self._enc_bias_x = float(0.9 * self._enc_bias_x + 0.3 * npx)
-            self._enc_bias_y = float(0.9 * self._enc_bias_y + 0.3 * npy)
+            self._enc_bias_x = float(a_enc * self._enc_bias_x + w_enc * npx)
+            self._enc_bias_y = float(a_enc * self._enc_bias_y + w_enc * npy)
 
     # -----------------------------------------------------------------
     # Movement API (Direct & Latency Queue)
@@ -228,12 +242,10 @@ class LocalTerminal:
     def move(self, d_pan: float, d_tilt: float, dt: float | None = None) -> None:
         """Queue or immediately apply relative pan/tilt motion."""
         if dt is None:
-            # Legacy direct path (e.g. tests expecting immediate jump)
-            d_pan = self._quantize(d_pan)
-            d_tilt = self._quantize(d_tilt)
-            self.pan += float(d_pan)
-            self.tilt += float(d_tilt)
-            self._clamp_to_range()
+            # Legacy direct path: still run through actuator physics with a
+            # large dt so slew/accel don't clip test jumps, but backlash,
+            # quantization and clamping are honoured (no silent bypass).
+            self._apply_delta(float(d_pan), float(d_tilt), 1.0)
             return
 
         latency_s = float(self.config.ptz.latency) / 1000.0
@@ -248,13 +260,61 @@ class LocalTerminal:
             due = self._time + latency_s
             self._pending.append((due, float(d_pan), float(d_tilt), float(dt)))
 
+    def _clamp_search_region_to_reachable(self) -> None:
+        """Clip deg search region to what the PTZ can actually reach.
+
+        Default ±20°/±10° at ~160 px/deg demands ±3200 px in a 2000 px
+        world — the scan then saturates at the rails and never covers the
+        center. Clamp offsets so home±region stays inside the effective
+        pan/tilt range.
+        """
+        try:
+            pan_lo, pan_hi = self._effective_pan_range()
+            tilt_lo, tilt_hi = self._effective_tilt_range()
+            home_pan = float(self.config.ptz.home_pan)
+            home_tilt = float(self.config.ptz.home_tilt)
+            px_per_deg_x = 17.453292519943295 / max(
+                1e-6, float(self.config.angular_model.pixel_to_angle_x) * 0.001
+            )
+            px_per_deg_y = 17.453292519943295 / max(
+                1e-6, float(self.config.angular_model.pixel_to_angle_y) * 0.001
+            )
+            max_pan_deg = min(home_pan - pan_lo, pan_hi - home_pan) / max(1e-6, px_per_deg_x)
+            max_tilt_deg = min(home_tilt - tilt_lo, tilt_hi - home_tilt) / max(1e-6, px_per_deg_y)
+            max_pan_deg = max(0.5, float(max_pan_deg))
+            max_tilt_deg = max(0.5, float(max_tilt_deg))
+            acq = self.config.acquisition
+            acq.search_region_pan_min = float(max(-max_pan_deg, min(max_pan_deg, acq.search_region_pan_min)))
+            acq.search_region_pan_max = float(max(-max_pan_deg, min(max_pan_deg, acq.search_region_pan_max)))
+            acq.search_region_tilt_min = float(max(-max_tilt_deg, min(max_tilt_deg, acq.search_region_tilt_min)))
+            acq.search_region_tilt_max = float(max(-max_tilt_deg, min(max_tilt_deg, acq.search_region_tilt_max)))
+            if acq.search_region_pan_min > acq.search_region_pan_max:
+                acq.search_region_pan_min, acq.search_region_pan_max = acq.search_region_pan_max, acq.search_region_pan_min
+            if acq.search_region_tilt_min > acq.search_region_tilt_max:
+                acq.search_region_tilt_min, acq.search_region_tilt_max = acq.search_region_tilt_max, acq.search_region_tilt_min
+        except Exception:
+            pass
+
     def update(
         self,
         dt: float,
         remote_scenario: Any | None = None,
         controller: Any | None = None,
+        fov_frame=None,
+        fov_capture_pose: tuple[float, float] | None = None,
     ) -> None:
-        """Advance time, process latency queue, and execute acquisition/detection/tracking."""
+        """Advance time, process latency queue, and execute acquisition/detection/tracking.
+
+        fov_frame: previous captured frame (H,W,3 uint8) for image-gated
+        detection. Optional — without it detection falls back to analytic
+        stubs so existing callers/tests are unaffected.
+        fov_capture_pose: (pan, tilt) at which fov_frame was captured. The
+        latency queue drains before detection, so the pose may have moved
+        since capture; the spot measurement is shifted back accordingly.
+        Without it, fast slews misalign the measurement and cause
+        confirm flip-flop.
+        """
+        prev_pan, prev_tilt = float(self.pan), float(self.tilt)
         self._time += float(dt)
 
         # Process due actuator queue items
@@ -267,8 +327,18 @@ class LocalTerminal:
                 _, d_pan, d_tilt = item
                 self._apply_delta(d_pan, d_tilt, dt)
 
+        if dt > 1e-9:
+            self._last_cam_vel_x = (float(self.pan) - prev_pan) / float(dt)
+            self._last_cam_vel_y = (float(self.tilt) - prev_tilt) / float(dt)
+        else:
+            self._last_cam_vel_x = 0.0
+            self._last_cam_vel_y = 0.0
+
         # Step operations
-        self.step_operations(dt, remote_scenario=remote_scenario, controller=controller)
+        self.step_operations(
+            dt, remote_scenario=remote_scenario, controller=controller,
+            fov_frame=fov_frame, fov_capture_pose=fov_capture_pose,
+        )
 
     def flush_pending(self) -> None:
         while self._pending:
@@ -320,6 +390,7 @@ class LocalTerminal:
         self.tracker.config = config.tracking
         self.tracker.angular_model = config.angular_model
         self._clamp_to_range()
+        self._clamp_search_region_to_reachable()
 
     # -----------------------------------------------------------------
     # FOV Geometry and Capture
@@ -379,8 +450,15 @@ class LocalTerminal:
         dt: float,
         remote_scenario: Any | None = None,
         controller: Any | None = None,
+        fov_frame=None,
+        fov_capture_pose: tuple[float, float] | None = None,
     ) -> None:
-        """Step autonomous acquisition, optical detection, closed-loop tracking, and comms."""
+        """Step autonomous acquisition, optical detection, closed-loop tracking, and comms.
+
+        fov_frame: previous captured frame for image-gated detection
+        (peak DN / SNR measured at each candidate spot). Optional.
+        fov_capture_pose: pose at capture; compensates queue-drain motion.
+        """
         if self.config.state.power_state != "ON":
             self.config.state.operational_state = "OFF"
             self.config.state.ptz_state = "IDLE"
@@ -426,6 +504,35 @@ class LocalTerminal:
                     pr = getattr(b_cfg, "pulse_rate_hz", None)
                     mod_f = pr * 0.001 if pr is not None else getattr(b_cfg, "pulse_rate_khz", 10.0)
 
+                # Image-gated measurement: when a frame is available, use
+                # measured peak/SNR at the candidate spot instead of stubs
+                # so washed-out/occluded beacons correctly fail.
+                spot_guess = (float(t.x - x0), float(t.y - y0))
+                if fov_frame is not None and t.is_emitting:
+                    try:
+                        from local_terminal.detection import estimate_spot_brightness as _est
+                        guess = spot_guess
+                        if fov_capture_pose is not None:
+                            import math as _math
+                            dx = float(fov_capture_pose[0]) - float(self.pan)
+                            dy = float(fov_capture_pose[1]) - float(self.tilt)
+                            # Slewing fast: frame too stale to measure, use stubs.
+                            if _math.hypot(dx, dy) > 25.0:
+                                peak_dn, snr_db = 180.0, 15.0
+                            else:
+                                guess = (spot_guess[0] + dx, spot_guess[1] + dy)
+                                peak_dn, snr_db = _est(fov_frame, guess)
+                        else:
+                            peak_dn, snr_db = _est(fov_frame, guess)
+                        # Fall back to stubs only when measurement is degenerate
+                        # (e.g. first frame not yet captured).
+                        if peak_dn <= 0.0 and snr_db <= 0.0:
+                            peak_dn, snr_db = 180.0, 15.0
+                    except Exception:
+                        peak_dn, snr_db = 180.0, 15.0
+                else:
+                    peak_dn = 180.0 if t.is_emitting else 0.0
+                    snr_db = 15.0 if t.is_emitting else 0.0
                 cand_eval = self.detector.evaluate_target(
                     in_fov=True,
                     beacon_power=b_cfg.power_w if t.is_emitting else 0.0,
@@ -434,8 +541,8 @@ class LocalTerminal:
                     beacon_divergence_mrad=float(div_mrad),
                     modulation_type=getattr(b_cfg, "mod_type", "AM"),
                     modulation_freq_khz=float(mod_f),
-                    estimated_snr_db=15.0 if t.is_emitting else 0.0,
-                    estimated_dn=180.0 if t.is_emitting else 0.0,
+                    estimated_snr_db=float(snr_db),
+                    estimated_dn=float(peak_dn),
                 )
 
                 t_id = getattr(getattr(t.config, "identity", None), "id", f"RT-{id(t)}")
@@ -472,33 +579,69 @@ class LocalTerminal:
                 for c in evaluated_candidates
             ]
 
-            # Autonomous Candidate Selection & Identification
+            # Autonomous Candidate Selection & Identification with hysteresis:
+            # a new target needs 2 consecutive confirmations to take over,
+            # preventing flicker between equal-confidence candidates.
             target_candidate = None
+            for c in evaluated_candidates:
+                tid = c["terminal_id"]
+                if c["confirmed"]:
+                    self._confirm_counts[tid] = int(self._confirm_counts.get(tid, 0)) + 1
+                else:
+                    self._confirm_counts[tid] = 0
+            for tid in list(self._confirm_counts.keys()):
+                if all(tid != c["terminal_id"] for c in evaluated_candidates):
+                    self._confirm_counts.pop(tid, None)
 
-            # Case A: If already tracking an active target, keep locking it if still visible and valid
+            # Case A: keep active target if still visible and confirmed.
             if self.active_target_id is not None:
                 for c in evaluated_candidates:
                     if c["terminal_id"] == self.active_target_id:
                         if c["confirmed"]:
                             target_candidate = c
                         break
+                if target_candidate is None and self.active_target_id is not None:
+                    # Active vanished: keep id during coast, drop only on loss.
+                    pass
 
-            # Case B: If no active target or active target is lost, select candidate with highest matching confidence
+            # Case B: track best confirmed candidate immediately for
+            # responsiveness, but only reassign identity once stable
+            # (2 consecutive frames) to avoid ID flicker.
             if target_candidate is None:
                 confirmed_candidates = [c for c in evaluated_candidates if c["confirmed"]]
                 if confirmed_candidates:
                     confirmed_candidates.sort(key=lambda c: c["confidence"], reverse=True)
-                    target_candidate = confirmed_candidates[0]
-                    self.active_target_id = target_candidate["terminal_id"]
+                    best = confirmed_candidates[0]
+                    target_candidate = best
+                    if self.active_target_id is None or self._confirm_counts.get(best["terminal_id"], 0) >= 2:
+                        self.active_target_id = target_candidate["terminal_id"]
+
+            # FOV margin: edge grazes (within 15 px of the border) stay
+            # DETECTING/DISCRIMINATING — confirming them causes
+            # lock-then-instantly-lose churn as the spot exits mid-slew.
+            _FOV_MARGIN = 15.0
+            _margin_rejected_id: str | None = None
+            if target_candidate is not None:
+                _sx, _sy = target_candidate["spot_fov"]
+                if not (_FOV_MARGIN <= _sx <= self.fov_width - _FOV_MARGIN
+                        and _FOV_MARGIN <= _sy <= self.fov_height - _FOV_MARGIN):
+                    _margin_rejected_id = target_candidate["terminal_id"]
+                    target_candidate = None
 
             if target_candidate is not None:
                 target_in_fov = True
                 spot_center_fov = target_candidate["spot_fov"]
                 beacon_eval = target_candidate["evaluation"]
             elif evaluated_candidates:
-                # Decoys or non-matching candidates visible in FOV
+                # Decoys, non-matching candidates, or margin-rejected edge
+                # grazes visible in FOV — never confirm from this branch.
                 target_in_fov = True
-                beacon_eval = evaluated_candidates[0]["evaluation"]
+                beacon_eval = dict(evaluated_candidates[0]["evaluation"])
+                if _margin_rejected_id is not None:
+                    beacon_eval["confirmed"] = False
+                    beacon_eval["reason"] = "Spot too close to FOV edge"
+                    # Keep identity sticky so the sweep continues toward it.
+                    self.active_target_id = _margin_rejected_id
             else:
                 beacon_eval = self.detector.evaluate_target(
                     in_fov=False, beacon_power=0.0, beacon_wavelength=1550,
@@ -529,8 +672,10 @@ class LocalTerminal:
             self.scanner.stop()
             self._reacquire_dwell = 0.0
         elif is_autonomous_acq:
-            # Only scan if not in the middle of predictive coasting
-            if self.config.state.tracking_state != "REACQUIRING":
+            # Never scan while the tracking loop owns motion (TRACKING or
+            # REACQUIRING coast). Scanning on the first dropout frame used
+            # to queue a rail-bound jump that fought the coast command.
+            if self.config.state.tracking_state not in ("REACQUIRING", "TRACKING"):
                 if self.config.state.acquisition_state != "SEARCHING":
                     self.scanner.start()
                     self.config.state.acquisition_state = "SEARCHING"
@@ -540,6 +685,7 @@ class LocalTerminal:
                     self.scanner.stop()
                     self.config.state.acquisition_state = "IDLE"
                 else:
+                    self._clamp_search_region_to_reachable()
                     scale_x = self.config.angular_model.pixel_to_angle_x * 0.001
                     scale_y = self.config.angular_model.pixel_to_angle_y * 0.001
                     px_per_deg_x = 17.453292519943295 / max(1e-6, scale_x)
@@ -547,6 +693,12 @@ class LocalTerminal:
 
                     target_pan = float(self.config.ptz.home_pan) + float(d_pan_deg) * px_per_deg_x
                     target_tilt = float(self.config.ptz.home_tilt) + float(d_tilt_deg) * px_per_deg_y
+                    # Clamp scan goal to reachable range BEFORE stepping so the
+                    # scanner doesn't wind up at the rails.
+                    pan_lo, pan_hi = self._effective_pan_range()
+                    tilt_lo, tilt_hi = self._effective_tilt_range()
+                    target_pan = float(max(pan_lo, min(pan_hi, target_pan)))
+                    target_tilt = float(max(tilt_lo, min(tilt_hi, target_tilt)))
                     step_pan = float(target_pan - self.pan)
                     step_tilt = float(target_tilt - self.tilt)
                     self.move(step_pan, step_tilt, dt)
@@ -558,9 +710,21 @@ class LocalTerminal:
         can_track = trk_mode in ("AUTO", "TRACKING")
 
         if can_track and target_confirmed and spot_center_fov is not None:
+            if self.config.state.tracking_state != "TRACKING":
+                # Fresh lock: drop scan-velocity + stale servo history so the
+                # first corrections go toward the target (accel limiter and
+                # integral otherwise start from fast-scan state and can push
+                # backwards). A new target id also re-inits the estimator.
+                self._last_vx = 0.0
+                self._last_vy = 0.0
+                _new_id = target_candidate["terminal_id"] if target_candidate is not None else None
+                if _new_id != getattr(self, "_last_tracked_id", None):
+                    self.tracker.reset()
+                    self._last_tracked_id = _new_id
             self.config.state.tracking_state = "TRACKING"
             self._reacquire_dwell = 0.0
-            tracking_res = self.tracker.update(dt, True, spot_center_fov, (self.fov_width, self.fov_height))
+            cam_vel = (float(getattr(self, "_last_cam_vel_x", 0.0)), float(getattr(self, "_last_cam_vel_y", 0.0)))
+            tracking_res = self.tracker.update(dt, True, spot_center_fov, (self.fov_width, self.fov_height), camera_vel_px_s=cam_vel)
             self._last_tracking_eval = tracking_res
 
             err_px_x, err_px_y = tracking_res["error_px"]
@@ -590,18 +754,35 @@ class LocalTerminal:
                 self.move(coast_x, coast_y, dt)
             else:
                 # Target lost: reset target and autonomously resume search
+                # around last-known pose (not region edge) for fast re-find.
                 self.active_target_id = None
+                self._confirm_counts.clear()
                 self._reacquire_dwell = 0.0
                 self.config.state.tracking_state = "LOST"
 
                 lost_action = self.config.tracking.lost_target_behavior.upper()
+                self._last_vx = 0.0
+                self._last_vy = 0.0
+                self._last_tracked_id = None
                 if lost_action in ("RESUME_SEARCH", "AUTO"):
-                    self.scanner.start()
+                    try:
+                        px_per_deg_x = 17.453292519943295 / max(
+                            1e-6, float(self.config.angular_model.pixel_to_angle_x) * 0.001)
+                        px_per_deg_y = 17.453292519943295 / max(
+                            1e-6, float(self.config.angular_model.pixel_to_angle_y) * 0.001)
+                        off_pan = (float(self.pan) - float(self.config.ptz.home_pan)) / px_per_deg_x
+                        off_tilt = (float(self.tilt) - float(self.config.ptz.home_tilt)) / px_per_deg_y
+                        self.scanner.start_at(off_pan, off_tilt)
+                    except Exception:
+                        self.scanner.start()
                     self.config.state.acquisition_state = "SEARCHING"
                     self.config.state.tracking_state = "OFF"
                 elif lost_action == "RETURN_HOME":
                     self.go_home()
                     self.config.state.tracking_state = "OFF"
+                elif lost_action == "HOLD_POSITION":
+                    # Hold: keep last pose, stay LOST until a target re-confirms.
+                    self.config.state.tracking_state = "LOST"
         else:
             if not target_confirmed:
                 self.config.state.tracking_state = "OFF"
@@ -686,8 +867,8 @@ class LocalTerminal:
                 "state": (
                     "LOCKED" if self.config.state.tracking_state == "TRACKING"
                     else "REACQUIRING" if self.config.state.tracking_state == "REACQUIRING"
-                    else "DISCRIMINATING" if self.config.state.detection_state == "DISCRIMINATING"
                     else "SEARCHING" if self.config.state.acquisition_state == "SEARCHING"
+                    else "DISCRIMINATING" if self.config.state.detection_state == "DISCRIMINATING"
                     else "IDLE"
                 ),
             },

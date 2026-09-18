@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -161,11 +162,21 @@ class HeadlessSimulation:
             except Exception:
                 pass
 
+        # disturb_camera_pose() already advanced context time once; apply
+        # optical+sensor without a second advance so turbulence ages 1x/frame.
         try:
             from simulation.fov_pipeline import apply_post_noise as _post
-            fov_frame = _post(fov_frame, dc, dt_eff, self.rng, self._disturbance_pipeline)
+            fov_frame = _post(
+                fov_frame, dc, dt_eff, self.rng, self._disturbance_pipeline,
+                advance=False,
+            )
         except Exception:
             fov_frame = dist.apply_turbulence(fov_frame, int(getattr(dc, "turbulence", 0)), dt=dt_eff, rng=self.rng)
+
+        try:
+            self._last_capture_pose = (float(self.camera.pan), float(self.camera.tilt))
+        except Exception:
+            pass
 
         return fov_frame
 
@@ -232,18 +243,19 @@ class HeadlessSimulation:
             except Exception:
                 pass
         try:
-            self.local_terminal.update(dt_wall, remote_scenario=getattr(self, "terminal_scenario", None))
+            self.local_terminal.update(
+                dt_wall, remote_scenario=getattr(self, "terminal_scenario", None),
+                fov_frame=self._last_frame,
+                fov_capture_pose=getattr(self, "_last_capture_pose", None),
+            )
         except Exception:
             try:
                 self.camera.update(dt_wall)
             except Exception:
                 pass
 
-        # Capture disturbed frame
-        fov_frame = self._capture_fov_frame(dt_eff)
-        self._last_frame = fov_frame
-
-        # Direct action (manual override / gym action)
+        # Direct action (manual override / gym action) applied BEFORE capture
+        # so the returned frame reflects the action (no 1-step delay).
         if action is not None:
             try:
                 arr = np.asarray(action, dtype=float).reshape(-1)
@@ -253,8 +265,16 @@ class HeadlessSimulation:
                     self.camera.move(d_pan, d_tilt, dt_eff)
                 except Exception:
                     self.camera.move(d_pan, d_tilt)
+                try:
+                    self.camera.flush_pending()
+                except Exception:
+                    pass
             except Exception:
                 pass
+
+        # Capture disturbed frame
+        fov_frame = self._capture_fov_frame(dt_eff)
+        self._last_frame = fov_frame
 
         self.step_count += 1
         reward = 0.0
@@ -267,7 +287,8 @@ class HeadlessSimulation:
 
         try:
             from gui.core.renderer import Renderer as _Renderer
-            obs["viewport"] = _Renderer.render_viewport(fov_frame, self.camera)
+            obs["viewport"] = _Renderer.render_viewport(
+                fov_frame, self.camera, telemetry=obs.get("local_terminal"))
         except Exception:
             obs["viewport"] = fov_frame
 

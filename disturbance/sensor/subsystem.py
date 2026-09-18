@@ -20,8 +20,8 @@ class SensorDisturbanceSubsystem:
             out = apply_image_noise(
                 out,
                 enable_salt_pepper=bool(getattr(cfg, "enable_salt_pepper", False)),
-                enable_gaussian=bool(getattr(cfg, "enable_gaussian", False)) and not sensor_on,
-                enable_poisson=bool(getattr(cfg, "enable_poisson", False)) and not sensor_on,
+                enable_gaussian=bool(getattr(cfg, "enable_gaussian", False)),
+                enable_poisson=bool(getattr(cfg, "enable_poisson", False)),
                 salt_pepper_density=float(getattr(cfg, "salt_pepper_density", 0.10)),
                 salt_pepper_ratio=float(getattr(cfg, "salt_pepper_ratio", 0.50)),
                 gaussian_sigma=float(getattr(cfg, "gaussian_sigma", 8.0)),

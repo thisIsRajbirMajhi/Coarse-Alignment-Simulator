@@ -11,14 +11,16 @@ LOCK_STATUS_COLORS_HEX: dict[str, str] = {
     "detecting": "#3b82f6",
 }
 
-# BGR for OpenCV (B,G,R) — single source for lock status colors
+def _hex_to_bgr(hex_color: str) -> tuple[int, int, int]:
+    """Convert '#RRGGBB' to OpenCV (B, G, R)."""
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return (b, g, r)
+
+
+# BGR for OpenCV (B,G,R) — derived from HEX above so both stay in sync
 LOCK_STATUS_COLORS_BGR: dict[str, tuple[int, int, int]] = {
-    "searching": (170, 170, 170),  # gray
-    "acquired": (90, 220, 220),    # cyan
-    "tracking": (90, 220, 90),     # green
-    "locked": (90, 220, 90),       # alias
-    "lost": (255, 80, 80),         # red (BGR order as stored)
-    "detecting": (255, 130, 130),  # blue-ish
+    key: _hex_to_bgr(value) for key, value in LOCK_STATUS_COLORS_HEX.items()
 }
 
 def lock_color_hex(status: str, default: str = "#64748b") -> str:

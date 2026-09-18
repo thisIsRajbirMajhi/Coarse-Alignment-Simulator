@@ -9,3 +9,8 @@ except Exception:
     pass
 
 __all__ = ["HeadlessSimulation"]
+try:
+    FSOCEnv  # noqa: F821
+    __all__.append("FSOCEnv")
+except NameError:
+    pass

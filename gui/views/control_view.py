@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 
-from PyQt5.QtWidgets import QHBoxLayout, QPushButton, QWidget
+from PyQt5.QtWidgets import QComboBox, QHBoxLayout, QPushButton, QWidget
 
 log = logging.getLogger(__name__)
 
@@ -31,8 +31,16 @@ class ControlView(QWidget):
         self.btn_dashboard.setObjectName("settingsButton")
         self.btn_fullscreen = QPushButton("Full Screen")
         self.btn_fullscreen.setObjectName("settingsButton")
+        # Testing presets: auto-configure all modules + auto-start.
+        self.preset_combo = QComboBox(self)
+        self.preset_combo.setObjectName("presetCombo")
+        self.btn_preset = QPushButton("Load & Start")
+        self.btn_preset.setObjectName("presetButton")
+        self.btn_preset.setToolTip("Apply the selected testing preset to all modules and start the simulation")
         for b in (self.btn_start, self.btn_stop, self.btn_pause, self.btn_reset, self.btn_dashboard, self.btn_fullscreen, self.btn_settings):
             layout.addWidget(b)
+        layout.addWidget(self.preset_combo)
+        layout.addWidget(self.btn_preset)
 
     def apply_button_states(self, states: dict) -> None:
         self.btn_start.setEnabled(bool(states.get("start", False)))

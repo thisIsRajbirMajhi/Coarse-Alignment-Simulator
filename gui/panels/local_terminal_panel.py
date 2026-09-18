@@ -372,7 +372,7 @@ class LocalTerminalPanel(BaseConfigPanel):
 
         acq_grid.addWidget(self._label("Search Pattern"), 0, 3)
         self.combo_acq_pattern = QComboBox()
-        self.combo_acq_pattern.addItems(["RANDOM", "RASTER", "SPIRAL", "SECTOR", "GRID", "CUSTOM"])
+        self.combo_acq_pattern.addItems(["RANDOM", "RASTER", "SPIRAL", "SECTOR", "GRID", "CUSTOM", "FIGURE_8"])
         self.combo_acq_pattern.setMinimumHeight(26)
         acq_grid.addWidget(self.combo_acq_pattern, 0, 4, 1, 2)
 

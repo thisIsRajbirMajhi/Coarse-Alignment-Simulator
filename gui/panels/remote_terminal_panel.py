@@ -101,7 +101,7 @@ class RemoteTerminalPanel(BaseConfigPanel):
         # Row 2: Motion Profile & Speed
         scen_grid.addWidget(self._label("Motion Profile"), 2, 0)
         self.motion_profile = QComboBox()
-        self.motion_profile.addItems(["Stationary", "Constant Velocity", "Linear", "Circular", "Sinusoidal", "Waypoint"])
+        self.motion_profile.addItems(["Stationary", "Constant Velocity", "Linear", "Circular", "Sinusoidal", "Figure-8", "Random Walk", "Waypoint"])
         self.motion_profile.setMinimumHeight(26)
         scen_grid.addWidget(self.motion_profile, 2, 1)
 

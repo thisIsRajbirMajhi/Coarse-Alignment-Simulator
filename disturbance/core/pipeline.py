@@ -47,11 +47,12 @@ class DisturbancePipeline:
             self.context.dt = float(dt)
         return self.sensor.apply(frame, self.context)
 
-    def apply_frame(self, frame: np.ndarray) -> np.ndarray:
+    def apply_frame(self, frame: np.ndarray, advance: bool = True) -> np.ndarray:
         self._sync_config()
         if not getattr(self.context.config.global_, "enabled", True):
             return frame
-        self.context.advance()
+        if advance:
+            self.context.advance()
         return self.sensor.apply(self.optical.apply(frame, self.context), self.context)
 
     def reset(self) -> None:
@@ -59,6 +60,11 @@ class DisturbancePipeline:
         self.camera.reset()
         self.sensor.reset()
         self.optical.turbulence_state.clear()
+        try:
+            from disturbance.core.state import reset_disturbance_state
+            reset_disturbance_state()
+        except Exception:
+            pass
 
 
 __all__ = ["DisturbancePipeline"]

@@ -135,7 +135,8 @@ else:
                     cfg_kwargs[k] = v
                 elif k == "env_config":
                     cfg_kwargs["env"] = v
-                elif k == "camera_config":
+                elif k in ("camera_config", "local_terminal_config"):
+                    cfg_kwargs["local_terminal"] = v
                     cfg_kwargs["camera"] = v
                 elif k == "controller_config":
                     cfg_kwargs["controller"] = v

@@ -7,6 +7,63 @@ from typing import Any
 from local_terminal.config import DetectionConfig
 
 
+def estimate_spot_brightness(
+    frame,
+    spot_fov: tuple[float, float] | None,
+    patch_half: int = 4,
+) -> tuple[float, float]:
+    """Measure peak DN and background-contrast SNR at a candidate spot.
+
+    Returns (peak_dn, snr_db). SNR is estimated as
+    20*log10(max(peak-bg, eps) / max(noise, eps)) where bg/noise come from
+    a surrounding border. Returns (0.0, 0.0) when frame/spot is missing.
+    Pure helper — no state, safe to call with None.
+    """
+    try:
+        import numpy as _np
+
+        if frame is None or spot_fov is None:
+            return 0.0, 0.0
+        arr = _np.asarray(frame)
+        if arr.size == 0:
+            return 0.0, 0.0
+        if arr.ndim == 3:
+            gray = arr[..., :].astype(float).mean(axis=2)
+        else:
+            gray = arr.astype(float)
+        fh, fw = gray.shape[:2]
+        cx, cy = float(spot_fov[0]), float(spot_fov[1])
+        if not (-patch_half <= cx < fw + patch_half and -patch_half <= cy < fh + patch_half):
+            return 0.0, 0.0
+        x0 = max(0, int(round(cx)) - patch_half)
+        x1 = min(fw, int(round(cx)) + patch_half + 1)
+        y0 = max(0, int(round(cy)) - patch_half)
+        y1 = min(fh, int(round(cy)) + patch_half + 1)
+        if x1 <= x0 or y1 <= y0:
+            return 0.0, 0.0
+        patch = gray[y0:y1, x0:x1]
+        peak = float(patch.max())
+        # Background border: outer ring 2x patch around center, excluding patch.
+        bx0 = max(0, x0 - patch_half * 2)
+        bx1 = min(fw, x1 + patch_half * 2)
+        by0 = max(0, y0 - patch_half * 2)
+        by1 = min(fh, y1 + patch_half * 2)
+        border = gray[by0:by1, bx0:bx1].copy()
+        border[y0 - by0:y1 - by0, x0 - bx0:x1 - bx0] = float("nan")
+        with _np.errstate(all="ignore"):
+            bg = float(_np.nanmedian(border))
+            noise = float(_np.nanstd(border))
+        if not math.isfinite(bg):
+            bg = 0.0
+        if not math.isfinite(noise) or noise < 1e-6:
+            noise = 1.0
+        contrast = max(0.0, peak - bg)
+        snr_db = 20.0 * math.log10(max(contrast, 1e-6) / max(noise, 1e-6))
+        return peak, float(max(0.0, min(snr_db, 60.0)))
+    except Exception:
+        return 0.0, 0.0
+
+
 class DetectionEngine:
     """
     Evaluates detected optical beacon spots in FOV against configured target signature.

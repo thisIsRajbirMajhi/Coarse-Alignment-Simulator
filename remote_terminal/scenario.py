@@ -31,7 +31,7 @@ class RemoteTerminalScenario:
         self.bounds = bounds
         self.rng = rng or np.random.default_rng(42)
         self.config = (config or RemoteTerminalScenarioConfig()).validate()
-        self.motion_tracker = ScenarioMotionTracker(self.config.motion, bounds=bounds)
+        self.motion_tracker = ScenarioMotionTracker(self.config.motion, bounds=bounds, rng=rng)
         self.terminals: list[RemoteTerminal] = []
         self._lock_timers: dict[str, float] = {}
         self._rebuild_terminals()
@@ -91,12 +91,18 @@ class RemoteTerminalScenario:
             cam_cy = (fov_y0 + fov_y1) / 2.0
             fov_w = max(1.0, fov_x1 - fov_x0)
             fov_h = max(1.0, fov_y1 - fov_y0)
-            pixel_scale = getattr(getattr(camera, "config", None), "pixel_scale_mrad", 0.035)
+            pixel_scale = getattr(getattr(camera, "config", None), "pixel_scale_mrad", None)
+            if pixel_scale is None:
+                try:
+                    am = getattr(getattr(camera, "config", None), "angular_model", None)
+                    pixel_scale = float(am.pixel_to_angle_x) * 0.001 if am is not None else 0.109083
+                except Exception:
+                    pixel_scale = 0.109083
         else:
             fov_x0, fov_y0, fov_x1, fov_y1 = 0, 0, 0, 0
             cam_cx, cam_cy = 1000.0, 1000.0
             fov_w, fov_h = 640, 480
-            pixel_scale = 0.035
+            pixel_scale = 0.109083
 
         for t in self.terminals:
             t.update(dt)
@@ -113,7 +119,8 @@ class RemoteTerminalScenario:
             # Check if terminal position is inside camera FOV
             in_fov = (fov_x0 <= t.x <= fov_x1) and (fov_y0 <= t.y <= fov_y1)
             dist_to_center = math.hypot(t.x - cam_cx, t.y - cam_cy)
-            lock_radius = min(fov_w, fov_h) * 0.28  # within central 28% of FOV
+            # Unified with LocalTerminal link FSM: central 15% of FOV
+            lock_radius = min(fov_w, fov_h) * 0.15
 
             # Target signature check:
             # Wavelength matches expected within tolerance
@@ -127,12 +134,15 @@ class RemoteTerminalScenario:
                 self._lock_timers[tid] = dwell
 
                 if dist_to_center <= lock_radius and mod_match:
+                    # Unified with LocalTerminal: 0.2s LOCK / 0.5s HANDSHAKE / 1.2s CONNECTED
                     if dwell >= 1.2:
                         t.config.state.communication_state = "CONNECTED"
-                    elif dwell >= 0.6:
+                    elif dwell >= 0.5:
                         t.config.state.communication_state = "HANDSHAKE"
-                    else:
+                    elif dwell >= 0.2:
                         t.config.state.communication_state = "OPTICAL_LOCK"
+                    else:
+                        t.config.state.communication_state = "DETECTING"
                 else:
                     t.config.state.communication_state = "DETECTING"
             else:
@@ -152,7 +162,13 @@ class RemoteTerminalScenario:
 
         display = fov_frame.copy()
         fov_rect = camera.get_fov_rect()
-        pixel_scale = getattr(getattr(camera, "config", None), "pixel_scale_mrad", 0.035)
+        pixel_scale = getattr(getattr(camera, "config", None), "pixel_scale_mrad", None)
+        if pixel_scale is None:
+            try:
+                am = getattr(getattr(camera, "config", None), "angular_model", None)
+                pixel_scale = float(am.pixel_to_angle_x) * 0.001 if am is not None else 0.109083
+            except Exception:
+                pixel_scale = 0.109083
         fh, fw = display.shape[:2]
 
         for t in self.terminals:

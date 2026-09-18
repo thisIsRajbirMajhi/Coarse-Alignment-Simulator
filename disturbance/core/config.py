@@ -407,7 +407,7 @@ class DisturbanceConfig(BaseValidatedConfig):
             self.salt_pepper_density = float(rng.uniform(0.08, 0.16))
             self.salt_pepper_ratio = float(rng.uniform(0.45, 0.55))
             self.gaussian_sigma = float(rng.uniform(10, 18))
-            self.gaussian_sigma_max = 22.0
+            self.gaussian_sigma_max = 20.0
             self.poisson_scale = float(rng.uniform(1.0, 2.2))
             self.poisson_peak = float(rng.uniform(60, 120))
             self.camera_jitter = float(rng.uniform(10, 18))

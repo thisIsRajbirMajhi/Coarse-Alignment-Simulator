@@ -21,6 +21,13 @@ class _StateFields:
     def __setitem__(self, key: str, value: Any) -> None:
         setattr(self, key, value)
 
+    def __contains__(self, key: object) -> bool:
+        try:
+            getattr(self, str(key))
+            return True
+        except AttributeError:
+            return False
+
     def clear(self) -> None:
         for key, value in self.__dataclass_fields__.items():
             setattr(self, key, value.default_factory() if value.default_factory is not MISSING else value.default)

@@ -65,10 +65,16 @@ class TargetTracker:
         target_in_fov: bool,
         spot_center_fov: tuple[float, float] | None,
         fov_size: tuple[int, int],
+        camera_vel_px_s: tuple[float, float] | None = None,
     ) -> dict[str, Any]:
         """
         Step the tracker with current frame observations.
         Returns tracking telemetry with pixel and angular errors.
+
+        camera_vel_px_s: own-ship FOV velocity (+pan moves scene -x in FOV).
+        Error-rate includes -camera_vel, so target velocity is compensated:
+        v_target = d(err)/dt + camera_vel. Without it, own motion pollutes
+        the estimate and causes feedback oscillation.
         """
         fw, fh = fov_size
         cx_target = fw * 0.5
@@ -108,8 +114,17 @@ class TargetTracker:
             self._initialized = True
         else:
             if dt > 1e-4:
-                curr_vx = (raw_err_x - self._last_raw_x) / dt
-                curr_vy = (raw_err_y - self._last_raw_y) / dt
+                d_err_x = (raw_err_x - self._last_raw_x) / dt
+                d_err_y = (raw_err_y - self._last_raw_y) / dt
+                if camera_vel_px_s is not None:
+                    # FOV error moves opposite to camera: v_tgt = d_err + v_cam
+                    curr_vx = d_err_x + float(camera_vel_px_s[0])
+                    curr_vy = d_err_y + float(camera_vel_px_s[1])
+                else:
+                    curr_vx, curr_vy = d_err_x, d_err_y
+                # Clamp spike (e.g. reacquire jump) to 2000 px/s before filtering.
+                curr_vx = float(max(-2000.0, min(2000.0, curr_vx)))
+                curr_vy = float(max(-2000.0, min(2000.0, curr_vy)))
                 alpha_v = 0.2
                 self.vel_x = alpha_v * curr_vx + (1.0 - alpha_v) * self.vel_x
                 self.vel_y = alpha_v * curr_vy + (1.0 - alpha_v) * self.vel_y
@@ -161,7 +176,8 @@ class TargetTracker:
         p_x = float(self.config.kp) * eff_err_x
         p_y = float(self.config.kp) * eff_err_y
 
-        # Integral with anti-windup clamping
+        # Integral with anti-windup clamping (integral path alone saturates
+        # at output_clamp; P+D add within the same clamp).
         clamp = float(self.config.output_clamp)
         i_limit = clamp / max(1e-4, float(self.config.ki)) if float(self.config.ki) > 1e-6 else clamp
         self._integral_x = float(max(-i_limit, min(self._integral_x + eff_err_x * dt, i_limit)))

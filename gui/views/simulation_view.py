@@ -49,7 +49,9 @@ class SimulationView(QWidget):
         try:
             fov = snapshot.fov_frame.copy() if snapshot.fov_frame is not None else None
             if fov is not None:
-                overlay = Renderer.render_viewport(fov, session.camera)
+                overlay = Renderer.render_viewport(
+                    fov, session.camera,
+                    telemetry=getattr(snapshot, "local_terminal", None))
                 pm = frame_to_pixmap(overlay)
                 if pm is not None:
                     self.fov_label.setPixmap(pm.scaled(

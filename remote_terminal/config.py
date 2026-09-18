@@ -289,6 +289,26 @@ class FormationConfig:
         return cls(**_filter_dataclass_fields(cls, data)).validate()
 
 
+def normalize_motion_profile(profile: object) -> str:
+    """Canonicalize motion profile names incl. common aliases.
+
+    Figure-8: "Figure 8" | "FIGURE_8" | "FIG8" | "Fig-8" -> "Figure-8".
+    Random: "Random" | "RANDOM" | "RandomWalk" | "RW" -> "Random Walk".
+    """
+    p = str(profile or "").strip()
+    low = p.lower().replace("_", " ").replace("-", " ").strip()
+    low_nospace = low.replace(" ", "")
+    if low_nospace in ("figure8", "fig8", "figureeight"):
+        return "Figure-8"
+    if low_nospace in ("random", "randomwalk", "rw"):
+        return "Random Walk"
+    for canonical in ("Stationary", "Constant Velocity", "Linear", "Circular",
+                      "Sinusoidal", "Figure-8", "Random Walk", "Waypoint", "Custom"):
+        if p == canonical or low == canonical.lower():
+            return canonical
+    return p
+
+
 @dataclass
 class MotionConfig:
     """Scenario-level motion kinematics."""
@@ -303,7 +323,8 @@ class MotionConfig:
     start_z: float = 0.0
 
     def validate(self) -> MotionConfig:
-        profiles = {"Stationary", "Constant Velocity", "Linear", "Circular", "Sinusoidal", "Waypoint", "Custom"}
+        profiles = {"Stationary", "Constant Velocity", "Linear", "Circular", "Sinusoidal", "Figure-8", "Random Walk", "Waypoint", "Custom"}
+        self.profile = normalize_motion_profile(self.profile)
         if self.profile not in profiles:
             self.profile = "Constant Velocity"
         self.speed_mps = float(max(0.0, min(float(self.speed_mps), 500.0)))

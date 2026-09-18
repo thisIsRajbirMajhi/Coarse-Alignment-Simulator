@@ -30,6 +30,8 @@ class AcquisitionScanner:
         self._raster_tilt = 0.0
         self._spiral_angle = 0.0
         self._spiral_radius = 0.0
+        self._grid_row = 0
+        self._grid_col = 0
 
         # Random search state
         self._rng = rng or random.Random(42)
@@ -59,7 +61,36 @@ class AcquisitionScanner:
         self._raster_tilt = self.config.search_region_tilt_min
         self._spiral_angle = 0.0
         self._spiral_radius = 0.0
+        self._grid_row = 0
+        self._grid_col = 0
         self._pick_random_waypoint()
+
+    def start_at(self, pan_deg: float, tilt_deg: float) -> None:
+        """Resume scan around a deg offset (reacquisition) instead of region edge.
+
+        Keeps the camera near last-known position so nearby targets are
+        re-found quickly instead of jumping to p_min/t_min.
+        """
+        p_min = self.config.search_region_pan_min
+        p_max = self.config.search_region_pan_max
+        t_min = self.config.search_region_tilt_min
+        t_max = self.config.search_region_tilt_max
+        pan_deg = float(max(p_min, min(p_max, pan_deg)))
+        tilt_deg = float(max(t_min, min(t_max, tilt_deg)))
+        self.active = True
+        # Do NOT reset elapsed_time here — preserves timeout continuity.
+        self.current_pan_offset = pan_deg
+        self.current_tilt_offset = tilt_deg
+        self._raster_tilt = tilt_deg
+        self._raster_dir = 1.0
+        # Seed spiral at current radius/angle so it expands outward locally.
+        self._spiral_radius = float(min(abs(pan_deg), abs(tilt_deg), max(p_max - p_min, t_max - t_min) * 0.25))
+        self._spiral_angle = math.atan2(tilt_deg, pan_deg) if (pan_deg or tilt_deg) else 0.0
+        self._random_target_pan = pan_deg
+        self._random_target_tilt = tilt_deg
+        self._random_dwell = 0.0
+        self._grid_row = 0
+        self._grid_col = 0
 
     def stop(self) -> None:
         self.active = False
@@ -136,16 +167,21 @@ class AcquisitionScanner:
             self.current_tilt_offset = self._raster_tilt
 
         elif pattern == "SPIRAL":
-            # Expanding Archimedean spiral: r = a * theta
+            # Time-parametric Archimedean spiral: constant angular rate,
+            # radius grows linearly to r_max over `timeout` seconds.
+            # Old form omega=speed/max(1,r) spun ~15 rad/s at center.
             r_max = max(p_span, t_span) * 0.5
-            dr = (speed * 0.1) * dt
-            self._spiral_radius = min(r_max, self._spiral_radius + dr)
-            omega = speed / max(1.0, self._spiral_radius)
+            timeout = max(1.0, float(self.config.timeout))
+            # One full sweep every ~8 s, radius completes at timeout.
+            omega = 2.0 * math.pi / 8.0
             self._spiral_angle += omega * dt
+            frac = min(1.0, self.elapsed_time / timeout)
+            self._spiral_radius = r_max * frac
             self.current_pan_offset = self._spiral_radius * math.cos(self._spiral_angle)
-            self.current_tilt_offset = self._spiral_radius * math.sin(self._spiral_angle)
-            if self._spiral_radius >= r_max and timed_out:
+            self.current_tilt_offset = self._spiral_radius * math.sin(self._spiral_angle) * (t_span / max(1e-6, p_span))
+            if timed_out:
                 self._spiral_radius = 0.0
+                self._spiral_angle = 0.0
 
         elif pattern == "SECTOR":
             # Azimuthal sweep back and forth
@@ -158,11 +194,26 @@ class AcquisitionScanner:
                 self._raster_dir = 1.0
             self.current_tilt_offset = (t_min + t_max) * 0.5
 
-        else:  # GRID or CUSTOM
-            # Discrete steps
-            period = max(1.0, p_span / max(0.1, speed))
-            phase = (self.elapsed_time % period) / period
-            self.current_pan_offset = p_min + phase * p_span
-            self.current_tilt_offset = (t_min + t_max) * 0.5
+        elif pattern in ("FIGURE_8", "FIGURE-8", "FIG8", "FIGURE 8"):
+            # Lissajous figure-8 sweep: x = A*sin(w t), y = B*sin(2 w t).
+            # Covers the 2D region smoothly with a ~12 s period, crossing
+            # the center twice per period (no edge dwell like raster).
+            A = p_span * 0.5
+            B = t_span * 0.5
+            w = 2.0 * math.pi / 12.0
+            t = self.elapsed_time
+            self.current_pan_offset = A * math.sin(w * t)
+            self.current_tilt_offset = B * math.sin(2.0 * w * t)
+
+        else:  # GRID or CUSTOM — true 2D lattice, not pan-only sweep
+            n_cols = max(2, min(12, int(p_span / max(0.5, speed * 0.5)) + 2))
+            n_rows = max(2, min(12, int(t_span / max(0.5, speed * 0.5)) + 2))
+            # Advance one cell per dwell interval so each lattice point is visited.
+            dwell = 0.4
+            steps = int(self.elapsed_time / max(1e-3, dwell))
+            self._grid_col = (steps % n_cols)
+            self._grid_row = ((steps // n_cols) % n_rows)
+            self.current_pan_offset = p_min + (self._grid_col / max(1, n_cols - 1)) * p_span
+            self.current_tilt_offset = t_min + (self._grid_row / max(1, n_rows - 1)) * t_span
 
         return self.current_pan_offset, self.current_tilt_offset, timed_out

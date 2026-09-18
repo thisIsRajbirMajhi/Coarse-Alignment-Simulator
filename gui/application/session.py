@@ -193,7 +193,11 @@ class SimulationSession:
                 log.debug("terminal scenario update skipped: %s", e)
 
         try:
-            self.local_terminal.update(dt, remote_scenario=getattr(self, "terminal_scenario", None))
+            self.local_terminal.update(
+                dt, remote_scenario=getattr(self, "terminal_scenario", None),
+                fov_frame=getattr(self, "_last_fov_frame", None),
+                fov_capture_pose=getattr(self, "_last_capture_pose", None),
+            )
         except Exception:
             self.camera.update(dt)
 
@@ -221,14 +225,20 @@ class SimulationSession:
         except Exception as e:
             log.debug("vignetting skipped: %s", e)
 
-        fov_frame = pipe.apply_frame(fov_frame)
+        # disturb_camera_pose() already advanced time; don't advance again.
+        fov_frame = pipe.apply_frame(fov_frame, advance=False)
+        try:
+            self._last_fov_frame = fov_frame
+            self._last_capture_pose = (float(self.camera.pan), float(self.camera.tilt))
+        except Exception:
+            pass
 
         self._frame_id += 1
 
         try:
-            scale = float(getattr(self.camera.config, "pixel_scale_mrad", 0.035))
+            scale = float(getattr(self.camera.config, "pixel_scale_mrad", 0.109083))
         except Exception:
-            scale = 0.035
+            scale = 0.109083
 
         return FrameSnapshot(
             frame_id=self._frame_id,

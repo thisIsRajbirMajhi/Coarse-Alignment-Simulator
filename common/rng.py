@@ -55,6 +55,14 @@ def get_rng(rng: np.random.Generator | None = None, seed: int | None = None) -> 
     return get_global_rng()
 
 
+def _stable_label_int(label: str) -> int:
+    """Stable 32-bit int from label (hash() is salted per-process, hashlib is not)."""
+    import hashlib
+
+    digest = hashlib.sha256(str(label).encode("utf-8")).digest()
+    return int.from_bytes(digest[:4], "little")
+
+
 def substream(parent_seed: int, *labels: str) -> np.random.Generator:
     """Independent substream via SeedSequence.spawn (no cross-talk).
 
@@ -62,7 +70,7 @@ def substream(parent_seed: int, *labels: str) -> np.random.Generator:
     unlike sharing one Generator sequentially.
     """
     try:
-        seq = np.random.SeedSequence(int(parent_seed), spawn_key=tuple(int(abs(hash(str(l))) % (2**32)) for l in labels) if labels else ())
+        seq = np.random.SeedSequence(int(parent_seed), spawn_key=tuple(_stable_label_int(l) for l in labels) if labels else ())
         child = seq.spawn(1)[0]
         return np.random.default_rng(child)
     except Exception:
