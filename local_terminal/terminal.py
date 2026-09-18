@@ -301,18 +301,6 @@ class LocalTerminal:
     def go_home(self) -> None:
         self.set_position(float(self.config.ptz.home_pan), float(self.config.ptz.home_tilt))
 
-    def get_home(self) -> tuple[float, float]:
-        """Return (home_pan, home_tilt) coordinates."""
-        return float(self.config.ptz.home_pan), float(self.config.ptz.home_tilt)
-
-    def get_pan_range(self) -> tuple[float, float]:
-        """Return (pan_min, pan_max) travel range."""
-        return float(self.config.ptz.pan_min), float(self.config.ptz.pan_max)
-
-    def get_tilt_range(self) -> tuple[float, float]:
-        """Return (tilt_min, tilt_max) travel range."""
-        return float(self.config.ptz.tilt_min), float(self.config.ptz.tilt_max)
-
     def set_vignetting(self, strength: float) -> None:
         self.vignetting = float(np.clip(float(strength), 0.0, 0.95))
         self.config.vignetting = self.vignetting

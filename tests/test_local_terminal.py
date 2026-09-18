@@ -619,5 +619,28 @@ class TestTargetTrackerServo:
         assert tracker._prev_deriv_y == 0.0
 
 
+def test_minimap_overlay_queries():
+    term = LocalTerminal(scene_bounds=(2000, 2000))
+    hx, hy = term.get_home()
+    assert abs(hx - term.config.ptz.home_pan) < 1e-5
+    assert abs(hy - term.config.ptz.home_tilt) < 1e-5
+
+    eff_pmin, eff_pmax = term._effective_pan_range()
+    p_min, p_max = term.get_pan_range()
+    assert abs(p_min - eff_pmin) < 1e-5
+    assert abs(p_max - eff_pmax) < 1e-5
+
+    eff_tmin, eff_tmax = term._effective_tilt_range()
+    t_min, t_max = term.get_tilt_range()
+    assert abs(t_min - eff_tmin) < 1e-5
+    assert abs(t_max - eff_tmax) < 1e-5
+
+
+def test_config_controller_config_property():
+    cfg = LocalTerminalConfig()
+    assert cfg.controller_config is cfg.tracking
+    assert cfg.controller_config.kp == cfg.tracking.kp
+
+
 
 

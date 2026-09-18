@@ -63,7 +63,7 @@ class SettingsDialog(QDialog):
         title.setStyleSheet("font-size:16px; font-weight:700; color:#ffffff;")
         hbox.addWidget(title)
 
-        sub = QLabel("Local Optical Terminal • Remote Terminal • Control • Environment • Disturbances", header)
+        sub = QLabel("Local Optical Terminal • Remote Terminal • Environment • Disturbances", header)
         sub.setStyleSheet("font-size:11px; color:#e2e8f0; margin-left:8px;")
         hbox.addWidget(sub)
         hbox.addStretch(1)
@@ -100,6 +100,7 @@ class SettingsDialog(QDialog):
         # 2. Remote Terminal Panel
         scen_cfg = getattr(session, "scenario_config", None)
         self.terminal_panel = RemoteTerminalPanel(initial=scen_cfg)
+        self.remote_terminal_panel = self.terminal_panel
 
         # 3. Environment Panel
         self.env_panel = EnvironmentPanel(initial=session.env_config)
@@ -193,10 +194,6 @@ class SettingsDialog(QDialog):
                 self.terminal_panel.set_config(session.scenario_config, emit=False)
         except Exception as e:
             log.debug("remote terminal sync skipped: %s", e)
-        try:
-            self.control_panel.set_config(session.controller_config, emit=False)
-        except Exception as e:
-            log.debug("control sync skipped: %s", e)
         try:
             self.env_panel.set_config(session.env_config, emit=False)
         except Exception as e:

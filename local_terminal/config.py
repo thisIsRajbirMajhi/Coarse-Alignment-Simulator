@@ -747,6 +747,11 @@ class LocalTerminalConfig:
     def latency_jitter_ms(self, val: float) -> None:
         self.realism.latency_jitter = float(val)
 
+    @property
+    def controller_config(self) -> TrackingConfig:
+        """Compatibility property forwarding to tracking configuration."""
+        return self.tracking
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "localTerminal": {

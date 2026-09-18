@@ -1,4 +1,7 @@
-# Core simulator (GUI + synthesis)
+# Core simulator (GUI, rendering, synthesis, and kinematics)
 numpy>=1.26,<2.6
 opencv-python>=4.8,<5.1
 PyQt5==5.15.11
+
+# Testing & development
+pytest>=8.0

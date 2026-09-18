@@ -23,6 +23,14 @@ class BaseConfigPanel(QWidget):
       - set_config(cfg, emit=False)
     """
 
+    def get_config(self) -> Any:
+        """Unified getter alias for collect_config()."""
+        return self.collect_config()
+
+    def collect_config(self) -> Any:
+        """Collect and validate current widget parameters into a configuration object."""
+        raise NotImplementedError
+
     def _label(self, text: str) -> QLabel:
         lbl = QLabel(text)
         lbl.setStyleSheet("color:#334155; font-size:11px; font-weight:600;")

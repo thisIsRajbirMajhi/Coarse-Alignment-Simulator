@@ -88,9 +88,21 @@ def test_control_deck_dialog_hosts_local_terminal(qapp):
     assert dlg.tabs.tabText(2) == "Environment"
     assert dlg.tabs.tabText(3) == "Disturbances"
 
-    # Verify local terminal panel is present and wired
+    # Verify panels are present and wired
     assert hasattr(dlg, "local_terminal_panel")
     assert hasattr(dlg, "camera_panel")
+    assert hasattr(dlg, "remote_terminal_panel")
+    assert dlg.remote_terminal_panel is dlg.terminal_panel
+
+    # Verify uniform get_config() works on all panels
+    cfg_lt = dlg.local_terminal_panel.get_config()
+    cfg_rt = dlg.remote_terminal_panel.get_config()
+    cfg_env = dlg.env_panel.get_config()
+    cfg_dist = dlg.dist_panel.get_config()
+    assert cfg_lt is not None
+    assert cfg_rt is not None
+    assert cfg_env is not None
+    assert cfg_dist is not None
 
     # Fullscreen toggle
     dlg.toggle_fullscreen()
@@ -101,6 +113,6 @@ def test_control_deck_dialog_hosts_local_terminal(qapp):
     assert dlg._fullscreen is False
     assert dlg.btn_fullscreen.text() == "Full Screen"
 
-    # Sync from session
+    # Sync from session (must complete cleanly without exceptions)
     dlg.sync_from_session(session)
     dlg.close()
