@@ -120,9 +120,13 @@ def apply_salt_pepper(
         cache_ys, cache_xs, cache_is_salt = _get_persistent_hot_pixels(h, w, density, float(salt_vs_pepper), rng=_rng, defect_state=defect_state)
         # Adjust count to persist_dens
         want = int(h * w * float(persist_dens))
-        if want > 0:
-            # Subsample cache deterministically per call: random choice without replacement
-            idx = _rng.choice(len(cache_ys), size=min(want, len(cache_ys)), replace=False) if len(cache_ys) > 0 else np.array([], dtype=int)
+        if want > 0 and len(cache_ys) > 0:
+            if want >= len(cache_ys):
+                # Cache pre-sized to want — use directly, no per-frame choice
+                idx = np.arange(len(cache_ys))
+            else:
+                # Subsample cache deterministically per call: random choice without replacement
+                idx = _rng.choice(len(cache_ys), size=want, replace=False)
             py = cache_ys[idx][~cache_is_salt[idx]] if len(idx) > 0 else np.array([], dtype=int)
             px = cache_xs[idx][~cache_is_salt[idx]] if len(idx) > 0 else np.array([], dtype=int)
             sy = cache_ys[idx][cache_is_salt[idx]] if len(idx) > 0 else np.array([], dtype=int)
@@ -200,8 +204,9 @@ def apply_gaussian_noise(
     if sigma <= 1e-9:
         return frame
     noise = _rng.normal(0.0, sigma, frame.shape).astype(np.float32)
-    out = frame.astype(np.float32) + noise
-    out = np.clip(np.round(out), 0, 255).astype(np.uint8)
+    out = frame.astype(np.float32)
+    out += noise
+    np.clip(np.round(out, out=out), 0, 255, out=out)
     # Preserve dtype
     return out.astype(frame.dtype, copy=False)
 

@@ -9,18 +9,43 @@ class SensorDisturbanceSubsystem:
     def __init__(self, config):
         self.config = config
         self.defect_state = SensorDefectState()
+        self._cached_version: int | None = None
+        self._modern_on: bool = False
+        self._legacy_noise: int = 0
+
+    def _sync_flags(self) -> None:
+        """Cache enable flags per config version (~12 getattr/frame saved)."""
+        cfg = self.config
+        try:
+            ver = hash((
+                bool(getattr(cfg, "enable_salt_pepper", False)),
+                bool(getattr(cfg, "enable_gaussian", False)),
+                bool(getattr(cfg, "enable_poisson", False)),
+                int(getattr(cfg, "noise", 0)),
+            ))
+        except (AttributeError, TypeError, ValueError):
+            ver = None
+        if ver is not None and ver == self._cached_version:
+            return
+        self._modern_on = bool(getattr(cfg, "enable_salt_pepper", False) or getattr(cfg, "enable_gaussian", False) or getattr(cfg, "enable_poisson", False))
+        try:
+            self._legacy_noise = int(getattr(cfg, "noise", 0))
+        except (TypeError, ValueError):
+            self._legacy_noise = 0
+        self._cached_version = ver
 
     def apply(self, frame, context):
         cfg = self.config
-        modern_on = bool(getattr(cfg, "enable_salt_pepper", False) or getattr(cfg, "enable_gaussian", False) or getattr(cfg, "enable_poisson", False))
+        self._sync_flags()
+        modern_on = self._modern_on
         out = frame
         # Exclusive paths: modern stack wins when enabled, otherwise legacy.
         # Applying both double-counts photons (salt twice) and runs two
         # independent hot-pixel models on the same frame.
         if modern_on:
             pass
-        elif int(getattr(cfg, "noise", 0)) > 0:
-            out = apply_sensor_noise(out, int(cfg.noise), rng=context.rng)
+        elif self._legacy_noise > 0:
+            out = apply_sensor_noise(out, int(self._legacy_noise), rng=context.rng)
         if modern_on:
             out = apply_image_noise(
                 out,
@@ -40,6 +65,12 @@ class SensorDisturbanceSubsystem:
 
     def reset(self) -> None:
         self.defect_state.clear()
+        self._cached_version = None
+        try:
+            from disturbance.sensor.image_noise import clear_hot_pixel_cache
+            clear_hot_pixel_cache()
+        except (AttributeError, TypeError, ValueError, ImportError):
+            pass
 
 
 __all__ = ["SensorDisturbanceSubsystem"]

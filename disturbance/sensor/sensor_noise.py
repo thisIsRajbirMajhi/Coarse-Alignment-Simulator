@@ -6,6 +6,24 @@ from common.rng import get_rng
 
 from disturbance.core.constants import ELECTRONS_PER_DN, READ_SIGMA_BASE, T_EXP
 
+# Cached PRNU calibration maps per (h, w, quantized intensity) — real sensors
+# have fixed gain variation, not per-frame random gain.
+_PRNU_CACHE: dict[tuple[int, int, int], np.ndarray] = {}
+_PRNU_CACHE_MAX = 8
+
+
+def _prnu_map(h: int, w: int, prnu_sigma: float, rng: np.random.Generator) -> np.ndarray:
+    key = (h, w, int(round(prnu_sigma * 10000)))
+    hit = _PRNU_CACHE.get(key)
+    if hit is not None:
+        return hit
+    prnu = rng.normal(1.0, prnu_sigma, (h, w)).astype(np.float32)
+    np.clip(prnu, 0.92, 1.08, out=prnu)
+    if len(_PRNU_CACHE) >= _PRNU_CACHE_MAX:
+        _PRNU_CACHE.pop(next(iter(_PRNU_CACHE)))
+    _PRNU_CACHE[key] = prnu
+    return prnu
+
 def apply_sensor_noise(
     frame: np.ndarray,
     intensity: float,
@@ -59,16 +77,14 @@ def apply_sensor_noise(
     read = _rng.normal(0.0, sigma_r_e, shot.shape)
     electrons_noisy = shot + read
 
-    # PRNU — per-pixel gain variation
+    # PRNU — cached per-pixel gain calibration (not per-frame random)
     if intensity > 0.5:
         prnu_sigma = 0.015 * (float(intensity) / 10.0)
-        prnu = _rng.normal(1.0, prnu_sigma, (h, w)).astype(np.float32)
-        prnu = np.clip(prnu, 0.92, 1.08)
-        for c in range(frame.shape[2] if frame.ndim == 3 else 1):
-            if frame.ndim == 3:
-                electrons_noisy[:, :, c] *= prnu
-            else:
-                electrons_noisy[:] *= prnu
+        prnu = _prnu_map(h, w, prnu_sigma, _rng)
+        if frame.ndim == 3:
+            electrons_noisy *= prnu[:, :, None]
+        else:
+            electrons_noisy *= prnu
 
     # Back to DN, pixels, quantise
     dn_out = electrons_noisy / float(electrons_per_dn)

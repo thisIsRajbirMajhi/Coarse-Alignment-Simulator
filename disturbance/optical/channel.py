@@ -72,6 +72,20 @@ _CHANNEL_BASE: dict[str, dict] = {
                   "spread": 1.08, "wander": 0.40, "scintillation": 0.05},
 }
 
+# Range-dependent extinction (Beer-Lambert β, per km) for the optical channel.
+# Used ONLY when an explicit link distance is supplied (distance_m is not None);
+# distance_m=None preserves legacy table behavior exactly (strict-compat).
+# Order-of-magnitude FSOC values at 1550 nm: clear-air aerosol ~0.05/km,
+# haze ~0.4/km, fog ~3/km (dense), rain ~1.2/km, low-light = clear-air.
+_EXTINCTION_BETA_PER_KM: dict[str, float] = {
+    "Clear": 0.05,
+    "Haze": 0.40,
+    "Fog": 3.00,
+    "Rain": 1.20,
+    "Low light": 0.05,
+}
+_RANGE_REF_M = 1000.0  # table attenuations are quoted at 1 km
+
 
 @dataclass
 class AttenuationConfig:
@@ -236,7 +250,13 @@ class PropagationChannel:
         distance_m: float | None = None,
         wavelength_nm: float = 1550.0,
     ) -> float:
-        """receivedIntensity = emittedIntensity × attenuationFactor."""
+        """receivedIntensity = emittedIntensity × attenuationFactor.
+
+        Optical-channel law: table loss (quoted at 1 km, severity-scaled) times
+        Beer-Lambert range correction ``exp(-β·(d - 1km))`` when an explicit
+        link distance is supplied. ``distance_m=None`` (all current call sites
+        unless wired) returns legacy table behavior exactly.
+        """
         if not self.enabled or not self.attenuation_cfg.enabled:
             return float(emitted_intensity)
         model = str(self.attenuation_cfg.model)
@@ -246,6 +266,12 @@ class PropagationChannel:
             beta = -math.log(max(1e-6, factor)) / 1000.0
             factor = math.exp(-beta * max(0.0, float(distance_m)))
             factor *= float(np.clip(self.attenuation_cfg.strength, 0.0, 1.0))
+        elif model == AttenuationModel.ATMOSPHERIC.value and distance_m is not None:
+            # Range-aware atmospheric extinction: table × exp(-β_extra·Δd).
+            # At d=1km correction is 1.0 → identical to legacy.
+            beta = float(_EXTINCTION_BETA_PER_KM.get(self.atmospheric_condition, 0.05))
+            delta = max(0.0, float(distance_m)) - _RANGE_REF_M
+            factor = factor * math.exp(-beta * delta / 1000.0)
         elif model == AttenuationModel.FIXED.value:
             factor = float(np.clip(self.attenuation_cfg.strength, 0.0, 1.0))
         elif model == AttenuationModel.CUSTOM.value:

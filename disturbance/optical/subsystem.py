@@ -51,8 +51,31 @@ class OpticalDisturbanceSubsystem:
         self.config = config
         self.turbulence_state = TurbulenceState()
         self.channel: PropagationChannel = _channel_from_config(config)
+        self._channel_cfg_version: int | None = None
+
+    def _config_version(self) -> int | None:
+        """Cheap change detector — avoids rebuilding channel every apply."""
+        cfg = self.config
+        try:
+            return hash((
+                str(getattr(cfg, "atmospheric_preset", "Clear")),
+                round(float(getattr(cfg, "channel_severity", 1.0)), 4),
+                round(float(getattr(cfg, "turbulence", 0.0)), 4),
+                round(float(getattr(cfg, "channel_beam_wander", 1.0)), 4),
+                round(float(getattr(cfg, "channel_beam_spread", 1.0)), 4),
+                round(float(getattr(cfg, "channel_intensity_fluctuation", 1.0)), 4),
+                round(float(getattr(cfg, "channel_attenuation_strength", 1.0)), 4),
+                str(getattr(cfg, "channel_attenuation_model", "Atmospheric")),
+                bool(getattr(cfg, "channel_enabled", True)),
+                bool(getattr(cfg, "channel_attenuation_enabled", True)),
+            ))
+        except (AttributeError, TypeError, ValueError):
+            return None
 
     def _sync_channel(self) -> None:
+        ver = self._config_version()
+        if ver is not None and ver == self._channel_cfg_version:
+            return  # unchanged — keep temporal OU state, skip rebuild
         cfg = self.config
         try:
             fresh = _channel_from_config(cfg)
@@ -61,7 +84,8 @@ class OpticalDisturbanceSubsystem:
             fresh.state.beamWander = self.channel.state.beamWander
             fresh.state.intensityFactor = self.channel.state.intensityFactor
             self.channel = fresh
-        except Exception:
+            self._channel_cfg_version = ver
+        except (AttributeError, TypeError, ValueError):
             pass
 
     # ---- Beam-state stage (authoritative per §2/§17) ----
@@ -87,11 +111,24 @@ class OpticalDisturbanceSubsystem:
 
     # ---- Image-space rendering of the received state (residual) ----
     def apply(self, frame, context):
+        """Residual background rendering — beam spots already carry channel.
+
+        Beam-state-only contract: beacons are degraded in
+        ``propagate_beam``/``apply_to_patch`` (attenuation, wander, spread,
+        scintillation). This image stage renders only the *background*
+        residual (seeing blur, haze veil, rain). To avoid double-counting
+        scintillation on beacons, image-space scintillation gain is disabled
+        whenever the beam channel is active (legacy direct calls to
+        ``apply_turbulence`` keep full behavior).
+        """
         cfg = self.config
         self._sync_channel()
+        channel_on = bool(getattr(cfg, "channel_enabled", True)) and float(
+            getattr(cfg, "channel_severity", 1.0) or 0.0) > 1e-9
         out = apply_turbulence(
             frame, int(getattr(cfg, "turbulence", 0)),
             dt=context.dt, rng=context.rng, state=self.turbulence_state,
+            apply_scintillation=not channel_on,
         )
         preset = str(getattr(cfg, "atmospheric_preset", "Clear"))
         contrast = float(getattr(cfg, "atmospheric_contrast", 0.0))
@@ -103,7 +140,7 @@ class OpticalDisturbanceSubsystem:
                 ch = self.channel
                 contrast = float((1.0 - ch.state.contrastFactor) * 100.0)
                 brightness = float((1.0 - ch.state.brightnessFactor) * 100.0)
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             pass
         if preset != "Clear" or contrast > 0 or brightness > 0:
             out = apply_atmospheric_disturbance(
@@ -115,14 +152,15 @@ class OpticalDisturbanceSubsystem:
     def channel_state_dict(self) -> dict:
         try:
             return self.channel.telemetry()
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             return {}
 
     def reset(self) -> None:
         self.turbulence_state.clear()
+        self._channel_cfg_version = None
         try:
             self.channel.reset()
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             pass
 
 

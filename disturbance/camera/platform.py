@@ -105,7 +105,14 @@ def apply_platform_motion(
     vel_scale = 30.303030303  # 1/0.033
     speed_px_s = speed_frame * vel_scale
 
-    key = _normalize_profile(profile)
+    # Cache normalized profile per state (avoids string ops per frame).
+    key = state.get("_profile_key")
+    if key is None or state.get("_profile_src") != str(profile):
+        key = _normalize_profile(profile)
+        state["_profile_key"] = key
+        state["_profile_src"] = str(profile)
+    else:
+        key = str(key)
 
     # Initialize state lazily
     if "t" not in state:

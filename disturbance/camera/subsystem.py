@@ -29,10 +29,16 @@ class CameraDisturbanceSubsystem:
         platform_on = bool(getattr(cfg, "platform_enabled", True))
         # This order matches the established simulation path: vibration,
         # platform trajectory, jitter, then slow camera drift.
-        pan, tilt = apply_platform_vibration(
-            pan, tilt, int(getattr(cfg, "vibration", 0)),
-            dt=context.dt, rng=context.rng, state=self.vibration_state,
-        )
+        vib = getattr(cfg, "vibration", 0)
+        try:
+            vib_f = float(vib)
+        except (TypeError, ValueError):
+            vib_f = 0.0
+        if vib_f > 1e-9:
+            pan, tilt = apply_platform_vibration(
+                pan, tilt, vib_f,
+                dt=context.dt, rng=context.rng, state=self.vibration_state,
+            )
         speed = float(getattr(cfg, "platform_speed", 0.0))
         if platform_on and speed > 1e-9:
             pan, tilt = apply_platform_motion(
@@ -47,8 +53,14 @@ class CameraDisturbanceSubsystem:
                 pan, tilt, jitter, state=self.jitter_state,
                 dt=context.dt, rng=context.rng,
             )
+        # Preserve float camera_motion (was int() truncation which quantized
+        # 0.5→0 and 2.7→2; drift kernel accepts float intensity).
+        try:
+            cm_f = float(getattr(cfg, "camera_motion", 0))
+        except (TypeError, ValueError):
+            cm_f = 0.0
         return apply_camera_motion_with_state(
-            pan, tilt, int(getattr(cfg, "camera_motion", 0)),
+            pan, tilt, cm_f,
             self.drift_state, dt=context.dt, rng=context.rng,
         )
 

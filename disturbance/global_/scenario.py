@@ -23,7 +23,17 @@ class DisturbanceScenario:
         return cls(randomize_config(rng=rng, difficulty=difficulty), seed)
 
     def create_pipeline(self, dt: float = 1.0 / 30.0) -> DisturbancePipeline:
+        # Strict-compat: identical seeds → identical streams via default_rng.
+        # For parallel pipelines from one parent, use
+        # DisturbanceRng.spawn_streams(n) to avoid collisions.
         return DisturbancePipeline(DisturbanceContext(self.config, rng=np.random.default_rng(self.seed), dt=dt))
+
+    def create_pipelines(self, n: int, dt: float = 1.0 / 30.0) -> list[DisturbancePipeline]:
+        """Parallel pipelines with non-colliding spawned streams."""
+        from disturbance.core.rng import DisturbanceRng
+        seeds = DisturbanceRng.spawn_streams(int(n), seed=self.seed)
+        return [DisturbancePipeline(DisturbanceContext(self.config, rng=np.random.default_rng(int(s)), dt=dt))
+                for s in seeds]
 
 
 __all__ = ["DisturbanceScenario"]

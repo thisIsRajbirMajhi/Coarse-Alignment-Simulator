@@ -12,6 +12,41 @@ from disturbance.core.dt_provider import DtProvider
 from disturbance.core.helpers import r0_from_intensity, rytov_variance
 from disturbance.core.state import _turb_state
 
+# Cached FFT frequency grids + remap coordinate maps per (h, w).
+# Avoids meshgrid/fftfreq/arange rebuilds on every frame (~10% of warp cost).
+_FREQ_GRID_CACHE: dict[tuple[int, int], tuple[np.ndarray, np.ndarray]] = {}
+_MAP_CACHE: dict[tuple[int, int], tuple[np.ndarray, np.ndarray]] = {}
+_FREQ_CACHE_MAX = 8
+
+
+def _freq_grids(h: int, w: int) -> tuple[np.ndarray, np.ndarray]:
+    key = (h, w)
+    hit = _FREQ_GRID_CACHE.get(key)
+    if hit is not None:
+        return hit
+    fx = np.fft.fftfreq(w)
+    fy = np.fft.fftfreq(h)
+    FX, FY = np.meshgrid(fx, fy)
+    kappa = np.sqrt(FX * FX + FY * FY)
+    grids = (FX, FY, kappa)
+    if len(_FREQ_GRID_CACHE) >= _FREQ_CACHE_MAX:
+        _FREQ_GRID_CACHE.pop(next(iter(_FREQ_GRID_CACHE)))
+    _FREQ_GRID_CACHE[key] = grids
+    return grids
+
+
+def _pixel_maps(h: int, w: int) -> tuple[np.ndarray, np.ndarray]:
+    key = (h, w)
+    hit = _MAP_CACHE.get(key)
+    if hit is not None:
+        return hit
+    xs, ys = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
+    if len(_MAP_CACHE) >= _FREQ_CACHE_MAX:
+        _MAP_CACHE.pop(next(iter(_MAP_CACHE)))
+    _MAP_CACHE[key] = (xs, ys)
+    return xs, ys
+
+
 def _kolmogorov_displacement(
     h: int,
     w: int,
@@ -30,10 +65,8 @@ def _kolmogorov_displacement(
 
     Tilt RMS target: 0.32·I^{0.85}+0.08·I → 0.7 px @I=2, 6.5 px @I=10.
     """
-    fx = np.fft.fftfreq(w)
-    fy = np.fft.fftfreq(h)
-    FX, FY = np.meshgrid(fx, fy)
-    kappa = np.sqrt(FX**2 + FY**2)
+    FX, FY, kappa = _freq_grids(h, w)
+    kappa = kappa.copy()
     kappa[0, 0] = 1e-6
     k0 = 1.0 / float(outer_scale)
     kappa_phys = kappa * 180.0
@@ -63,6 +96,7 @@ def apply_turbulence(
     dt: float | None = None,
     rng: np.random.Generator | None = None,
     state=None,
+    apply_scintillation: bool = True,
 ) -> np.ndarray:
     """
     Kolmogorov + Rytov turbulence — now dt-aware.
@@ -73,12 +107,15 @@ def apply_turbulence(
       wavelength: m (default 1.55 µm)
       dt: seconds, sim-speed-scaled dt_eff. If None, falls back to wall-clock
           _elapsed_dt(_turb_state) for backward compat.
+      apply_scintillation: image-space log-normal gain. False when the
+          beam-state channel is active (single scintillation source on the
+          beacon; avoids double-count). Default True = legacy behavior.
 
     Steps:
       1) r0, σ_R² from intensity
       2) Seeing blur (Gaussian, σ from 0.98 λ/r0)
       3) Warp via Kolmogorov displacement + temporal blend α=exp(-dt/0.11) + wind roll
-      4) Scintillation log-normal gain
+      4) Scintillation log-normal gain (skipped if apply_scintillation=False)
 
     Returns warped+blurred+scintillated frame (same shape/dtype).
     """
@@ -108,8 +145,8 @@ def apply_turbulence(
     if h * w > 250_000:
         h2, w2 = max(32, h // 2), max(32, w // 2)
         dx_s, dy_s = _kolmogorov_displacement(h2, w2, r0, float(intensity), float(wavelength), rng=_rng)
-        dx_new = cv2.resize(dx_s, (w, h), interpolation=cv2.INTER_CUBIC) * 1.9
-        dy_new = cv2.resize(dy_s, (w, h), interpolation=cv2.INTER_CUBIC) * 1.9
+        dx_new = cv2.resize(dx_s, (w, h), interpolation=cv2.INTER_LINEAR) * 1.9
+        dy_new = cv2.resize(dy_s, (w, h), interpolation=cv2.INTER_LINEAR) * 1.9
     else:
         dx_new, dy_new = _kolmogorov_displacement(h, w, r0, float(intensity), float(wavelength), rng=_rng)
 
@@ -125,18 +162,20 @@ def apply_turbulence(
         dx, dy = dx_new, dy_new
     state["dx"], state["dy"] = dx, dy
 
-    xs, ys = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
+    xs, ys = _pixel_maps(h, w)
     map_x = xs + dx
     map_y = ys + dy
     warped = cv2.remap(blurred, map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101)
 
-    # 3) Scintillation
+    # 3) Scintillation (single-source: skipped when beam channel owns it)
+    if not apply_scintillation:
+        return warped
     sigma_chi = float(math.sqrt(min(float(sigma_R2), RYTOV_CAP) / 4.0 + 1e-9))
     if sigma_chi > 0.04:
         small_h = max(1, h // 4)
         small_w = max(1, w // 4)
         chi_small = _rng.normal(-sigma_chi**2, sigma_chi, (small_h, small_w)).astype(np.float32)
-        chi = cv2.resize(chi_small, (w, h), interpolation=cv2.INTER_CUBIC)
+        chi = cv2.resize(chi_small, (w, h), interpolation=cv2.INTER_LINEAR)
         chi = cv2.GaussianBlur(chi, (0, 0), sigmaX=2.2, sigmaY=2.2)
         gain = np.exp(chi)
         gain = np.clip(gain, 0.55, 1.9).astype(np.float32)

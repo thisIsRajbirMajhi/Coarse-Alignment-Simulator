@@ -37,10 +37,10 @@ def apply_platform_vibration(
     state = _vib_state if state is None else state
     dt = DtProvider.resolve(state, dt)
 
-    freqs = np.array(VIBRATION_FREQS, dtype=float)
-    base_amps = np.array(VIBRATION_BASE_AMPS, dtype=float)
+    # Tuple math — no per-frame np.array allocs (was 2 allocs + 2 sum(sin)).
+    freqs = VIBRATION_FREQS
+    base_amps = VIBRATION_BASE_AMPS
     scale = (float(intensity) / 5.0) ** 0.9 if float(intensity) > 0 else 0.0
-    amps = base_amps * float(scale)
 
     _rng = get_rng(rng)
     if state.get("phases") is None or len(state["phases"]) != len(freqs):
@@ -49,14 +49,19 @@ def apply_platform_vibration(
         state["ou_pan"] = 0.0
         state["ou_tilt"] = 0.0
 
-    t = float(state.get("t", 0.0) + float(dt))
+    # Wrap time/phases to avoid float precision loss on long runs.
+    t = (float(state.get("t", 0.0)) + float(dt)) % 3600.0
     state["t"] = t
-    phases = state["phases"]
-    phases = phases + 2 * math.pi * freqs * float(dt)
+    dphi = 2 * math.pi * float(dt)
+    phases = (np.asarray(state["phases"], dtype=float) + dphi * np.asarray(freqs, dtype=float)) % (2 * math.pi)
     state["phases"] = phases
 
-    jitter_pan_h = float(np.sum(amps * np.sin(phases)))
-    jitter_tilt_h = float(np.sum(amps * np.sin(phases + 0.9)))
+    jitter_pan_h = 0.0
+    jitter_tilt_h = 0.0
+    for f, a0, ph in zip(freqs, base_amps, phases):
+        a = a0 * float(scale)
+        jitter_pan_h += a * math.sin(float(ph))
+        jitter_tilt_h += a * math.sin(float(ph) + 0.9)
 
     tau_ou = float(VIBRATION_OU_TAU)
     sigma_ou = 0.18 * float(intensity)

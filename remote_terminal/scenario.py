@@ -149,7 +149,8 @@ class RemoteTerminalScenario:
                     t.config.state.communication_state = "NO_LINK"
 
     def render_fov_beacons(self, fov_frame: np.ndarray, camera, channel=None,
-                           pipeline=None, rng=None, dt: float = 1.0 / 30.0) -> np.ndarray:
+                           pipeline=None, rng=None, dt: float = 1.0 / 30.0,
+                           distance_m: float | None = None) -> np.ndarray:
         """
         Blends terminal optical spots into the given FOV frame.
 
@@ -159,6 +160,11 @@ class RemoteTerminalScenario:
         through ``propagate_beam`` so wander/attenuation/spread modify the
         received spot — not the tracker output. Without it, legacy direct
         blending is used (back-compat for tests/GUI).
+
+        Args:
+          distance_m: optical link range in metres. None (default) preserves
+            legacy table behavior exactly; pass an explicit range for
+            Beer-Lambert range correction in the channel.
         """
         if fov_frame is None or camera is None:
             return fov_frame
@@ -186,12 +192,12 @@ class RemoteTerminalScenario:
                 try:
                     ideal = t.emit_ideal_beam(pixel_scale_mrad=pixel_scale)
                     if pipeline is not None:
-                        received = pipeline.propagate_beam(ideal, dt=dt)
+                        received = pipeline.propagate_beam(ideal, dt=dt, distance_m=distance_m)
                         applier = pipeline.optical.channel
                     else:
                         from common.rng import get_rng as _get_rng
                         _rng = _get_rng(rng)
-                        received = channel.propagate_beam(ideal, dt=dt, rng=_rng)
+                        received = channel.propagate_beam(ideal, dt=dt, rng=_rng, distance_m=distance_m)
                         applier = channel
                     dx = float(received.position[0] - ideal.position[0])
                     dy = float(received.position[1] - ideal.position[1])
@@ -200,7 +206,7 @@ class RemoteTerminalScenario:
                     patch = applier.apply_to_patch(patch, received)
                     if received.intensity <= 1e-6:
                         continue
-                except Exception:
+                except (AttributeError, TypeError, ValueError):
                     pass
 
             ph, pw = patch.shape[:2]

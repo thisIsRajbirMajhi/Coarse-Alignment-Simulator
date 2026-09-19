@@ -128,11 +128,13 @@ class HeadlessSimulation:
         self._last_frame = None
 
     def _capture_fov_frame(self, dt_eff: float = 1 / 30) -> np.ndarray:
-        dc = self.disturbance_config.validate() if hasattr(self.disturbance_config, "validate") else self.disturbance_config
+        # Already validated at __init__/reset/apply — no per-frame validate()
+        # (~450-line dual-sync + string normalizes each frame).
+        dc = self.disturbance_config
         try:
             vig = float(getattr(self.env_config, "vignetting_pct", 0)) / 100.0
             self.camera.set_vignetting(vig)
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             vig = 0.0
 
         self._disturbance_pipeline.context.config = dc
@@ -160,14 +162,14 @@ class HeadlessSimulation:
                     fov_frame, self.camera,
                     pipeline=self._disturbance_pipeline, rng=self.rng, dt=dt_eff,
                 )
-            except Exception:
+            except (AttributeError, TypeError, ValueError, RuntimeError):
                 pass
 
         if vig > 1e-3:
             try:
                 from environment.vignetting import apply_vignetting
                 fov_frame = apply_vignetting(fov_frame, vig)
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
                 pass
 
         # disturb_camera_pose() already advanced context time once; apply
@@ -178,19 +180,19 @@ class HeadlessSimulation:
                 fov_frame, dc, dt_eff, self.rng, self._disturbance_pipeline,
                 advance=False,
             )
-        except Exception:
+        except (AttributeError, TypeError, ValueError, RuntimeError):
             fov_frame = dist.apply_turbulence(fov_frame, int(getattr(dc, "turbulence", 0)), dt=dt_eff, rng=self.rng)
 
         # Restore true pose; capture pose/rect refer to disturbed view.
         try:
             self.camera.set_position(float(true_pan), float(true_tilt), clear_queue=False)
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             pass
         try:
             self._last_capture_pose = (float(pan_dist), float(tilt_dist))
             self._last_fov_rect = (int(x0), int(y0), int(x1), int(y1))
             self._true_pose = (float(true_pan), float(true_tilt))
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             pass
 
         return fov_frame

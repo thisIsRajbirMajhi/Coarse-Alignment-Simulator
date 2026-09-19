@@ -13,10 +13,11 @@ import sys as _sys
 from disturbance import disturbances  # noqa: F401
 from disturbance.core import DisturbanceContext, DisturbancePipeline, DisturbanceRng, DisturbanceState
 from disturbance.core.config import DisturbanceConfig
-from disturbance import legacy  # noqa: F401
-from disturbance.core.state import reset_disturbance_state  # noqa: F401
 
-# Compatibility aliases for callers that still import the former flat modules.
+# Strict-compat flat-module aliases: `from disturbance.image_noise import ...`,
+# `from disturbance.config import ...` must keep working (tests + GUI).
+# Eager sys.modules registration is one-time import cost (not per-frame),
+# so keep it; __getattr__ below is a safety net for anything missed.
 from disturbance.core import config as _config, constants as _constants, dt_provider as _dt_provider, helpers as _helpers, state as _state
 from disturbance.camera import drift as _drift, jitter as _jitter, platform as _platform, vibration as _vibration
 from disturbance.environment import atmospheric as _atmospheric
@@ -29,6 +30,21 @@ for _name, _module in {
   "turbulence": _turbulence, "image_noise": _image_noise, "sensor_noise": _sensor_noise,
 }.items():
   _sys.modules.setdefault(f"{__name__}.{_name}", _module)
+
+
+def __getattr__(name: str):
+    target = _LAZY_ALIASES.get(name)
+    if target is not None:
+        import importlib as _il
+        mod = _il.import_module(target)
+        globals()[name] = mod
+        _sys.modules.setdefault(f"{__name__}.{name}", mod)
+        return mod
+    if name == "reset_disturbance_state":
+        from disturbance.core.state import reset_disturbance_state as _r
+        globals()[name] = _r
+        return _r
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
   "disturbances", "legacy", "DisturbanceConfig", "DisturbanceContext",

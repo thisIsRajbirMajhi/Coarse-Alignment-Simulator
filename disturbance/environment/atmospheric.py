@@ -68,26 +68,18 @@ def _apply_contrast_brightness(frame: np.ndarray, contrast_pct: float, brightnes
 
     # Depth weighting: stronger at bottom for fog-like presets (contrast>20)
     if c > 0.20 or b > 0.18:
-        # Build vertical weight 1.0 -> 1.6
-        w = np.linspace(1.0, _FOG_DEPTH_GAIN_BOTTOM, h, dtype=np.float32)[:, None, None] if f.ndim == 3 else np.linspace(1.0, _FOG_DEPTH_GAIN_BOTTOM, h, dtype=np.float32)[:, None]
-        c_eff = c * w.squeeze() if f.ndim == 2 else c  # broadcast later
-        b_eff = b * np.linspace(1.0, 1.35, h, dtype=np.float32)[:, None, None] if f.ndim == 3 else b * np.linspace(1.0, 1.35, h, dtype=np.float32)[:, None]
+        # Single shared depth ramp (was 3× linspace + repeat per frame).
+        ramp = np.linspace(1.0, _FOG_DEPTH_GAIN_BOTTOM, h, dtype=np.float32)[:, None, None]
         if f.ndim == 3:
-            # per-row alpha/beta
-            row_alpha = 1.0 - c * np.linspace(1.0, _FOG_DEPTH_GAIN_BOTTOM, h, dtype=np.float32)[:, None]
-            # Expand to HxWx3 via broadcasting: (H,1) -> (H,W,3)
-            row_alpha3 = np.repeat(row_alpha[:, :, None], f.shape[1], axis=1) if row_alpha.ndim == 2 else row_alpha  # fallback
-            # Simpler: apply per row loop via broadcasting
-            # Use vectorized: f = (f-128)*alpha_row +128
-            # alpha_row shape (H,1,1)
-            alpha_row = (1.0 - c * np.linspace(1.0, _FOG_DEPTH_GAIN_BOTTOM, h, dtype=np.float32)[:, None, None])
+            # per-row alpha/beta via broadcasting: (H,1,1)
+            alpha_row = 1.0 - c * ramp
             f = (f - 128.0) * alpha_row + 128.0
-            delta_row = b * 72.0 * np.linspace(1.0, 1.35, h, dtype=np.float32)[:, None, None]
+            delta_row = b * 72.0 * (1.0 + (ramp - 1.0) * (0.35 / 0.60))
             f = f - delta_row
         else:
-            alpha_row = 1.0 - c_eff
-            f = (f - 128.0) * alpha_row[:, None] + 128.0
-            f = f - (b_eff.squeeze() * 72.0)[:, None] if f.ndim == 2 else f - b_eff
+            alpha_row = 1.0 - c * ramp[:, :, 0]
+            f = (f - 128.0) * alpha_row + 128.0
+            f = f - (b * 72.0 * (1.0 + (ramp[:, :, 0] - 1.0) * (0.35 / 0.60)))
     else:
         if c > 1e-6:
             f = (f - 128.0) * (1.0 - c) + 128.0

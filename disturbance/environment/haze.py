@@ -1,3 +1,9 @@
+"""Deprecated alias — use disturbance.environment.atmospheric directly.
+
+Strict-compat shim for legacy ``apply_haze`` callers. Beam-state haze loss
+lives in disturbance.optical.channel (authoritative); this remains the
+image-space residual rendering.
+"""
 from disturbance.environment.atmospheric import apply_atmospheric_disturbance
 
 

@@ -20,7 +20,7 @@ def _global_enabled(config) -> bool:
         if hasattr(config, "global_enabled"):
             return bool(config.global_enabled)
         return bool(getattr(config.global_, "enabled", True))
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         return True
 
 
@@ -60,7 +60,7 @@ class DisturbancePipeline:
         self._sync_config()
         try:
             return self.optical.channel_state_dict()
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             return {}
 
     def telemetry(self) -> dict:
@@ -113,6 +113,13 @@ class DisturbancePipeline:
         return self.sensor.apply(frame, self.context)
 
     def apply_frame(self, frame: np.ndarray, advance: bool = True) -> np.ndarray:
+        """Optical → sensor image chain.
+
+        Single-advance contract: ``disturb_camera_pose`` already advances
+        context time once per frame, so callers on the tick path must use
+        ``advance=False`` (see ``simulation/fov_pipeline.py``). ``advance=True``
+        is kept for standalone/offline use.
+        """
         self._sync_config()
         if not _global_enabled(self.context.config):
             return frame
@@ -120,21 +127,35 @@ class DisturbancePipeline:
             self.context.advance()
         return self.sensor.apply(self.optical.apply(frame, self.context), self.context)
 
+    def advance_frame(self, frame: np.ndarray, pan: float, tilt: float,
+                      dt: float | None = None) -> tuple[np.ndarray, float, float]:
+        """Canonical per-tick entry: pose (advances once) → optical → sensor.
+
+        Preferred over calling ``disturb_camera_pose`` + ``apply_frame``
+        separately; guarantees single time-advance per frame.
+        """
+        self._sync_config()
+        if not _global_enabled(self.context.config):
+            return frame, pan, tilt
+        pan_d, tilt_d = self.disturb_camera_pose(pan, tilt, dt)
+        out = self.sensor.apply(self.optical.apply(frame, self.context), self.context)
+        return out, pan_d, tilt_d
+
     def reset(self) -> None:
         self.context.reset()
         self.camera.reset()
         self.sensor.reset()
         try:
             self.optical.reset()
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             try:
                 self.optical.turbulence_state.clear()
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
                 pass
         try:
             from disturbance.core.state import reset_disturbance_state
             reset_disturbance_state()
-        except Exception:
+        except (AttributeError, TypeError, ValueError, ImportError):
             pass
 
 
