@@ -76,6 +76,20 @@ class Scene:
     ):
         # If a validated config is supplied, it takes precedence (single source).
         if config is not None:
+            # Defaults so _apply_config can safely fill from kwargs.
+            self.width = 2000
+            self.height = 2000
+            self.seed = 42
+            self.num_clutter_points = 60
+            self._star_count = 60
+            self.background_color = 12
+            self.bg_top = 12
+            self.bg_bottom = 22
+            self.haze_strength = 0.35
+            self.vignetting = 0.0
+            self.star_brightness_scale = 1.0
+            self.dynamic = False
+            self.dynamic_speed = 1.0
             self._apply_config(config, rebuild=False)
         else:
             # Legacy path — clamp via constants (mirrors old np.clip behaviour)
@@ -158,9 +172,21 @@ class Scene:
             self._star_count = int(np.clip(int(kwargs["num_clutter_points"]), 0, 4000))
             self.num_clutter_points = self._star_count
         if not hasattr(self, "num_clutter_points"):
-            self.num_clutter_points = int(self._star_count)
+            self.num_clutter_points = int(getattr(self, "_star_count", 60))
         if not hasattr(self, "background_color"):
-            self.background_color = int(self.bg_top)
+            self.background_color = int(getattr(self, "bg_top", 12))
+        # Dynamic sky flags (default static to preserve get_region==get_frame).
+        if "dynamic" in kwargs:
+            self.dynamic = bool(kwargs["dynamic"])
+        elif not hasattr(self, "dynamic"):
+            self.dynamic = False
+        if "dynamic_speed" in kwargs:
+            try:
+                self.dynamic_speed = float(np.clip(float(kwargs["dynamic_speed"]), 0.1, 5.0))
+            except Exception:
+                pass
+        elif not hasattr(self, "dynamic_speed"):
+            self.dynamic_speed = 1.0
         if rebuild:
             self._rng = np.random.default_rng(self.seed)
             self._build_background()
@@ -214,15 +240,31 @@ class Scene:
         self._time = 0.0
 
     def update(self, dt: float) -> None:
-        """Advance internal time — background animation removed (always static)."""
-        pass
+        """Advance internal time for dynamic sky (twinkle + haze shimmer).
+
+        Always advances ``_time`` so dynamic rendering is deterministic in
+        sim-time. Static fast-path (``dynamic=False``) still returns the
+        cached background, preserving ``get_region vs get_frame`` equality.
+        """
+        try:
+            speed = float(getattr(self, "dynamic_speed", 1.0) or 1.0)
+        except Exception:
+            speed = 1.0
+        try:
+            self._time = float(self._time) + float(dt) * speed
+        except Exception:
+            pass
 
     def get_frame(self) -> np.ndarray:
         """
-        Return current full-scene image as uint8 (H, W, 3) — always static (background animation removed).
+        Return current full-scene image as uint8 (H, W, 3).
+        Static when ``dynamic=False`` (cached copy); dynamic twinkle +
+        haze shimmer when ``dynamic=True``.
         Returns a copy so callers can safely draw beacons without mutating cache.
         """
-        return self._static_background.copy()
+        if not bool(getattr(self, "dynamic", False)):
+            return self._static_background.copy()
+        return self._render_dynamic_full()
 
     def get_region(self, x0: int, y0: int, x1: int, y1: int) -> np.ndarray:
         """
@@ -260,8 +302,44 @@ class Scene:
         dx0 = int(np.clip(dx0, 0, w - dw))
         dy0 = int(np.clip(dy0, 0, h - dh))
 
-        # Always static — background animation removed
-        crop = self._static_background[sy0:sy1, sx0:sx1]
+        if not bool(getattr(self, "dynamic", False)):
+            # Static fast-path — background animation disabled
+            crop = self._static_background[sy0:sy1, sx0:sx1]
+            out[dy0:dy0+dh, dx0:dx0+dw] = crop
+            return out
+        # Dynamic path: base crop + haze shimmer + twinkling FOV stars only
+        # (~60x cheaper than full-frame rebuild; no RNG consumption).
+        base_crop = self._base_no_stars[sy0:sy1, sx0:sx1].astype(np.int16)
+        try:
+            from environment.haze import haze_modulation as _hm
+            shimmer = float(_hm(float(self._time))) * float(getattr(self, "haze_strength", 0.0) or 0.0)
+        except Exception:
+            shimmer = 0.0
+        if abs(shimmer) > 1e-6:
+            base_crop = base_crop + int(round(shimmer))
+        crop = base_crop.clip(0, 255).astype(np.uint8)
+        try:
+            from environment.stars import _draw_star_into as _draw
+            t = float(self._time)
+            xs = self._stars_xy[:, 0]
+            ys = self._stars_xy[:, 1]
+            mask = (xs >= sx0) & (xs < sx1) & (ys >= sy0) & (ys < sy1)
+            idxs = __import__("numpy").flatnonzero(mask)
+            has_colors = (
+                self._star_colors is not None
+                and len(self._star_colors) == len(self._stars_xy)
+            )
+            for i in (idxs.tolist() if hasattr(idxs, "tolist") else list(idxs)):
+                b0 = float(self._star_base_brightness[i])
+                tw = 1.0 + 0.18 * float(__import__("numpy").sin(
+                    float(self._star_freqs[i]) * t + float(self._star_phases[i])))
+                b = float(max(0.0, min(180.0, b0 * tw)))
+                col = self._star_colors[i] if has_colors else None
+                _draw(crop, int(xs[i] - sx0), int(ys[i] - sy0), b,
+                      int(self._star_sizes[i]), col)
+        except Exception:
+            # Fallback to static composite on any dynamic-render failure
+            crop = self._static_background[sy0:sy1, sx0:sx1]
         out[dy0:dy0+dh, dx0:dx0+dw] = crop
         return out
 
@@ -333,9 +411,33 @@ class Scene:
         """Change resolution and regenerate (back-compat helper)."""
         self.regenerate(width=width, height=height)
 
+    def _render_dynamic_full(self) -> np.ndarray:
+        """Full-frame dynamic render (base + shimmer + twinkle, no RNG)."""
+        try:
+            from environment.haze import haze_modulation as _hm
+            shimmer = float(_hm(float(self._time))) * float(getattr(self, "haze_strength", 0.0) or 0.0)
+        except Exception:
+            shimmer = 0.0
+        if abs(shimmer) > 1e-6:
+            base = (self._base_no_stars.astype(np.int16) + int(round(shimmer))).clip(0, 255).astype(np.uint8)
+        else:
+            base = self._base_no_stars.copy()
+        try:
+            from environment.stars import draw_twinkling_stars as _tw
+            _tw(base, self._stars_xy, self._star_base_brightness, self._star_sizes,
+                self._star_phases, self._star_freqs, float(self._time),
+                self._star_colors if (self._star_colors is not None and len(self._star_colors) == len(self._stars_xy)) else None)
+        except Exception:
+            pass
+        return base
+
     def set_dynamic(self, enabled: bool, speed: float = 1.0) -> None:
-        """No-op — background animation removed (always static)."""
-        pass
+        """Enable/disable cheap FOV-local sky dynamics (twinkle + shimmer)."""
+        self.dynamic = bool(enabled)
+        try:
+            self.dynamic_speed = float(np.clip(float(speed), 0.1, 5.0))
+        except Exception:
+            self.dynamic_speed = 1.0
 
     def get_star_count(self) -> int:
         return int(self._star_count)

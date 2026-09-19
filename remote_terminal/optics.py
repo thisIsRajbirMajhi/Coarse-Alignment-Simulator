@@ -81,47 +81,28 @@ def compute_temporal_factor(
     mod_freq_khz: float = 10.0,
     mod_depth: float = 1.0,
     mod_phase_deg: float = 0.0,
-    pulse_enabled: bool = False,
-    pulse_rate_khz: float = 10.0,
-    duty_cycle: float = 0.5,
-    identification_code: str = "",
-    identification_code_enabled: bool = False,
-    identification_chip_rate_hz: float = 8.0,
 ) -> float:
-    """
-    Compute instantaneous temporal modulation scaling factor [0.0, 1.0+].
-    For high-frequency carrier (e.g. 10 kHz) in video frames (30-60 Hz),
-    aliased beat / mean envelope + sub-harmonic flicker is rendered for visual perception.
-    """
-    code_factor = 1.0
-    if identification_code_enabled and identification_code:
-        # ASCII bits are an observable OOK overlay.  It is deliberately slow
-        # enough for the simulated camera to sample, unlike the kHz carrier.
-        bits = "".join(f"{ord(ch):08b}" for ch in identification_code)
-        chip = int(math.floor(sim_time * max(0.5, identification_chip_rate_hz))) % len(bits)
-        code_factor = 1.0 if bits[chip] == "1" else 0.25
-    if pulse_enabled:
-        # Repetition cycle: visual duty cycle factor
-        f_eff = min(pulse_rate_khz * 1e3, 30.0)
-        cycle = (sim_time * f_eff) % 1.0
-        return (1.0 if cycle < duty_cycle else 0.05) * code_factor
+    """Visual-only carrier alias [0.05, 1.5] for 2D display.
 
+    Framed OOK (``BeaconEncoder``) is the decode truth; this is only
+    the kHz-carrier flicker so AM beacons visibly breathe.
+    ``mod_type`` 2D subset: AM (envelope) / OOK (square) / NONE (steady).
+    """
     if mod_type == "AM":
         f_visual = min(mod_freq_khz * 0.5, 8.0)
         phi = math.radians(mod_phase_deg)
         sine_val = math.cos(2.0 * math.pi * f_visual * sim_time + phi)
-        # AM: 1 + m * cos(wt)
-        return float(max(0.05, 1.0 + mod_depth * 0.5 * sine_val)) * code_factor
-    elif mod_type == "PM" or mod_type == "OOK":
+        return float(max(0.05, 1.0 + mod_depth * 0.5 * sine_val))
+    elif mod_type in ("OOK", "PM"):
         f_visual = min(mod_freq_khz * 0.5, 10.0)
         cycle = (sim_time * f_visual) % 1.0
-        return (1.0 if cycle < 0.5 else 0.15) * code_factor
+        return 1.0 if cycle < 0.5 else 0.15
     elif mod_type == "PPM":
         f_visual = min(mod_freq_khz * 0.5, 12.0)
         cycle = (sim_time * f_visual) % 1.0
-        return (1.0 if cycle < 0.25 else 0.1) * code_factor
+        return 1.0 if cycle < 0.25 else 0.1
     else:  # NONE / Continuous Wave
-        return code_factor
+        return 1.0
 
 
 def render_terminal_beacon_patch(
@@ -135,8 +116,10 @@ def render_terminal_beacon_patch(
     min_patch_size: int = 7,
     max_patch_size: int = 45,
 ) -> np.ndarray:
-    """
-    Render realistic optical spot patch (H, W, 3) uint8 based on beam parameters.
+    """Render 2D optical spot patch (H, W, 3) uint8.
+
+    2D subset: GAUSSIAN kernel (TOP_HAT/CUSTOM kept for back-compat only),
+    symmetric divergence (``div_h`` used, ``div_v`` ignored when equal).
     """
     # Angular divergence to pixel size: spot_px = divergence_mrad / pixel_scale_mrad
     scale = max(1e-4, pixel_scale_mrad)

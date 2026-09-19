@@ -1,4 +1,4 @@
-# gui/panels/remote_terminal_panel.py - Remote Terminal Control Deck per RemoteTerminal.md
+# gui/panels/remote_terminal_panel.py - Remote Terminal Control Deck (2D-minimal).
 from __future__ import annotations
 
 import copy
@@ -27,7 +27,6 @@ from PyQt5.QtWidgets import (
 from gui.panels.base import BaseConfigPanel
 from remote_terminal.config import (
     BeaconConfig,
-    CommunicationConfig,
     FormationConfig,
     IdentityConfig,
     MotionConfig,
@@ -35,24 +34,35 @@ from remote_terminal.config import (
     RemoteTerminalConfig,
     RemoteTerminalScenarioConfig,
     StateConfig,
-    TargetSignatureConfig,
 )
 
 log = logging.getLogger(__name__)
 
+# 2D-minimal option sets (payload-ready). Legacy values map onto these on load:
+#   mod PM/PPM/CUSTOM -> OOK (identical physics: framed-OOK truth).
+#   op MAINTENANCE/FAULT -> ACTIVE.
+MOD_2D = ["OOK", "AM", "NONE"]
+OP_2D = ["ACTIVE", "STANDBY", "OFF"]
+_LEGACY_MOD_TO_2D = {"PM": "OOK", "PPM": "OOK", "CUSTOM": "OOK"}
+
 
 class RemoteTerminalPanel(BaseConfigPanel):
     """
-    Remote Terminal Control Deck tab:
-      1. Top Bar: Terminal switcher tabs, live status badge, and 🎲 Randomize button.
-      2. Quick Setup (Major Parameters - Always Visible):
-         - Formation & Scenario Essentials (Count, Shape, Radius, Spacing, Motion, Speed)
-         - Active Terminal Quick Configuration (Power, Beacon, Power W, Wavelength, Modulation, Code, Pointing)
-      3. Advanced Parameters (Collapsible Accordion):
-         - Detailed Kinematics & Pointing (Heading, Accel, Frame, Azimuth, Elevation)
-         - Optical Physics (Divergence, Beam Profile, Polarization)
-         - Pulse & Temporal Modulation (Depth, Pulse rate, Pulse width, Duty cycle)
-         - Target Signature & Protocol (Protocol name, Capabilities, Wavelength tol, Min SNR)
+    Remote Terminal Control Deck tab (2D-minimal, payload-ready):
+
+      Top bar: terminal switcher tabs, live status badge, Randomize button.
+      Quick Setup (always visible) — the only fields the 2D sim reads:
+        Scenario: count, formation shape/spacing, motion profile/speed/heading.
+        Beacon: id (read-only), network id, op state, power/beacon switches,
+          auth token (-> beacon.token), optical power, wavelength,
+          modulation (OOK/AM/NONE), OOK chip rate, spot size, AM carrier freq.
+      Advanced (collapsed): motion accel, live position/link telemetry,
+        protocol + capabilities (compat, required by wire/matcher tests).
+
+    Everything else from the legacy deck (platform/type/frames, pointing
+    sliders, beam profile/polarization, pulse engine, remote signature
+    tolerances) is intentionally not shown — values are preserved untouched
+    on collect so old configs round-trip without silent rewrites.
     """
 
     configChanged = pyqtSignal(object)
@@ -90,7 +100,7 @@ class RemoteTerminalPanel(BaseConfigPanel):
 
         self.btn_randomize_remote = QPushButton("🎲 Randomize Remote")
         self.btn_randomize_remote.setObjectName("randomizeRemoteButton")
-        self.btn_randomize_remote.setToolTip("Randomize all remote terminal scenario parameters and optics on the fly")
+        self.btn_randomize_remote.setToolTip("Randomize 2D scenario + beacon parameters")
         self.btn_randomize_remote.setStyleSheet(
             "QPushButton { background:#4f46e5; color:#ffffff; font-weight:700; font-size:11px; "
             "border:1px solid #4338ca; border-radius:6px; padding:5px 12px; } "
@@ -109,14 +119,14 @@ class RemoteTerminalPanel(BaseConfigPanel):
         main_layout.addWidget(switcher_box)
 
         # -------------------------------------------------------------
-        # 1. QUICK SETUP: MAJOR PARAMETERS (ALWAYS VISIBLE)
+        # 1. QUICK SETUP: 2D-MAJOR PARAMETERS (ALWAYS VISIBLE)
         # -------------------------------------------------------------
-        quick_box, quick_grid = self._make_group("⚡ Quick Setup — Major Parameters")
+        quick_box, quick_grid = self._make_group("⚡ Quick Setup — 2D Beacon")
         quick_grid.setSpacing(10)
         quick_grid.setColumnStretch(1, 2)
         quick_grid.setColumnStretch(4, 2)
 
-        # Section 1.1: Scenario & Formation Essentials
+        # Row 0: scenario size + formation
         quick_grid.addWidget(self._label("Terminal Count"), 0, 0)
         self.count_slider, self.count_label = self._make_int_slider(1, 8, 1, tooltip="Number of active remote terminals")
         quick_grid.addWidget(self.count_slider, 0, 1)
@@ -128,26 +138,30 @@ class RemoteTerminalPanel(BaseConfigPanel):
         self.formation_shape.setMinimumHeight(26)
         quick_grid.addWidget(self.formation_shape, 0, 4, 1, 2)
 
-        quick_grid.addWidget(self._label("Formation Radius (m)"), 1, 0)
-        self.radius_slider, self.radius_label, self.radius_factor = self._make_float_slider(10.0, 500.0, 100.0, decimals=1, suffix=" m")
-        quick_grid.addWidget(self.radius_slider, 1, 1)
-        quick_grid.addWidget(self.radius_label, 1, 2)
-
-        quick_grid.addWidget(self._label("Terminal Spacing (m)"), 1, 3)
+        # Row 1: spacing + motion
+        quick_grid.addWidget(self._label("Terminal Spacing (m)"), 1, 0)
         self.spacing_slider, self.spacing_label, self.spacing_factor = self._make_float_slider(10.0, 300.0, 50.0, decimals=1, suffix=" m")
-        quick_grid.addWidget(self.spacing_slider, 1, 4)
-        quick_grid.addWidget(self.spacing_label, 1, 5)
+        quick_grid.addWidget(self.spacing_slider, 1, 1)
+        quick_grid.addWidget(self.spacing_label, 1, 2)
+        # Radius kept for Circle/Arc compat (hidden from 2D layout, value preserved).
+        self.radius_slider, self.radius_label, self.radius_factor = self._make_float_slider(10.0, 500.0, 100.0, decimals=1, suffix=" m")
 
-        quick_grid.addWidget(self._label("Motion Profile"), 2, 0)
+        quick_grid.addWidget(self._label("Motion Profile"), 1, 3)
         self.motion_profile = QComboBox()
         self.motion_profile.addItems(["Stationary", "Constant Velocity", "Linear", "Circular", "Sinusoidal", "Figure-8", "Random Walk", "Waypoint"])
         self.motion_profile.setMinimumHeight(26)
-        quick_grid.addWidget(self.motion_profile, 2, 1, 1, 2)
+        quick_grid.addWidget(self.motion_profile, 1, 4, 1, 2)
 
-        quick_grid.addWidget(self._label("Speed (m/s)"), 2, 3)
+        # Row 2: speed + heading
+        quick_grid.addWidget(self._label("Speed (m/s)"), 2, 0)
         self.speed_slider, self.speed_label, self.speed_factor = self._make_float_slider(0.0, 100.0, 10.0, decimals=1, suffix=" m/s")
-        quick_grid.addWidget(self.speed_slider, 2, 4)
-        quick_grid.addWidget(self.speed_label, 2, 5)
+        quick_grid.addWidget(self.speed_slider, 2, 1)
+        quick_grid.addWidget(self.speed_label, 2, 2)
+
+        quick_grid.addWidget(self._label("Heading (deg)"), 2, 3)
+        self.dir_slider, self.dir_label, self.dir_factor = self._make_float_slider(0.0, 360.0, 45.0, decimals=1, suffix=" deg")
+        quick_grid.addWidget(self.dir_slider, 2, 4)
+        quick_grid.addWidget(self.dir_label, 2, 5)
 
         # Separator line
         sep = QLabel()
@@ -155,26 +169,26 @@ class RemoteTerminalPanel(BaseConfigPanel):
         sep.setStyleSheet("background:#e2e8f0; margin:4px 0px;")
         quick_grid.addWidget(sep, 3, 0, 1, 6)
 
-        # Section 1.2: Active Terminal Primary Controls
-        quick_grid.addWidget(self._label("Terminal ID / Name"), 4, 0)
+        # Row 4: identity + op state
+        quick_grid.addWidget(self._label("Terminal ID / Net"), 4, 0)
         id_h = QHBoxLayout()
         self.id_edit = QLineEdit("RT-001")
         self.id_edit.setReadOnly(True)
         self.id_edit.setFixedWidth(75)
         self.id_edit.setStyleSheet("background:#e5e7eb; color:#374151; font-weight:700; font-family:Consolas,monospace;")
-        self.name_edit = QLineEdit("Remote Optical Terminal 001")
         id_h.addWidget(self.id_edit)
-        id_h.addWidget(self.name_edit)
+        self.net_slider, self.net_label = self._make_int_slider(0, 255, 0, tooltip="Network ID (0 = any)")
+        id_h.addWidget(self.net_slider)
+        id_h.addWidget(self.net_label)
         quick_grid.addLayout(id_h, 4, 1, 1, 2)
 
         quick_grid.addWidget(self._label("Operational State"), 4, 3)
-        op_h = QHBoxLayout()
         self.op_mode_combo = QComboBox()
-        self.op_mode_combo.addItems(["ACTIVE", "STANDBY", "OFF", "MAINTENANCE", "FAULT"])
+        self.op_mode_combo.addItems(OP_2D)
         self.op_mode_combo.setMinimumHeight(26)
-        op_h.addWidget(self.op_mode_combo)
-        quick_grid.addLayout(op_h, 4, 4, 1, 2)
+        quick_grid.addWidget(self.op_mode_combo, 4, 4, 1, 2)
 
+        # Row 5: switches + token
         quick_grid.addWidget(self._label("Power & Emission"), 5, 0)
         pwr_h = QHBoxLayout()
         self.btn_power_on = QPushButton("POWER ON")
@@ -194,18 +208,12 @@ class RemoteTerminalPanel(BaseConfigPanel):
         pwr_h.addWidget(self.btn_beacon_off)
         quick_grid.addLayout(pwr_h, 5, 1, 1, 2)
 
-        quick_grid.addWidget(self._label("Auth Token / Code"), 5, 3)
-        code_h = QHBoxLayout()
-        self.sig_code_edit = QLineEdit("RT001")
-        self.sig_code_edit.setPlaceholderText("Identity Auth Code")
-        code_h.addWidget(self.sig_code_edit)
-        self.btn_point_boresight = QPushButton("Boresight")
-        self.btn_point_target = QPushButton("Point at Target")
-        code_h.addWidget(self.btn_point_boresight)
-        code_h.addWidget(self.btn_point_target)
-        quick_grid.addLayout(code_h, 5, 4, 1, 2)
+        quick_grid.addWidget(self._label("Auth Token"), 5, 3)
+        self.sig_code_edit = QLineEdit("ALPHA-7")
+        self.sig_code_edit.setPlaceholderText("Beacon auth token")
+        quick_grid.addWidget(self.sig_code_edit, 5, 4, 1, 2)
 
-        # Section 1.3: Optical Laser Physics
+        # Row 6: optical physics
         quick_grid.addWidget(self._label("Optical Power (W)"), 6, 0)
         self.power_slider, self.power_label, self.power_factor = self._make_float_slider(0.01, 5.0, 1.0, decimals=2, suffix=" W")
         quick_grid.addWidget(self.power_slider, 6, 1)
@@ -216,23 +224,35 @@ class RemoteTerminalPanel(BaseConfigPanel):
         quick_grid.addWidget(self.wl_slider, 6, 4)
         quick_grid.addWidget(self.wl_label, 6, 5)
 
-        quick_grid.addWidget(self._label("Modulation Type"), 7, 0)
+        # Row 7: modulation truth
+        quick_grid.addWidget(self._label("Modulation"), 7, 0)
         self.mod_type_combo = QComboBox()
-        self.mod_type_combo.addItems(["AM", "NONE", "PM", "OOK", "PPM", "CUSTOM"])
+        self.mod_type_combo.addItems(MOD_2D)
         self.mod_type_combo.setMinimumHeight(26)
         quick_grid.addWidget(self.mod_type_combo, 7, 1, 1, 2)
 
-        quick_grid.addWidget(self._label("Modulation Freq (kHz)"), 7, 3)
+        quick_grid.addWidget(self._label("OOK Chip Rate (Hz)"), 7, 3)
+        self.chip_rate_slider, self.chip_rate_label, self.chip_rate_factor = self._make_float_slider(0.5, 60.0, 12.0, decimals=1, suffix=" Hz")
+        quick_grid.addWidget(self.chip_rate_slider, 7, 4)
+        quick_grid.addWidget(self.chip_rate_label, 7, 5)
+
+        # Row 8: spot + AM carrier (visual)
+        quick_grid.addWidget(self._label("Spot Size (mrad)"), 8, 0)
+        self.div_slider, self.div_label, self.div_factor = self._make_float_slider(0.1, 10.0, 1.0, decimals=2, suffix=" mrad")
+        quick_grid.addWidget(self.div_slider, 8, 1)
+        quick_grid.addWidget(self.div_label, 8, 2)
+
+        quick_grid.addWidget(self._label("AM Carrier (kHz)"), 8, 3)
         self.mod_freq_slider, self.mod_freq_label, self.mod_freq_factor = self._make_float_slider(0.1, 50.0, 10.0, decimals=1, suffix=" kHz")
-        quick_grid.addWidget(self.mod_freq_slider, 7, 4)
-        quick_grid.addWidget(self.mod_freq_label, 7, 5)
+        quick_grid.addWidget(self.mod_freq_slider, 8, 4)
+        quick_grid.addWidget(self.mod_freq_label, 8, 5)
 
         main_layout.addWidget(quick_box)
 
         # -------------------------------------------------------------
-        # 2. ADVANCED PARAMETERS (COLLAPSIBLE ACCORDION)
+        # 2. ADVANCED (COLLAPSED): motion detail + telemetry + protocol
         # -------------------------------------------------------------
-        self.btn_toggle_advanced = QPushButton("▶ ⚙️ Advanced Parameters (Detailed Physics & Diagnostics) [Click to Expand]")
+        self.btn_toggle_advanced = QPushButton("▶ ⚙️ Advanced Parameters (Motion Detail, Telemetry, Protocol) [Click to Expand]")
         self.btn_toggle_advanced.setStyleSheet(
             "QPushButton { background:#f1f5f9; border:1px solid #cbd5e1; border-radius:6px; padding:8px 14px; "
             "font-weight:700; color:#1e293b; text-align:left; font-size:12px; } "
@@ -242,7 +262,7 @@ class RemoteTerminalPanel(BaseConfigPanel):
         main_layout.addWidget(self.btn_toggle_advanced)
 
         self.adv_container = QWidget()
-        self.adv_container.setVisible(False)  # Collapsed by default for clean setup
+        self.adv_container.setVisible(False)
         adv_layout = QVBoxLayout(self.adv_container)
         adv_layout.setContentsMargins(0, 4, 0, 4)
         adv_layout.setSpacing(12)
@@ -254,21 +274,8 @@ class RemoteTerminalPanel(BaseConfigPanel):
         cards_grid.setColumnStretch(0, 1)
         cards_grid.setColumnStretch(1, 1)
 
-        # Card A: Detailed Kinematics & Pointing
-        card_kin = self._build_advanced_kinematics_card()
-        cards_grid.addWidget(card_kin, 0, 0)
-
-        # Card B: Detailed Optical Physics
-        card_opt = self._build_advanced_optics_card()
-        cards_grid.addWidget(card_opt, 0, 1)
-
-        # Card C: Detailed Temporal Pulse & Modulation
-        card_pulse = self._build_advanced_pulse_card()
-        cards_grid.addWidget(card_pulse, 1, 0)
-
-        # Card D: Communication Protocol & Target Signature Tolerances
-        card_comm = self._build_advanced_comm_card()
-        cards_grid.addWidget(card_comm, 1, 1)
+        cards_grid.addWidget(self._build_advanced_motion_card(), 0, 0)
+        cards_grid.addWidget(self._build_advanced_comm_card(), 0, 1)
 
         adv_layout.addLayout(cards_grid)
         main_layout.addWidget(self.adv_container)
@@ -282,47 +289,18 @@ class RemoteTerminalPanel(BaseConfigPanel):
         if self._advanced_visible:
             self.btn_toggle_advanced.setText("▼ ⚙️ Advanced Parameters [Click to Collapse]")
         else:
-            self.btn_toggle_advanced.setText("▶ ⚙️ Advanced Parameters (Detailed Physics & Diagnostics) [Click to Expand]")
+            self.btn_toggle_advanced.setText("▶ ⚙️ Advanced Parameters (Motion Detail, Telemetry, Protocol) [Click to Expand]")
 
     # --- ADVANCED CARD BUILDERS --------------------------------------
 
-    def _build_advanced_kinematics_card(self) -> QGroupBox:
-        box, grid = self._make_group("A. Kinematics, Pointing & Platform")
-        grid.addWidget(self._label("Heading / Direction (deg)"), 0, 0)
-        self.dir_slider, self.dir_label, self.dir_factor = self._make_float_slider(0.0, 360.0, 45.0, decimals=1, suffix=" deg")
-        grid.addWidget(self.dir_slider, 0, 1)
-        grid.addWidget(self.dir_label, 0, 2)
-
-        grid.addWidget(self._label("Acceleration (m/s2)"), 1, 0)
+    def _build_advanced_motion_card(self) -> QGroupBox:
+        box, grid = self._make_group("A. Motion Detail & Live Telemetry")
+        grid.addWidget(self._label("Acceleration (m/s2)"), 0, 0)
         self.accel_slider, self.accel_label, self.accel_factor = self._make_float_slider(0.1, 20.0, 2.0, decimals=1, suffix=" m/s2")
-        grid.addWidget(self.accel_slider, 1, 1)
-        grid.addWidget(self.accel_label, 1, 2)
+        grid.addWidget(self.accel_slider, 0, 1)
+        grid.addWidget(self.accel_label, 0, 2)
 
-        grid.addWidget(self._label("Beam Azimuth (deg)"), 2, 0)
-        self.azimuth_slider, self.azimuth_label, self.azimuth_factor = self._make_float_slider(-180.0, 180.0, 0.0, decimals=1, suffix=" deg")
-        grid.addWidget(self.azimuth_slider, 2, 1)
-        grid.addWidget(self.azimuth_label, 2, 2)
-
-        grid.addWidget(self._label("Beam Elevation (deg)"), 3, 0)
-        self.elevation_slider, self.elevation_label, self.elevation_factor = self._make_float_slider(-90.0, 90.0, 0.0, decimals=1, suffix=" deg")
-        grid.addWidget(self.elevation_slider, 3, 1)
-        grid.addWidget(self.elevation_label, 3, 2)
-
-        grid.addWidget(self._label("Platform ID"), 4, 0)
-        self.platform_edit = QLineEdit("PLATFORM-001")
-        grid.addWidget(self.platform_edit, 4, 1, 1, 2)
-
-        grid.addWidget(self._label("Terminal Type"), 5, 0)
-        self.type_combo = QComboBox()
-        self.type_combo.addItems(["REMOTE_TERMINAL", "OPTICAL_TERMINAL", "GROUND_TERMINAL", "AIRBORNE_TERMINAL", "SPACE_TERMINAL"])
-        grid.addWidget(self.type_combo, 5, 1, 1, 2)
-
-        grid.addWidget(self._label("Reference Frame"), 6, 0)
-        self.pos_ref_combo = QComboBox()
-        self.pos_ref_combo.addItems(["LOCAL", "PLATFORM", "ECI", "ECEF", "ENU", "NED"])
-        grid.addWidget(self.pos_ref_combo, 6, 1, 1, 2)
-
-        grid.addWidget(self._label("Sim Position (X, Y)"), 7, 0)
+        grid.addWidget(self._label("Sim Position (X, Y)"), 1, 0)
         pos_h = QHBoxLayout()
         self.pos_x_lbl = QLabel("X: 1000.0")
         self.pos_x_lbl.setStyleSheet(self._PILL_IDLE)
@@ -330,72 +308,27 @@ class RemoteTerminalPanel(BaseConfigPanel):
         self.pos_y_lbl.setStyleSheet(self._PILL_IDLE)
         pos_h.addWidget(self.pos_x_lbl)
         pos_h.addWidget(self.pos_y_lbl)
-        grid.addLayout(pos_h, 7, 1, 1, 2)
-        return box
+        grid.addLayout(pos_h, 1, 1, 1, 2)
 
-    def _build_advanced_optics_card(self) -> QGroupBox:
-        box, grid = self._make_group("B. Optical Physics & Beam Profile")
-        grid.addWidget(self._label("Beam Divergence (mrad)"), 0, 0)
-        self.div_slider, self.div_label, self.div_factor = self._make_float_slider(0.1, 10.0, 1.0, decimals=2, suffix=" mrad")
-        grid.addWidget(self.div_slider, 0, 1)
-        grid.addWidget(self.div_label, 0, 2)
-
-        grid.addWidget(self._label("Beam Profile"), 1, 0)
-        self.profile_combo = QComboBox()
-        self.profile_combo.addItems(["GAUSSIAN", "TOP_HAT", "CUSTOM"])
-        grid.addWidget(self.profile_combo, 1, 1, 1, 2)
-
-        grid.addWidget(self._label("Polarization"), 2, 0)
-        self.pol_combo = QComboBox()
-        self.pol_combo.addItems(["UNPOLARIZED", "LINEAR", "CIRCULAR", "ELLIPTICAL"])
-        grid.addWidget(self.pol_combo, 2, 1, 1, 2)
-
-        grid.addWidget(self._label("Telemetry: Link State"), 3, 0)
+        grid.addWidget(self._label("Telemetry: Link State"), 2, 0)
         self.telemetry_link_lbl = QLabel("NO LINK")
         self.telemetry_link_lbl.setStyleSheet(
             "color:#3b82f6; font-weight:700; background:#eff6ff; border:1px solid #bfdbfe; "
             "border-radius:6px; padding:3px 8px; font-family:Consolas,monospace;"
         )
-        grid.addWidget(self.telemetry_link_lbl, 3, 1, 1, 2)
+        grid.addWidget(self.telemetry_link_lbl, 2, 1, 1, 2)
 
-        grid.addWidget(self._label("Telemetry: Beacon State"), 4, 0)
+        grid.addWidget(self._label("Telemetry: Beacon State"), 3, 0)
         self.telemetry_beacon_lbl = QLabel("EMITTING")
         self.telemetry_beacon_lbl.setStyleSheet(
             "color:#059669; font-weight:700; background:#ecfdf5; border:1px solid #a7f3d0; "
             "border-radius:6px; padding:3px 8px; font-family:Consolas,monospace;"
         )
-        grid.addWidget(self.telemetry_beacon_lbl, 4, 1, 1, 2)
-        return box
-
-    def _build_advanced_pulse_card(self) -> QGroupBox:
-        box, grid = self._make_group("C. Pulse & Temporal Modulation")
-        grid.addWidget(self._label("Modulation Depth (%)"), 0, 0)
-        self.mod_depth_slider, self.mod_depth_label, self.mod_depth_factor = self._make_float_slider(0.0, 100.0, 100.0, decimals=0, suffix=" %")
-        grid.addWidget(self.mod_depth_slider, 0, 1)
-        grid.addWidget(self.mod_depth_label, 0, 2)
-
-        grid.addWidget(self._label("Pulse Operation"), 1, 0)
-        self.pulse_enable_chk = QCheckBox("Enable Pulsed Emission")
-        grid.addWidget(self.pulse_enable_chk, 1, 1, 1, 2)
-
-        grid.addWidget(self._label("Pulse Rep Rate (kHz)"), 2, 0)
-        self.pulse_rate_slider, self.pulse_rate_label, self.pulse_rate_factor = self._make_float_slider(0.1, 50.0, 10.0, decimals=1, suffix=" kHz")
-        grid.addWidget(self.pulse_rate_slider, 2, 1)
-        grid.addWidget(self.pulse_rate_label, 2, 2)
-
-        grid.addWidget(self._label("Pulse Width (us)"), 3, 0)
-        self.pulse_width_slider, self.pulse_width_label, self.pulse_width_factor = self._make_float_slider(1.0, 200.0, 50.0, decimals=1, suffix=" us")
-        grid.addWidget(self.pulse_width_slider, 3, 1)
-        grid.addWidget(self.pulse_width_label, 3, 2)
-
-        grid.addWidget(self._label("Calculated Duty Cycle"), 4, 0)
-        self.duty_cycle_label = QLabel("50.0 % (auto-calculated)")
-        self.duty_cycle_label.setStyleSheet(self._PILL_IDLE)
-        grid.addWidget(self.duty_cycle_label, 4, 1, 1, 2)
+        grid.addWidget(self.telemetry_beacon_lbl, 3, 1, 1, 2)
         return box
 
     def _build_advanced_comm_card(self) -> QGroupBox:
-        box, grid = self._make_group("D. Communication & Signature Tolerances")
+        box, grid = self._make_group("B. Protocol (Compat)")
         grid.addWidget(self._label("Protocol"), 0, 0)
         self.protocol_edit = QLineEdit("OPTICAL_LINK v1.0")
         grid.addWidget(self.protocol_edit, 0, 1, 1, 2)
@@ -413,30 +346,14 @@ class RemoteTerminalPanel(BaseConfigPanel):
         for c in (self.cap_tx, self.cap_rx, self.cap_beacon, self.cap_track):
             cap_h.addWidget(c)
         grid.addLayout(cap_h, 1, 1, 1, 2)
-
-        grid.addWidget(self._label("Expected Wavelength (nm)"), 2, 0)
-        self.sig_wl_slider, self.sig_wl_label, self.sig_wl_factor = self._make_float_slider(800.0, 1650.0, 1550.0, decimals=1, suffix=" nm")
-        grid.addWidget(self.sig_wl_slider, 2, 1)
-        grid.addWidget(self.sig_wl_label, 2, 2)
-
-        grid.addWidget(self._label("Wavelength Tolerance (+/- nm)"), 3, 0)
-        self.sig_tol_slider, self.sig_tol_label, self.sig_tol_factor = self._make_float_slider(0.2, 10.0, 2.0, decimals=1, suffix=" nm")
-        grid.addWidget(self.sig_tol_slider, 3, 1)
-        grid.addWidget(self.sig_tol_label, 3, 2)
-
-        grid.addWidget(self._label("Minimum SNR Threshold (dB)"), 4, 0)
-        self.sig_snr_slider, self.sig_snr_label, self.sig_snr_factor = self._make_float_slider(1.0, 30.0, 8.0, decimals=1, suffix=" dB")
-        grid.addWidget(self.sig_snr_slider, 4, 1)
-        grid.addWidget(self.sig_snr_label, 4, 2)
         return box
 
     # --- SIGNAL HOOKUPS ----------------------------------------------
 
     def _connect_signals(self) -> None:
-        # Scenario signals
+        # Scenario signals (2D subset)
         self.count_slider.valueChanged.connect(self._on_count_changed)
         self.formation_shape.currentIndexChanged.connect(self._on_any_change)
-        self.radius_slider.valueChanged.connect(self._on_any_change)
         self.spacing_slider.valueChanged.connect(self._on_any_change)
         self.motion_profile.currentIndexChanged.connect(self._on_any_change)
         self.speed_slider.valueChanged.connect(self._on_any_change)
@@ -450,51 +367,24 @@ class RemoteTerminalPanel(BaseConfigPanel):
         self.btn_beacon_off.clicked.connect(lambda: self._set_beacon(False))
         self.op_mode_combo.currentIndexChanged.connect(self._on_any_change)
 
-        self.btn_point_boresight.clicked.connect(self._point_boresight)
-        self.btn_point_target.clicked.connect(self._point_target)
-
-        # Beacon physics
+        # Beacon physics (2D subset)
         self.power_slider.valueChanged.connect(self._on_any_change)
         self.wl_slider.valueChanged.connect(self._on_any_change)
         self.div_slider.valueChanged.connect(self._on_any_change)
-        self.profile_combo.currentIndexChanged.connect(self._on_any_change)
-        self.pol_combo.currentIndexChanged.connect(self._on_any_change)
+        self.net_slider.valueChanged.connect(self._on_any_change)
+        self.chip_rate_slider.valueChanged.connect(self._on_any_change)
 
-        # Modulation & Pulse
+        # Modulation
         self.mod_type_combo.currentIndexChanged.connect(self._on_mod_type_changed)
         self.mod_freq_slider.valueChanged.connect(self._on_any_change)
-        self.mod_depth_slider.valueChanged.connect(self._on_any_change)
-        self.pulse_enable_chk.toggled.connect(self._on_pulse_toggled)
-        self.pulse_rate_slider.valueChanged.connect(self._on_pulse_params_changed)
-        self.pulse_width_slider.valueChanged.connect(self._on_pulse_params_changed)
 
-        # Signature & Comm
-        self.name_edit.textChanged.connect(self._on_any_change)
-        self.type_combo.currentIndexChanged.connect(self._on_any_change)
-        self.platform_edit.textChanged.connect(self._on_any_change)
-        self.pos_ref_combo.currentIndexChanged.connect(self._on_any_change)
-        self.azimuth_slider.valueChanged.connect(self._on_any_change)
-        self.elevation_slider.valueChanged.connect(self._on_any_change)
-
+        # Identity + protocol
+        self.sig_code_edit.textChanged.connect(self._on_any_change)
         self.protocol_edit.textChanged.connect(self._on_any_change)
         self.cap_tx.toggled.connect(self._on_any_change)
         self.cap_rx.toggled.connect(self._on_any_change)
         self.cap_beacon.toggled.connect(self._on_any_change)
         self.cap_track.toggled.connect(self._on_any_change)
-        self.sig_wl_slider.valueChanged.connect(self._on_any_change)
-        self.sig_tol_slider.valueChanged.connect(self._on_any_change)
-        self.sig_snr_slider.valueChanged.connect(self._on_any_change)
-        self.sig_code_edit.textChanged.connect(self._on_any_change)
-
-    def _point_boresight(self) -> None:
-        self.azimuth_slider.setValue(0)
-        self.elevation_slider.setValue(0)
-        self._on_any_change()
-
-    def _point_target(self) -> None:
-        self.azimuth_slider.setValue(0)
-        self.elevation_slider.setValue(0)
-        self._on_any_change()
 
     def _set_power(self, on: bool) -> None:
         self.btn_power_on.setChecked(on)
@@ -516,22 +406,9 @@ class RemoteTerminalPanel(BaseConfigPanel):
         self._on_any_change()
 
     def _on_mod_type_changed(self) -> None:
-        mtype = self.mod_type_combo.currentText()
-        is_none = (mtype == "NONE")
-        self.mod_freq_slider.setEnabled(not is_none)
-        self.mod_depth_slider.setEnabled(not is_none)
-        self._on_any_change()
-
-    def _on_pulse_toggled(self, checked: bool) -> None:
-        self.pulse_rate_slider.setEnabled(checked)
-        self.pulse_width_slider.setEnabled(checked)
-        self._on_pulse_params_changed()
-
-    def _on_pulse_params_changed(self) -> None:
-        f_khz = self.pulse_rate_slider.value() / float(self.pulse_rate_factor)
-        w_us = self.pulse_width_slider.value() / float(self.pulse_width_factor)
-        d_pct = min(100.0, f_khz * w_us * 0.1)
-        self.duty_cycle_label.setText(f"{d_pct:.1f} % (auto-calculated)")
+        # Chip rate is always live (OOK truth); carrier freq only matters for AM.
+        is_am = (self.mod_type_combo.currentText() == "AM")
+        self.mod_freq_slider.setEnabled(is_am)
         self._on_any_change()
 
     def _on_count_changed(self, val: int) -> None:
@@ -561,11 +438,10 @@ class RemoteTerminalPanel(BaseConfigPanel):
         mod_freq: float | None = None,
         emit: bool = True,
     ) -> None:
-        """Randomize all remote scenario, formation, and active terminal parameters on the fly."""
+        """Randomize the 2D scenario + beacon parameters on the fly."""
         was_updating = self._updating
         self._updating = True
         try:
-            # Randomize scenario parameters
             new_count = random.randint(1, 4)
             self.count_slider.setValue(new_count)
             self._scenario_config.terminal_count = new_count
@@ -573,7 +449,6 @@ class RemoteTerminalPanel(BaseConfigPanel):
 
             shapes = ["Single", "Line", "Circle", "Arc", "Grid", "V-Formation"]
             self.formation_shape.setCurrentText(random.choice(shapes))
-            self.radius_slider.setValue(int(random.uniform(60.0, 280.0) * self.radius_factor))
             self.spacing_slider.setValue(int(random.uniform(30.0, 120.0) * self.spacing_factor))
 
             profiles = ["Stationary", "Constant Velocity", "Circular", "Sinusoidal", "Figure-8", "Random Walk"]
@@ -582,10 +457,9 @@ class RemoteTerminalPanel(BaseConfigPanel):
             self.dir_slider.setValue(int(random.uniform(0.0, 360.0) * self.dir_factor))
             self.accel_slider.setValue(int(random.uniform(1.0, 6.0) * self.accel_factor))
 
-            # Laser wavelengths and codes
             laser_lines = [850.0, 980.0, 1064.0, 1310.0, 1550.0]
             tokens = ["ALPHA-7", "BRAVO-2", "ECHO-9", "SIERRA-4", "OMEGA-1", "KILO-6"]
-            mod_types = ["AM", "OOK", "PM"]
+            mod_types = ["AM", "OOK"]
 
             for i, term in enumerate(self._scenario_config.terminals):
                 term.state.power_state = "ON"
@@ -593,13 +467,15 @@ class RemoteTerminalPanel(BaseConfigPanel):
                 term.beacon.enabled = True
                 term.beacon.power_w = round(random.uniform(0.8, 3.5), 2)
                 term.beacon.wavelength_nm = (wavelength if (i == 0 and wavelength is not None) else random.choice(laser_lines))
-                term.beacon.mod_type = (mod_type if (i == 0 and mod_type is not None) else random.choice(mod_types))
-                term.beacon.mod_freq_khz = (mod_freq if (i == 0 and mod_freq is not None) else round(random.uniform(5.0, 25.0), 1))
+                picked_mod = (mod_type if (i == 0 and mod_type is not None) else random.choice(mod_types))
+                term.beacon.mod_type = picked_mod if picked_mod in MOD_2D else "OOK"
+                picked_freq = (mod_freq if (i == 0 and mod_freq is not None) else round(random.uniform(5.0, 25.0), 1))
+                term.beacon.mod_freq_khz = picked_freq
+                term.beacon.chip_rate_hz = picked_freq
                 term.beacon.div_h_mrad = round(random.uniform(0.8, 2.5), 2)
                 term.beacon.div_v_mrad = term.beacon.div_h_mrad
                 t_token = (token if (i == 0 and token is not None) else tokens[i % len(tokens)])
-                term.target_signature.code = t_token
-                term.target_signature.wavelength_nm = term.beacon.wavelength_nm
+                term.beacon.token = t_token
                 term.identity.name = f"Remote Terminal {i+1} ({t_token})"
 
             self._refresh_terminal_buttons()
@@ -638,64 +514,58 @@ class RemoteTerminalPanel(BaseConfigPanel):
         self._refresh_terminal_buttons()
         self._load_selected_terminal()
 
+    @staticmethod
+    def _map_mod_to_2d(mod: str) -> str:
+        m = str(mod or "OOK").upper()
+        if m in MOD_2D:
+            return m
+        return _LEGACY_MOD_TO_2D.get(m, "OOK")
+
     def _load_selected_terminal(self) -> None:
         if self._selected_idx >= len(self._scenario_config.terminals):
             return
         t = self._scenario_config.terminals[self._selected_idx]
         self._updating = True
         try:
-            # Identity
+            # Identity (2D)
             self.id_edit.setText(t.identity.id)
-            self.name_edit.setText(t.identity.name)
-            self.type_combo.setCurrentText(t.identity.terminal_type)
-            self.platform_edit.setText(t.identity.platform_id)
+            self.net_slider.setValue(int(max(0, min(int(getattr(t.beacon, "network_id", 0) or 0), 255))))
 
-            # Position
+            # Position readout
             self.pos_x_lbl.setText(f"X: {t.position.x:.1f}")
             self.pos_y_lbl.setText(f"Y: {t.position.y:.1f}")
-            self.pos_ref_combo.setCurrentText(t.position.reference_frame)
-            self.azimuth_slider.setValue(int(round(t.beacon.azimuth_deg * self.azimuth_factor)))
-            self.elevation_slider.setValue(int(round(t.beacon.elevation_deg * self.elevation_factor)))
 
             # State
             pwr_on = (t.state.power_state == "ON")
             self.btn_power_on.setChecked(pwr_on)
             self.btn_power_off.setChecked(not pwr_on)
-            self.op_mode_combo.setCurrentText(t.state.operational_state)
+            op = str(t.state.operational_state or "ACTIVE")
+            self.op_mode_combo.setCurrentText(op if op in OP_2D else "ACTIVE")
             bc_on = t.beacon.enabled
             self.btn_beacon_on.setChecked(bc_on)
             self.btn_beacon_off.setChecked(not bc_on)
             self.telemetry_link_lbl.setText(t.state.communication_state)
             self.telemetry_beacon_lbl.setText(t.state.beacon_state)
 
-            # Beacon
+            # Beacon (2D)
             self.power_slider.setValue(int(round(t.beacon.power_w * self.power_factor)))
             self.wl_slider.setValue(int(round(t.beacon.wavelength_nm * self.wl_factor)))
             self.div_slider.setValue(int(round(t.beacon.div_h_mrad * self.div_factor)))
-            self.profile_combo.setCurrentText(t.beacon.profile_type)
-            self.pol_combo.setCurrentText(t.beacon.polarization_type)
+            self.sig_code_edit.setText(str(getattr(t.beacon, "token", "") or ""))
 
-            # Mod
-            self.mod_type_combo.setCurrentText(t.beacon.mod_type)
+            # Modulation truth: framed OOK chip rate + AM carrier visual
+            self.mod_type_combo.setCurrentText(self._map_mod_to_2d(t.beacon.mod_type))
             self.mod_freq_slider.setValue(int(round(t.beacon.mod_freq_khz * self.mod_freq_factor)))
-            self.mod_depth_slider.setValue(int(round(t.beacon.mod_depth * 100.0)))
-            self.pulse_enable_chk.setChecked(t.beacon.pulse_enabled)
-            self.pulse_rate_slider.setValue(int(round(t.beacon.pulse_rate_khz * self.pulse_rate_factor)))
-            self.pulse_width_slider.setValue(int(round(t.beacon.pulse_width_us * self.pulse_width_factor)))
-            self._on_pulse_params_changed()
+            self.chip_rate_slider.setValue(int(round(float(getattr(t.beacon, "chip_rate_hz", 12.0)) * self.chip_rate_factor)))
             self._on_mod_type_changed()
 
-            # Comm & Sig
-            self.protocol_edit.setText(t.communication.protocol_name)
-            caps = set(t.communication.capabilities or [])
-            self.cap_tx.setChecked("OPTICAL_TX" in caps or "TX" in caps)
-            self.cap_rx.setChecked("OPTICAL_RX" in caps or "RX" in caps)
-            self.cap_beacon.setChecked("BEACON" in caps)
-            self.cap_track.setChecked("TRACKING" in caps or "TRACK" in caps)
-            self.sig_wl_slider.setValue(int(round(t.target_signature.wavelength_nm * self.sig_wl_factor)))
-            self.sig_tol_slider.setValue(int(round(t.target_signature.wavelength_tol_nm * self.sig_tol_factor)))
-            self.sig_snr_slider.setValue(int(round(t.target_signature.minimum_snr_db * self.sig_snr_factor)))
-            self.sig_code_edit.setText(t.target_signature.code or "")
+            # Protocol (capabilities stored as beacon.capabilities bitmask)
+            self.protocol_edit.setText(f"OPTICAL_LINK v{t.beacon.protocol_version}")
+            caps_int = int(getattr(t.beacon, "capabilities", 0) or 0)
+            self.cap_tx.setChecked(bool(caps_int & 0x01))
+            self.cap_rx.setChecked(bool(caps_int & 0x02))
+            self.cap_beacon.setChecked(bool(caps_int & 0x04))
+            self.cap_track.setChecked(bool(caps_int & 0x08))
         finally:
             self._updating = False
 
@@ -703,13 +573,8 @@ class RemoteTerminalPanel(BaseConfigPanel):
         if self._selected_idx >= len(self._scenario_config.terminals):
             return
         t = self._scenario_config.terminals[self._selected_idx]
-        t.identity.name = self.name_edit.text()
-        t.identity.terminal_type = self.type_combo.currentText()
-        t.identity.platform_id = self.platform_edit.text()
-
-        t.position.reference_frame = self.pos_ref_combo.currentText()
-        t.beacon.azimuth_deg = self.azimuth_slider.value() / float(self.azimuth_factor)
-        t.beacon.elevation_deg = self.elevation_slider.value() / float(self.elevation_factor)
+        # NOTE: legacy fields (name/type/platform/frames/pointing/profile/
+        # polarization/pulse/signature-tolerances) are preserved untouched.
 
         t.state.power_state = "ON" if self.btn_power_on.isChecked() else "OFF"
         t.state.operational_state = self.op_mode_combo.currentText()
@@ -719,31 +584,26 @@ class RemoteTerminalPanel(BaseConfigPanel):
         t.beacon.wavelength_nm = self.wl_slider.value() / float(self.wl_factor)
         t.beacon.div_h_mrad = self.div_slider.value() / float(self.div_factor)
         t.beacon.div_v_mrad = t.beacon.div_h_mrad
-        t.beacon.profile_type = self.profile_combo.currentText()
-        t.beacon.polarization_type = self.pol_combo.currentText()
+        t.beacon.network_id = int(self.net_slider.value())
+
+        token = self.sig_code_edit.text().strip() or "ALPHA-7"
+        t.beacon.token = token
 
         t.beacon.mod_type = self.mod_type_combo.currentText()
         t.beacon.mod_freq_khz = self.mod_freq_slider.value() / float(self.mod_freq_factor)
-        t.beacon.mod_depth = self.mod_depth_slider.value() / 100.0
-        t.beacon.pulse_enabled = self.pulse_enable_chk.isChecked()
-        t.beacon.pulse_rate_khz = self.pulse_rate_slider.value() / float(self.pulse_rate_factor)
-        t.beacon.pulse_width_us = self.pulse_width_slider.value() / float(self.pulse_width_factor)
+        t.beacon.chip_rate_hz = self.chip_rate_slider.value() / float(self.chip_rate_factor)
 
-        t.communication.protocol_name = self.protocol_edit.text()
-        new_caps = []
-        if self.cap_beacon.isChecked():
-            new_caps.append("BEACON")
-        if self.cap_rx.isChecked():
-            new_caps.append("OPTICAL_RX")
+        # Capabilities bitmask: TX=0x01, RX=0x02, Beacon=0x04, Tracking=0x08
+        caps = 0
         if self.cap_tx.isChecked():
-            new_caps.append("OPTICAL_TX")
+            caps |= 0x01
+        if self.cap_rx.isChecked():
+            caps |= 0x02
+        if self.cap_beacon.isChecked():
+            caps |= 0x04
         if self.cap_track.isChecked():
-            new_caps.append("TRACKING")
-        t.communication.capabilities = new_caps
-        t.target_signature.wavelength_nm = self.sig_wl_slider.value() / float(self.sig_wl_factor)
-        t.target_signature.wavelength_tol_nm = self.sig_tol_slider.value() / float(self.sig_tol_factor)
-        t.target_signature.minimum_snr_db = self.sig_snr_slider.value() / float(self.sig_snr_factor)
-        t.target_signature.code = self.sig_code_edit.text()
+            caps |= 0x08
+        t.beacon.capabilities = caps
         t.validate()
 
     def collect_config(self) -> RemoteTerminalScenarioConfig:
@@ -794,6 +654,6 @@ class RemoteTerminalPanel(BaseConfigPanel):
             bstate = td.get("beacon_state", "OFF")
             self.telemetry_link_lbl.setText(cstate)
             self.telemetry_beacon_lbl.setText(bstate)
-            pos = td.get("position", (0, 0, 0))
+            pos = td.get("position", (0, 0))
             self.pos_x_lbl.setText(f"X: {pos[0]:.1f}")
             self.pos_y_lbl.setText(f"Y: {pos[1]:.1f}")

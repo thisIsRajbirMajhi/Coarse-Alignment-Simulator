@@ -12,11 +12,16 @@ class SensorDisturbanceSubsystem:
 
     def apply(self, frame, context):
         cfg = self.config
-        sensor_on = int(getattr(cfg, "noise", 0)) > 0
+        modern_on = bool(getattr(cfg, "enable_salt_pepper", False) or getattr(cfg, "enable_gaussian", False) or getattr(cfg, "enable_poisson", False))
         out = frame
-        if sensor_on:
+        # Exclusive paths: modern stack wins when enabled, otherwise legacy.
+        # Applying both double-counts photons (salt twice) and runs two
+        # independent hot-pixel models on the same frame.
+        if modern_on:
+            pass
+        elif int(getattr(cfg, "noise", 0)) > 0:
             out = apply_sensor_noise(out, int(cfg.noise), rng=context.rng)
-        if bool(getattr(cfg, "enable_salt_pepper", False) or getattr(cfg, "enable_gaussian", False) or getattr(cfg, "enable_poisson", False)):
+        if modern_on:
             out = apply_image_noise(
                 out,
                 enable_salt_pepper=bool(getattr(cfg, "enable_salt_pepper", False)),

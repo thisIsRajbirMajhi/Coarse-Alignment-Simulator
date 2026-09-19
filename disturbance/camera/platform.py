@@ -76,15 +76,8 @@ def apply_platform_motion(
         state = {}
     _rng = get_rng(rng)
 
-    # Resolve speed px/frame -> px/s via dt. We need dt first.
-    dt_resolved = DtProvider.resolve(state, dt, key="_pm_last_wall") if dt is None else float(np.clip(dt, 0.005, 0.08))
-    # If caller supplied dt explicitly, we still want to update wall but not double-clip beyond 0.08 already
-    if dt is not None:
-        # Ensure state last_wall updated for fallback later
-        try:
-            import time
-            state["_pm_last_wall"] = time.time()
-        except Exception: pass
+    # Resolve speed px/frame -> px/s via dt. Single clip range everywhere.
+    dt_resolved = DtProvider.resolve(state, dt, key="_pm_last_wall")
 
     # Resolve speed
     if speed_px_per_frame is not None:

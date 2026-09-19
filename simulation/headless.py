@@ -137,12 +137,15 @@ class HeadlessSimulation:
 
         self._disturbance_pipeline.context.config = dc
         self._disturbance_pipeline.context.rng = self.rng
+        # Keep ground truth: disturb a copy, render from disturbed pose,
+        # then restore true pose so telemetry/observations stay truthful.
+        true_pan, true_tilt = float(self.camera.pan), float(self.camera.tilt)
         pan_dist, tilt_dist = self._disturbance_pipeline.disturb_camera_pose(
-            self.camera.pan, self.camera.tilt, dt_eff,
+            true_pan, true_tilt, dt_eff,
         )
 
         try:
-            self.camera.apply_disturbance(float(pan_dist), float(tilt_dist))
+            self.camera.set_position(float(pan_dist), float(tilt_dist), clear_queue=False)
         except AttributeError:
             self.camera.set_position(float(pan_dist), float(tilt_dist), clear_queue=False)
 
@@ -178,8 +181,15 @@ class HeadlessSimulation:
         except Exception:
             fov_frame = dist.apply_turbulence(fov_frame, int(getattr(dc, "turbulence", 0)), dt=dt_eff, rng=self.rng)
 
+        # Restore true pose; capture pose/rect refer to disturbed view.
         try:
-            self._last_capture_pose = (float(self.camera.pan), float(self.camera.tilt))
+            self.camera.set_position(float(true_pan), float(true_tilt), clear_queue=False)
+        except Exception:
+            pass
+        try:
+            self._last_capture_pose = (float(pan_dist), float(tilt_dist))
+            self._last_fov_rect = (int(x0), int(y0), int(x1), int(y1))
+            self._true_pose = (float(true_pan), float(true_tilt))
         except Exception:
             pass
 
@@ -211,14 +221,28 @@ class HeadlessSimulation:
         return obs
 
     def get_observation(self) -> dict:
+        # pan/tilt = ground truth; disturbed capture pose exposed separately.
+        fov_rect = getattr(self, "_last_fov_rect", None)
+        if fov_rect is None:
+            try:
+                fov_rect = self.camera.get_fov_rect()
+            except Exception:
+                fov_rect = (0, 0, 0, 0)
+        cap = getattr(self, "_last_capture_pose", None)
         obs = {
             "pan": float(self.camera.pan),
             "tilt": float(self.camera.tilt),
-            "fov_rect": self.camera.get_fov_rect(),
+            "fov_rect": fov_rect,
             "world_size": self._scene_size,
             "fov_size": self._fov_size,
             "step_count": self.step_count,
         }
+        if cap is not None:
+            try:
+                obs["pan_disturbed"] = float(cap[0])
+                obs["tilt_disturbed"] = float(cap[1])
+            except Exception:
+                pass
         if hasattr(self, "local_terminal") and self.local_terminal is not None:
             try:
                 obs["local_terminal"] = self.local_terminal.get_telemetry()
@@ -235,8 +259,9 @@ class HeadlessSimulation:
 
     def step(self, action: np.ndarray | tuple | None = None, dt: float | None = None) -> tuple[dict, float, bool, bool, dict]:
         dt = float(dt if dt is not None else self.dt)
+        # Single timebase: sim_speed scales everything (scene, scenario,
+        # actuator, tracker, disturbances) so physics stay consistent.
         dt_eff = float(np.clip(dt * self.sim_speed, 1e-4, 0.1))
-        dt_wall = float(np.clip(dt, 0.005, 0.1))
 
         try:
             self.scene.update(dt_eff)
@@ -249,13 +274,13 @@ class HeadlessSimulation:
                 pass
         try:
             self.local_terminal.update(
-                dt_wall,
+                dt_eff,
                 fov_frame=self._last_frame,
                 fov_capture_pose=getattr(self, "_last_capture_pose", None),
             )
         except Exception:
             try:
-                self.camera.update(dt_wall)
+                self.camera.update(dt_eff)
             except Exception:
                 pass
 

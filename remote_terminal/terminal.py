@@ -1,4 +1,4 @@
-# remote_terminal/terminal.py - Individual Remote Terminal model per RemoteTerminal.md
+# remote_terminal/terminal.py - 2D remote beacon (x, y + OOK identity).
 from __future__ import annotations
 
 import math
@@ -12,27 +12,18 @@ from remote_terminal.beacon_encoder import BeaconEncoder, BeaconEncoderConfig
 
 
 class RemoteTerminal:
-    """
-    Simulated Remote Optical Terminal.
+    """2D remote beacon: identity + on/off + OOK intensity + x/y spot.
 
-    Encapsulates:
-      - Stable identity & platform reference
-      - Operational / Power / Beacon / Communication state machines
-      - Kinematic position & attitude
-      - Optical beacon physics & emission
-      - Target signature declaration
+    Full ``RemoteTerminalConfig`` accepted; physics reads the 2D subset
+    (id/token/wl/power/enabled/chip_rate/net + x/y).
     """
 
     def __init__(self, config: RemoteTerminalConfig | None = None):
         self.config = (config or RemoteTerminalConfig()).validate()
         self.x = float(self.config.position.x)
         self.y = float(self.config.position.y)
-        self.z = float(self.config.position.z)
-        self.roll = float(self.config.position.roll)
-        self.pitch = float(self.config.position.pitch)
-        self.yaw = float(self.config.position.yaw)
         self.sim_time = 0.0
-        # Phase-2: beacon encoder for structured identity frames
+        # Beacon encoder for structured identity frames
         bc = self.config.beacon
         self._encoder = BeaconEncoder(BeaconEncoderConfig(
             terminal_id=str(self.config.identity.id),
@@ -41,7 +32,9 @@ class RemoteTerminal:
             protocol_version=int(getattr(bc, "protocol_version", 1)),
             message_type=int(getattr(bc, "message_type", 1)),
             payload_codec=str(getattr(bc, "payload_codec", "COMPACT")),
-            chip_rate_hz=float(getattr(bc, "chip_rate_hz", getattr(bc, "identification_chip_rate_hz", 12.0))),
+            chip_rate_hz=float(getattr(bc, "chip_rate_hz", 12.0)),
+            network_id=int(getattr(bc, "network_id", 0) or 0),
+            capabilities=int(getattr(bc, "capabilities", 0) or 0),
         ))
         self._sync_states()
 
@@ -51,7 +44,7 @@ class RemoteTerminal:
         bc = self.config.beacon
         if st.power_state == "OFF":
             st.beacon_state = "OFF"
-            if st.operational_state not in ("OFF", "MAINTENANCE"):
+            if st.operational_state not in ("OFF",):
                 st.operational_state = "OFF"
         elif st.operational_state == "STANDBY":
             st.beacon_state = "READY"
@@ -60,8 +53,6 @@ class RemoteTerminal:
                 st.beacon_state = "EMITTING"
             else:
                 st.beacon_state = "READY"
-        elif st.operational_state in ("FAULT", "MAINTENANCE"):
-            st.beacon_state = "FAULT"
 
     def set_power(self, on: bool) -> None:
         self.config.state.power_state = "ON" if on else "OFF"
@@ -79,26 +70,12 @@ class RemoteTerminal:
         self.config.beacon.enabled = bool(enabled)
         self._sync_states()
 
-    def set_position(self, x: float, y: float, z: float = 0.0) -> None:
+    def set_position(self, x: float, y: float) -> None:
+        """Set 2D position."""
         self.x = float(x)
         self.y = float(y)
-        self.z = float(z)
         self.config.position.x = self.x
         self.config.position.y = self.y
-        self.config.position.z = self.z
-
-    def point_at(self, target_x: float, target_y: float) -> None:
-        """Compute and set azimuth & elevation pointing towards target."""
-        dx = float(target_x) - self.x
-        dy = float(target_y) - self.y
-        az = math.degrees(math.atan2(dy, dx))
-        self.config.beacon.azimuth_deg = az
-        self.config.beacon.elevation_deg = 0.0
-
-    def point_boresight(self) -> None:
-        """Reset beam pointing to boresight (0, 0)."""
-        self.config.beacon.azimuth_deg = 0.0
-        self.config.beacon.elevation_deg = 0.0
 
     @property
     def is_emitting(self) -> bool:
@@ -109,47 +86,65 @@ class RemoteTerminal:
             and self.config.state.beacon_state == "EMITTING"
         )
 
-    def update(self, dt: float) -> None:
-        self.sim_time += dt
-        bc = self.config.beacon
-        target_id = str(self.config.identity.id)
-        chip_rate = float(getattr(bc, "identification_chip_rate_hz", 8.0))
-        token = str(getattr(bc, "token", "ALPHA-7"))
-        wl = int(getattr(bc, "wavelength_nm", 1550))
-        if (self._encoder.config.terminal_id != target_id
-            or self._encoder.config.chip_rate_hz != chip_rate
-            or self._encoder.config.token != token
-            or self._encoder.config.wavelength_nm != wl):
-            self._encoder.config.terminal_id = target_id
-            self._encoder.config.chip_rate_hz = chip_rate
-            self._encoder.config.token = token
-            self._encoder.config.wavelength_nm = wl
-            self._encoder._rebuild()
-        self._encoder.update(self.sim_time)
-        self._sync_states()
+    def _combined_temporal_factor(self) -> float:
+        """Single truth for intensity: framed OOK owns square-wave types.
 
-    def emit_ideal_beam(self, pixel_scale_mrad: float = 0.035):
-        """Ideal optical beam state before the Propagation Channel (§2/§17).
-
-        Returns OpticalBeamState with emitted intensity (temporal modulation
-        included), geometric position, beam direction and spot characteristics.
-        The Propagation Channel transforms this into the received state.
+        ``compute_temporal_factor`` is a visual alias for the kHz carrier.
+        Square-wave mod types (OOK/PM/PPM) use the encoder only;
+        AM keeps its envelope × encoder; NONE uses encoder.
         """
-        from disturbance.optical.channel import OpticalBeamState
-
         bc = self.config.beacon
-        temp_fac = compute_temporal_factor(
+        id_on = bool(getattr(bc, "identification_code_enabled", True))
+        mod = str(getattr(bc, "mod_type", "AM") or "AM").upper()
+        ook = float(self._encoder.get_intensity_factor(self.sim_time)) if id_on else 1.0
+        if id_on and mod in ("OOK", "PM", "PPM"):
+            return float(ook)
+        visual = compute_temporal_factor(
             sim_time=self.sim_time,
             mod_type=bc.mod_type,
             mod_freq_khz=bc.mod_freq_khz,
             mod_depth=bc.mod_depth,
             mod_phase_deg=bc.mod_phase_deg,
-            pulse_enabled=bc.pulse_enabled,
-            pulse_rate_khz=bc.pulse_rate_khz,
-            duty_cycle=bc.duty_cycle,
         )
-        if getattr(bc, "identification_code_enabled", True) and bc.mod_type != "NONE":
-            temp_fac *= self._encoder.get_intensity_factor(self.sim_time)
+        if id_on and mod != "NONE":
+            return float(visual) * float(ook)
+        return float(visual)
+
+    def update(self, dt: float) -> None:
+        self.sim_time += dt
+        bc = self.config.beacon
+        target_id = str(self.config.identity.id)
+        chip_rate = float(getattr(bc, "chip_rate_hz", 12.0))
+        token = str(getattr(bc, "token", "ALPHA-7"))
+        wl = int(getattr(bc, "wavelength_nm", 1550))
+        net = int(getattr(bc, "network_id", 0) or 0)
+        caps = int(getattr(bc, "capabilities", 0) or 0)
+        if (self._encoder.config.terminal_id != target_id
+            or self._encoder.config.chip_rate_hz != chip_rate
+            or self._encoder.config.token != token
+            or self._encoder.config.wavelength_nm != wl
+            or int(getattr(self._encoder.config, "network_id", 0) or 0) != net
+            or int(getattr(self._encoder.config, "capabilities", 0) or 0) != caps):
+            self._encoder.config.terminal_id = target_id
+            self._encoder.config.chip_rate_hz = chip_rate
+            self._encoder.config.token = token
+            self._encoder.config.wavelength_nm = wl
+            self._encoder.config.network_id = net
+            self._encoder.config.capabilities = caps
+            self._encoder._rebuild()
+        self._encoder.update(self.sim_time)
+        self._sync_states()
+
+    def emit_ideal_beam(self, pixel_scale_mrad: float = 0.035):
+        """Ideal optical beam state before the Propagation Channel.
+
+        Returns OpticalBeamState with emitted intensity (temporal modulation
+        included), geometric position, and spot characteristics.
+        """
+        from disturbance.optical.channel import OpticalBeamState
+
+        bc = self.config.beacon
+        temp_fac = self._combined_temporal_factor()
         scale = max(1e-4, float(pixel_scale_mrad))
         spot = float((float(bc.div_h_mrad) / scale * 0.25 + float(bc.div_v_mrad) / scale * 0.25) / 2.0)
         emitted = float(max(0.0, float(bc.power_w) / 1.5) ** 0.5 * max(0.0, float(temp_fac)))
@@ -158,7 +153,7 @@ class RemoteTerminal:
         return OpticalBeamState(
             emittedIntensity=float(emitted),
             position=(float(self.x), float(self.y)),
-            direction=(float(bc.azimuth_deg), float(bc.elevation_deg)),
+            direction=(0.0, 0.0),
             spotSize=float(max(3.0, min(45.0, spot))),
             wavelength_nm=float(bc.wavelength_nm),
             power_w=float(bc.power_w),
@@ -189,18 +184,7 @@ class RemoteTerminal:
             return None, 0, 0
 
         bc = self.config.beacon
-        temp_fac = compute_temporal_factor(
-            sim_time=self.sim_time,
-            mod_type=bc.mod_type,
-            mod_freq_khz=bc.mod_freq_khz,
-            mod_depth=bc.mod_depth,
-            mod_phase_deg=bc.mod_phase_deg,
-            pulse_enabled=bc.pulse_enabled,
-            pulse_rate_khz=bc.pulse_rate_khz,
-            duty_cycle=bc.duty_cycle,
-        )
-        if getattr(bc, "identification_code_enabled", True) and bc.mod_type != "NONE":
-            temp_fac *= self._encoder.get_intensity_factor(self.sim_time)
+        temp_fac = self._combined_temporal_factor()
 
         patch = render_terminal_beacon_patch(
             power_w=bc.power_w,
@@ -225,10 +209,8 @@ class RemoteTerminal:
             "power_state": self.config.state.power_state,
             "beacon_state": self.config.state.beacon_state,
             "communication_state": self.config.state.communication_state,
-            "position": (self.x, self.y, self.z),
+            "position": (self.x, self.y),
             "is_emitting": self.is_emitting,
             "power_w": self.config.beacon.power_w,
             "wavelength_nm": self.config.beacon.wavelength_nm,
-            "azimuth_deg": self.config.beacon.azimuth_deg,
-            "elevation_deg": self.config.beacon.elevation_deg,
         }

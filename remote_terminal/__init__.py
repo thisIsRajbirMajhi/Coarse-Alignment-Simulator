@@ -3,15 +3,16 @@ from __future__ import annotations
 
 from remote_terminal.config import (
     BeaconConfig,
-    CommunicationConfig,
     FormationConfig,
     IdentityConfig,
     MotionConfig,
     PositionConfig,
+    RemoteBeacon,
     RemoteTerminalConfig,
     RemoteTerminalScenarioConfig,
     StateConfig,
-    TargetSignatureConfig,
+    make_2d_scenario,
+    make_2d_terminal,
 )
 from remote_terminal.optics import compute_temporal_factor, render_terminal_beacon_patch
 from remote_terminal.scenario import RemoteTerminalScenario
@@ -22,12 +23,13 @@ __all__ = [
     "StateConfig",
     "PositionConfig",
     "BeaconConfig",
-    "CommunicationConfig",
-    "TargetSignatureConfig",
     "RemoteTerminalConfig",
     "FormationConfig",
     "MotionConfig",
     "RemoteTerminalScenarioConfig",
+    "RemoteBeacon",
+    "make_2d_terminal",
+    "make_2d_scenario",
     "RemoteTerminal",
     "RemoteTerminalScenario",
     "render_terminal_beacon_patch",

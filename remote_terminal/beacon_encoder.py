@@ -30,6 +30,7 @@ class BeaconEncoderConfig:
     chip_rate_hz: float = 12.0
     frame_period_s: float = -1.0
     network_id: int = 0
+    capabilities: int = 0
 
     def __init__(
         self,
@@ -42,6 +43,7 @@ class BeaconEncoderConfig:
         chip_rate_hz: float = 12.0,
         frame_period_s: float = -1.0,
         network_id: int = 0,
+        capabilities: int = 0,
         **kwargs: Any,
     ):
         self.terminal_id = str(terminal_id)
@@ -53,6 +55,7 @@ class BeaconEncoderConfig:
         self.chip_rate_hz = float(chip_rate_hz)
         self.frame_period_s = float(frame_period_s)
         self.network_id = int(network_id)
+        self.capabilities = int(capabilities)
 
 
 class BeaconFrameEncoder:
@@ -68,6 +71,8 @@ class BeaconFrameEncoder:
                 token=str(self.config.token),
                 wl=int(self.config.wavelength_nm),
                 seq=int(sequence_number),
+                network_id=int(getattr(self.config, "network_id", 0) or 0),
+                capabilities=int(getattr(self.config, "capabilities", 0) or 0),
             ),
             protocol_version=int(self.config.protocol_version),
             message_type=int(self.config.message_type),

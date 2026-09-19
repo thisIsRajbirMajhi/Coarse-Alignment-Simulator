@@ -15,13 +15,10 @@ class DtProvider:
     """
 
     @staticmethod
-    def resolve(state: dict, dt: float | None, key: str = "last_wall", wall_fn=time.time, clip: tuple[float, float] = (0.005, 0.08)) -> float:
+    def resolve(state: dict, dt: float | None, key: str = "last_wall", wall_fn=time.time, clip: tuple[float, float] = (1e-4, 0.1)) -> float:
         if dt is not None:
-            try:
-                # Explicit dt — update last_wall for next wall fallback
-                state[key] = wall_fn()
-            except Exception:
-                pass
+            # Explicit dt — do NOT touch the wall clock (avoids wall-leak
+            # and keeps sim-time deterministic). Just clip for stability.
             try:
                 return float(max(clip[0], min(float(dt), clip[1])))
             except Exception:

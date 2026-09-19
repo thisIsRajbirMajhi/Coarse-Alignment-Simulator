@@ -381,7 +381,7 @@ class LocalTerminalPanel(BaseConfigPanel):
         self.update_rate_slider, self.update_rate_label = self._make_int_slider(20, 120, 30, tooltip="Actuator refresh frequency")
         mech_grid.addWidget(self.update_rate_slider, 4, 1)
         mech_grid.addWidget(self.update_rate_label, 4, 2)
-        layout.addWidget(mech_box)
+        layout.addWidget(mech_box); mech_box.hide()
 
         # Group C: Display Screen & Viewport Sizes
         disp_box, disp_grid = self._make_group("C — Display & Screen Viewport Dimensions")
@@ -409,7 +409,7 @@ class LocalTerminalPanel(BaseConfigPanel):
         self.god_h_slider.setEnabled(False)
         disp_grid.addWidget(self.god_h_slider, 1, 4)
         disp_grid.addWidget(self.god_h_label, 1, 5)
-        layout.addWidget(disp_box)
+        layout.addWidget(disp_box); disp_box.hide()
 
         # Group D: Dynamic Angular Model
         ang_box, ang_grid = self._make_group("D — Derived Pixel ↔ Angle Model (Dynamically Computed)")
@@ -439,7 +439,7 @@ class LocalTerminalPanel(BaseConfigPanel):
         ang_hint = QLabel("Derived automatically from optical geometry: θ = FOV / Resolution.")
         ang_hint.setStyleSheet("color:#64748b; font-size:10px; font-style:italic;")
         ang_grid.addWidget(ang_hint, 2, 0, 1, 4)
-        layout.addWidget(ang_box)
+        layout.addWidget(ang_box); ang_box.hide()
 
         # Group E: Actuator Realism & Noise
         real_box, real_grid = self._make_group("E — Actuator Realism & Mechanical Imperfections")
@@ -465,7 +465,7 @@ class LocalTerminalPanel(BaseConfigPanel):
         self.jitter_slider, self.jitter_label, self.jitter_factor = self._make_float_slider(0.0, 20.0, 1.2, decimals=1, suffix=" ms")
         real_grid.addWidget(self.jitter_slider, 1, 4)
         real_grid.addWidget(self.jitter_label, 1, 5)
-        layout.addWidget(real_box)
+        layout.addWidget(real_box); real_box.hide()
 
         # Fine Acquisition & Scan Region
         acq_box, acq_grid = self._make_group("F — Fine Spatial Scan Region Coordinates")

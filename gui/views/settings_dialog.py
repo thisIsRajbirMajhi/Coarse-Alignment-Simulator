@@ -154,7 +154,7 @@ class SettingsDialog(QDialog):
 
         laser_lines = [850.0, 980.0, 1064.0, 1310.0, 1550.0]
         tokens = ["ALPHA-7", "BRAVO-2", "ECHO-9", "SIERRA-4", "OMEGA-1", "KILO-6"]
-        mod_types = ["AM", "OOK", "PM"]
+        mod_types = ["AM", "OOK"]  # 2D subset (PM/PPM/CUSTOM fold into OOK truth)
 
         chosen_wl = random.choice(laser_lines)
         chosen_token = random.choice(tokens)

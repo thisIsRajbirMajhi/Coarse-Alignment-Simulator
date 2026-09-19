@@ -107,8 +107,9 @@ def test_atmospheric_presets():
 
 def test_disturbance_config_preset_overwrite_warning(caplog):
     cfg = DisturbanceConfig(atmospheric_preset="Haze", atmospheric_contrast=80, atmospheric_brightness=80).validate()
-    # Haze preset should overwrite to its map values (15, -5 etc), not keep 80
-    assert cfg.atmospheric_contrast != 80 or cfg.atmospheric_brightness != 80
+    # validate() must preserve user values (no silent overwrite); the apply
+    # layer (_resolve_preset) selects preset-map values for fixed presets.
+    assert cfg.atmospheric_contrast == 80 and cfg.atmospheric_brightness == 80
 
 
 def test_disturbance_config_unknown_keys_warning(caplog):

@@ -399,28 +399,14 @@ class DisturbanceConfig(BaseValidatedConfig):
         if found is None and preset.lower() in ("user_defined", "user-defined", "userdefined"):
             found = "User Defined"
         self.atmospheric_preset = found if found is not None else ATMOSPHERIC_DEFAULT_PRESET
-        # For fixed presets, auto-populate contrast/brightness from map so stored matches what apply uses
-        # (User Defined keeps user values)
-        if self.atmospheric_preset != "User Defined":
-            try:
-                from disturbance.core.constants import ATMOSPHERIC_PRESET_MAP as _AMap2
-                mp = _AMap2.get(self.atmospheric_preset, {})
-                preset_c = float(mp.get("contrast", 0.0))
-                preset_b = float(mp.get("brightness", 0.0))
-                # warn if user values will be overwritten (H7)
-                if abs(self.atmospheric_contrast - preset_c) > 1e-6 or abs(self.atmospheric_brightness - preset_b) > 1e-6:
-                    import logging
-                    logging.getLogger("disturbance").debug(f"Preset {self.atmospheric_preset} overwrites contrast {self.atmospheric_contrast}->{preset_c} brightness {self.atmospheric_brightness}->{preset_b}")
-                self.atmospheric_contrast = float(preset_c)
-                self.atmospheric_brightness = float(preset_b)
-            except Exception:
-                self.atmospheric_contrast = float(clip_field(self.atmospheric_contrast, *ATMOSPHERIC_CONTRAST_LIMITS))
-                self.atmospheric_brightness = float(clip_field(self.atmospheric_brightness, *ATMOSPHERIC_BRIGHTNESS_LIMITS))
-        else:
-            self.atmospheric_contrast = float(clip_field(self.atmospheric_contrast, *ATMOSPHERIC_CONTRAST_LIMITS))
-            self.atmospheric_brightness = float(clip_field(self.atmospheric_brightness, *ATMOSPHERIC_BRIGHTNESS_LIMITS))
-        # If not User Defined, contrast/brightness are still stored but not applied unless preset is User Defined;
-        # however for reporting we keep them (now they match preset).
+        # Preserve user contrast/brightness (validate only clips). The apply
+        # layer (_resolve_preset) already selects preset-map values for fixed
+        # presets and user values only for "User Defined", so overwriting here
+        # would silently discard tuning and break training randomization.
+        self.atmospheric_contrast = float(clip_field(self.atmospheric_contrast, *ATMOSPHERIC_CONTRAST_LIMITS))
+        self.atmospheric_brightness = float(clip_field(self.atmospheric_brightness, *ATMOSPHERIC_BRIGHTNESS_LIMITS))
+        # Fixed presets ignore stored contrast/brightness at apply time;
+        # "User Defined" honours them.
 
         # Platform
         prof = str(self.platform_profile).strip()

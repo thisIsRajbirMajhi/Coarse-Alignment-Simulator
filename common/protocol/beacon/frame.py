@@ -43,6 +43,22 @@ class BeaconFrame:
         **kwargs: Any,
     ):
         if payload is not None:
+            # Fill payload-level net/caps from kwargs when payload lacks them.
+            try:
+                _pn = int(getattr(payload, "network_id", 0) or 0)
+                _pc = int(getattr(payload, "capabilities", 0) or 0)
+            except Exception:
+                _pn, _pc = 0, 0
+            _kn = int(kwargs.get("network_id", 0) or 0)
+            _kc = int(kwargs.get("capabilities", 0) or 0)
+            if (not _pn and _kn) or (not _pc and _kc):
+                try:
+                    import dataclasses as _dc
+                    payload = _dc.replace(payload,
+                                          network_id=_pn or _kn,
+                                          capabilities=_pc or _kc)
+                except Exception:
+                    pass
             self.payload = payload
         else:
             tid = kwargs.get("terminal_id", "")
@@ -54,15 +70,23 @@ class BeaconFrame:
             token = str(kwargs.get("token", "ALPHA-7"))
             wl = int(kwargs.get("wavelength_nm", kwargs.get("wl", 1550)))
             seq = int(kwargs.get("sequence_number", kwargs.get("seq", 0)))
-            self.payload = BeaconPayload(tid=str(tid), token=token, wl=wl, seq=seq)
+            self.payload = BeaconPayload(tid=str(tid), token=token, wl=wl, seq=seq,
+                                         network_id=int(kwargs.get("network_id", 0) or 0),
+                                         capabilities=int(kwargs.get("capabilities", 0) or 0))
 
         self.protocol_version = int(protocol_version)
         self.message_type = int(message_type)
         self.payload_codec = str(payload_codec)
         self.raw_bytes = raw_bytes
         self.crc_ok = bool(crc_ok)
-        self._network_id = int(kwargs.get("network_id", 0))
-        self._capabilities = int(kwargs.get("capabilities", 0))
+        # Prefer explicit kwargs, else payload-level values (now serialized).
+        try:
+            _pl_n = int(getattr(self.payload, "network_id", 0) or 0)
+            _pl_c = int(getattr(self.payload, "capabilities", 0) or 0)
+        except Exception:
+            _pl_n, _pl_c = 0, 0
+        self._network_id = int(kwargs.get("network_id", _pl_n) or 0)
+        self._capabilities = int(kwargs.get("capabilities", _pl_c) or 0)
 
     @property
     def terminal_id(self) -> str:
@@ -302,6 +326,8 @@ class BeaconFrameEncoder:
                 token=str(getattr(self.config, "token", "ALPHA-7")),
                 wl=int(getattr(self.config, "wavelength_nm", 1550)),
                 seq=int(sequence_number),
+                network_id=int(getattr(self.config, "network_id", 0) or 0),
+                capabilities=int(getattr(self.config, "capabilities", 0) or 0),
             ),
             protocol_version=int(getattr(self.config, "protocol_version", PROTOCOL_VERSION)),
             message_type=int(getattr(self.config, "message_type", MESSAGE_TYPE_BEACON)),

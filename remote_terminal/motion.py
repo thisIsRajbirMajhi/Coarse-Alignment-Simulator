@@ -1,16 +1,14 @@
-# remote_terminal/motion.py - Multi-terminal formations and kinematics per RemoteTerminal.md
+# remote_terminal/motion.py - 2D formations + anchor kinematics (x, y only, z=0).
 from __future__ import annotations
 
 import math
-from typing import Sequence
 
 import numpy as np
 
 from remote_terminal.config import FormationConfig, MotionConfig
 
 
-# Formation spacing/radius are configured in metres but the scenario world is
-# in pixels; use an explicit scale so the conversion is visible and tunable.
+# 2D world is pixels; formation metres map 1:1 to px (kept for API compat).
 FORMATION_PX_PER_M: float = 1.0
 
 
@@ -18,25 +16,25 @@ def compute_formation_offsets(
     terminal_count: int,
     formation: FormationConfig,
     px_per_m: float = FORMATION_PX_PER_M,
-) -> list[tuple[float, float, float]]:
+) -> list[tuple[float, float]]:
     """
-    Compute relative (dx, dy, dz) offsets for N terminals in a formation,
+    Compute relative (dx, dy) offsets for N terminals in a formation,
     rotated by formation.rotation_deg. Inputs in metres, outputs in pixels.
     """
     count = max(1, int(terminal_count))
     if count == 1 or formation.shape == "Single":
-        return [(0.0, 0.0, 0.0)]
+        return [(0.0, 0.0)]
 
-    offsets: list[tuple[float, float, float]] = []
+    offsets: list[tuple[float, float]] = []
     shape = formation.shape
     rot_rad = math.radians(formation.rotation_deg)
     cos_r = math.cos(rot_rad)
     sin_r = math.sin(rot_rad)
 
-    def _rotate_2d(x: float, y: float, z: float = 0.0) -> tuple[float, float, float]:
+    def _rotate_2d(x: float, y: float) -> tuple[float, float]:
         rx = x * cos_r - y * sin_r
         ry = x * sin_r + y * cos_r
-        return (rx, ry, z)
+        return (rx, ry)
 
     scale = float(px_per_m) if px_per_m else 1.0
     if shape == "Circle":
@@ -117,7 +115,6 @@ class ScenarioMotionTracker:
             self._rng = rng
         self.x = float(self.config.start_x)
         self.y = float(self.config.start_y)
-        self.z = float(self.config.start_z)
         self.current_speed = 0.0
         self.heading_deg = float(self.config.direction_deg)
         self.sim_time = 0.0
@@ -130,7 +127,6 @@ class ScenarioMotionTracker:
             self.config = motion_config.validate()
         self.x = float(self.config.start_x)
         self.y = float(self.config.start_y)
-        self.z = float(self.config.start_z)
         self.current_speed = 0.0
         self.heading_deg = float(self.config.direction_deg)
         self.sim_time = 0.0
@@ -138,10 +134,10 @@ class ScenarioMotionTracker:
         self._rw_vx = 0.0
         self._rw_vy = 0.0
 
-    def update(self, dt: float) -> tuple[float, float, float]:
+    def update(self, dt: float) -> tuple[float, float]:
         """
         Advance motion state by dt seconds.
-        Returns anchor (x, y, z).
+        Returns anchor (x, y).
         """
         dt = float(max(1e-4, min(dt, 0.5)))
         self.sim_time += dt
@@ -283,4 +279,4 @@ class ScenarioMotionTracker:
             if _math.hypot(vx, vy) > 1.0:
                 self.heading_deg = float(_math.degrees(_math.atan2(vy, vx)) % 360.0)
 
-        return (self.x, self.y, self.z)
+        return (self.x, self.y)

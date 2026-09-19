@@ -41,10 +41,10 @@ class RemoteTerminalScenario:
         self._sync_terminal_positions()
 
     def _sync_terminal_positions(self) -> None:
-        ax, ay, az = self.motion_tracker.x, self.motion_tracker.y, self.motion_tracker.z
+        ax, ay = self.motion_tracker.x, self.motion_tracker.y
         offsets = compute_formation_offsets(len(self.terminals), self.config.formation)
-        for t, (dx, dy, dz) in zip(self.terminals, offsets):
-            t.set_position(ax + dx, ay + dy, az + dz)
+        for t, (dx, dy) in zip(self.terminals, offsets):
+            t.set_position(ax + dx, ay + dy)
 
     def apply_config(self, config: RemoteTerminalScenarioConfig) -> None:
         self.config = config.validate()
@@ -116,24 +116,19 @@ class RemoteTerminalScenario:
                 t.config.state.communication_state = "NO_LINK"
                 continue
 
-            # Check if terminal position is inside camera FOV
+            # 2D link: presence + dwell only. Wavelength/mod identity is
+            # validated image-side by the local terminal; duplicating it here
+            # only desyncs the two FSMs.
             in_fov = (fov_x0 <= t.x <= fov_x1) and (fov_y0 <= t.y <= fov_y1)
             dist_to_center = math.hypot(t.x - cam_cx, t.y - cam_cy)
             # Unified with LocalTerminal link FSM: central 15% of FOV
             lock_radius = min(fov_w, fov_h) * 0.15
 
-            # Target signature check:
-            # Wavelength matches expected within tolerance
-            sig = t.config.target_signature
-            bc = t.config.beacon
-            wl_match = abs(bc.wavelength_nm - sig.wavelength_nm) <= sig.wavelength_tol_nm
-            mod_match = (bc.mod_type == sig.mod_type)
-
-            if in_fov and wl_match:
+            if in_fov:
                 dwell += dt
                 self._lock_timers[tid] = dwell
 
-                if dist_to_center <= lock_radius and mod_match:
+                if dist_to_center <= lock_radius:
                     # Unified with LocalTerminal: 0.2s LOCK / 0.5s HANDSHAKE / 1.2s CONNECTED
                     if dwell >= 1.2:
                         t.config.state.communication_state = "CONNECTED"
@@ -247,7 +242,7 @@ class RemoteTerminalScenario:
             "emitting_count": emitting_count,
             "connected_count": connected_count,
             "best_link": best_link,
-            "anchor_pos": (self.motion_tracker.x, self.motion_tracker.y, self.motion_tracker.z),
+            "anchor_pos": (self.motion_tracker.x, self.motion_tracker.y),
             "current_speed": self.motion_tracker.current_speed,
             "heading_deg": self.motion_tracker.heading_deg,
             "terminals": term_data,

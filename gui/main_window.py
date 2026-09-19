@@ -130,7 +130,16 @@ class MainWindow(QMainWindow):
     def on_timer(self) -> None:
         self.controller.step()
         snap = self.controller._last_snapshot
-        if snap is not None and self.controller.lifecycle == LifecycleState.RUNNING:
+        # Overload guard: sim + OpenCV share the 30 ms budget. If the last
+        # step nearly filled it, skip viewport paint this tick (keep sim +
+        # throttled dashboard running) so the UI degrades to lower FPS
+        # instead of freezing.
+        try:
+            _proc = self.controller._proc_ms[-1] if getattr(self.controller, "_proc_ms", None) else 0.0
+        except Exception:
+            _proc = 0.0
+        _overloaded = bool(_proc > 25.0)
+        if snap is not None and self.controller.lifecycle == LifecycleState.RUNNING and not _overloaded:
             self.sim_view.render_snapshot(snap, self.session)
         self._tick_count += 1
         if self._tick_count % 3 == 0 or snap is None:

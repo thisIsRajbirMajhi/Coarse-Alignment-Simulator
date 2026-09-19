@@ -155,8 +155,24 @@ class SimulationSession:
             self.local_terminal.apply_config(self.local_terminal_config)
 
     def apply_environment_config(self, config) -> None:
-        # World-size change requires rebuild (scene + camera bounds).
-        self.env_config = config.validate()
+        new_cfg = config.validate()
+        old_w = int(getattr(self.env_config, "world_width", 0) or 0)
+        old_h = int(getattr(self.env_config, "world_height", 0) or 0)
+        new_w, new_h = int(new_cfg.world_width), int(new_cfg.world_height)
+        self.env_config = new_cfg
+        if self._built and new_w == old_w and new_h == old_h:
+            # Fast path: same world size — regenerate sky in place, keep
+            # terminals/queues alive so the 30 ms loop never freezes.
+            try:
+                self.scene.regenerate_from_config(new_cfg)
+            except Exception:
+                self.build()
+            try:
+                self.local_terminal.set_vignetting(float(getattr(new_cfg, "vignetting_pct", 0)) / 100.0)
+            except Exception:
+                pass
+            return
+        # World-size change requires full rebuild (scene + camera bounds).
         self.build()
 
     def apply_disturbance_config(self, config) -> None:
@@ -194,17 +210,18 @@ class SimulationSession:
 
         try:
             self.local_terminal.update(
-                dt,
+                dt_eff,
                 fov_frame=getattr(self, "_last_fov_frame", None),
                 fov_capture_pose=getattr(self, "_last_capture_pose", None),
             )
         except Exception:
-            self.camera.update(dt)
+            self.camera.update(dt_eff)
 
         pipe = self._disturbance_pipeline_for(dt_eff)
-        pan_dist, tilt_dist = pipe.disturb_camera_pose(self.camera.pan, self.camera.tilt, dt_eff)
+        true_pan, true_tilt = float(self.camera.pan), float(self.camera.tilt)
+        pan_dist, tilt_dist = pipe.disturb_camera_pose(true_pan, true_tilt, dt_eff)
         try:
-            self.camera.apply_disturbance(float(pan_dist), float(tilt_dist))
+            self.camera.set_position(float(pan_dist), float(tilt_dist), clear_queue=False)
         except AttributeError:
             self.camera.set_position(float(pan_dist), float(tilt_dist), clear_queue=False)
 
@@ -229,9 +246,14 @@ class SimulationSession:
 
         # disturb_camera_pose() already advanced time; don't advance again.
         fov_frame = pipe.apply_frame(fov_frame, advance=False)
+        # Restore ground truth; snapshot pan/tilt stay truthful.
+        try:
+            self.camera.set_position(float(true_pan), float(true_tilt), clear_queue=False)
+        except Exception:
+            pass
         try:
             self._last_fov_frame = fov_frame
-            self._last_capture_pose = (float(self.camera.pan), float(self.camera.tilt))
+            self._last_capture_pose = (float(pan_dist), float(tilt_dist))
         except Exception:
             pass
 
@@ -247,8 +269,8 @@ class SimulationSession:
             fov_frame=fov_frame,
             world_frame=None,
             fov_origin=(int(x0), int(y0)),
-            pan=float(self.camera.pan),
-            tilt=float(self.camera.tilt),
+            pan=float(true_pan),
+            tilt=float(true_tilt),
             fov_size=(int(self.camera_config.fov_width), int(self.camera_config.fov_height)),
             world_size=(int(self.env_config.world_width), int(self.env_config.world_height)),
             pixel_scale_mrad=scale,

@@ -728,11 +728,33 @@ class LocalTerminalSystem:
                 except Exception:
                     pass
             if self.reacq.active:
-                timed_out = self.reacq.step(dt)
+                # Identity-gated merge: reappearing beacon keeps its old lock
+                # instead of spawning a fresh BEACON-N (§27/§30).
                 try:
-                    self.reacq.predict(dt)
+                    from local_terminal.reacquisition import can_merge_reacquisition as _can_merge
+                    if prev is not None:
+                        for _cand in (alive or []):
+                            try:
+                                if _cand.observation_id == self.active_observation_id:
+                                    continue
+                                if _can_merge(prev, _cand,
+                                              predicted_pos=getattr(self.reacq, "last_known", None)):
+                                    self.active_observation_id = _cand.observation_id
+                                    prev = _cand
+                                    self._loss_streak = 0
+                                    self.reacq.reset()
+                                    break
+                            except Exception:
+                                continue
                 except Exception:
                     pass
+                if self.reacq.active:
+                    timed_out = self.reacq.step(dt)
+                    # NOTE: predict() mutates last_known — it is called exactly
+                    # once per frame in the coast branch below (§26). Do not
+                    # predict here or the coast double-steps.
+                else:
+                    timed_out = False
                 if timed_out:
                     reacq_timeout = True
                     self.reacq.reset()
@@ -775,7 +797,7 @@ class LocalTerminalSystem:
                             self.search.start_at(float(px), float(py))
                         except Exception:
                             pass
-                else:
+                elif self.reacq.active:
                     reacquiring = True
                     degraded = True
                     if prev is not None:
@@ -842,6 +864,11 @@ class LocalTerminalSystem:
                                          target_tilt=float(cur_tilt) + float(cy),
                                          pan_velocity=float(cx) / max(dt, 1e-3),
                                          tilt_velocity=float(cy) / max(dt, 1e-3))
+                else:
+                    # Merged this frame: lock handed to the reobserved track.
+                    # Hold position; confirmation resumes next cycle.
+                    degraded = True
+                    reacquiring = False
             else:
                 degraded = True
         else:
@@ -855,6 +882,8 @@ class LocalTerminalSystem:
             if power_on and is_search_mode and not (acq_result.acquired):
                 holdable = [t for t in alive if t.lifecycle_state in (
                     CandidateState.SEEN, CandidateState.TENTATIVE,
+                    CandidateState.SIGNAL_DETECTED, CandidateState.DECODING,
+                    CandidateState.IDENTITY_UNKNOWN,
                     CandidateState.IDENTIFIED, CandidateState.SELECTED,
                     CandidateState.ACQUIRED, CandidateState.TRACKING,
                     CandidateState.DEGRADED, CandidateState.REACQUIRING) or (
@@ -866,6 +895,8 @@ class LocalTerminalSystem:
                 # always progresses. Obvious junk (best overall < 0.35) never
                 # holds at all.
                 _confirmed_hold = [t for t in holdable if t.lifecycle_state in (
+                    CandidateState.SIGNAL_DETECTED, CandidateState.DECODING,
+                    CandidateState.IDENTITY_UNKNOWN,
                     CandidateState.IDENTIFIED, CandidateState.SELECTED,
                     CandidateState.ACQUIRED, CandidateState.TRACKING,
                     CandidateState.DEGRADED, CandidateState.REACQUIRING)]
@@ -914,6 +945,8 @@ class LocalTerminalSystem:
                     # while the true beacon sits at center.
                     try:
                         _confirmed = [t for t in holdable if t.lifecycle_state in (
+                            CandidateState.SIGNAL_DETECTED, CandidateState.DECODING,
+                            CandidateState.IDENTITY_UNKNOWN,
                             CandidateState.IDENTIFIED, CandidateState.SELECTED,
                             CandidateState.ACQUIRED, CandidateState.TRACKING,
                             CandidateState.DEGRADED, CandidateState.REACQUIRING)]
