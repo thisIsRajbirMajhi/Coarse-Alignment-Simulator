@@ -35,7 +35,7 @@ class EnvironmentPanel(BaseConfigPanel):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
+        root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(10)
 
         # World — slider 2000-5000
@@ -58,11 +58,13 @@ class EnvironmentPanel(BaseConfigPanel):
         preset_row.setSpacing(6)
         self.btn_world_2k = QPushButton("2K (2000)")
         self.btn_world_2k.setMinimumHeight(28)
+        self.btn_world_2k.setToolTip("Set world to 2000×2000 (PDF minimum, best FPS)")
         self.btn_world_3k = QPushButton("3K (3000)")
         self.btn_world_3k.setMinimumHeight(28)
+        self.btn_world_3k.setToolTip("Set world to 3000×3000 (balanced)")
         self.btn_world_5k = QPushButton("5K (5000)")
         self.btn_world_5k.setMinimumHeight(28)
-        self.btn_world_5k.setStyleSheet("background:#111827; color:#ffffff; border:1px solid #111827; border-radius:4px; padding:4px 8px; font-weight:600;")
+        self.btn_world_5k.setToolTip("Set world to 5000×5000 (largest FOV range, lower FPS)")
         for b in (self.btn_world_2k, self.btn_world_3k, self.btn_world_5k):
             preset_row.addWidget(b)
         world_grid.addLayout(preset_row, 2, 0, 1, 6)

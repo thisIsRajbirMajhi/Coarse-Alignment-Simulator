@@ -58,35 +58,50 @@ class SettingsDialog(QDialog):
         header.setObjectName("headerBar")
         hbox = QHBoxLayout(header)
         hbox.setContentsMargins(12, 8, 12, 8)
+        hbox.setSpacing(8)
+        title_block = QVBoxLayout()
+        title_block.setContentsMargins(0, 0, 0, 0)
+        title_block.setSpacing(1)
         title = QLabel("Control Deck", header)
         title.setObjectName("appTitle")
         title.setStyleSheet("font-size:16px; font-weight:700; color:#ffffff;")
-        hbox.addWidget(title)
+        title_block.addWidget(title)
 
         sub = QLabel("Local Optical Terminal • Remote Terminal • Environment • Disturbances", header)
-        sub.setStyleSheet("font-size:11px; color:#e2e8f0; margin-left:8px;")
-        hbox.addWidget(sub)
+        sub.setStyleSheet("font-size:11px; color:#e2e8f0;")
+        sub.setWordWrap(True)
+        sub.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        title_block.addWidget(sub)
+        hbox.addLayout(title_block, 1)
         hbox.addStretch(1)
 
         self.btn_randomize = QPushButton("🎲 Randomize All", header)
         self.btn_randomize.setObjectName("randomizeAllButton")
         self.btn_randomize.setToolTip("Randomize all remote and local terminal parameters and synchronize optical pairing on the go")
+        self.btn_randomize.setMinimumHeight(30)
+        self.btn_randomize.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.btn_randomize.setStyleSheet(
-            "QPushButton { background:#4f46e5; color:#ffffff; font-weight:700; font-size:12px; "
-            "border:1px solid #4338ca; border-radius:6px; padding:6px 14px; margin-right:4px; } "
-            "QPushButton:hover { background:#4338ca; border-color:#3730a3; } "
-            "QPushButton:pressed { background:#3730a3; }"
+            "QPushButton { background:#ffffff; color:#111827; font-weight:700; font-size:12px; "
+            "border:1px solid #e5e7eb; border-radius:6px; padding:6px 14px; margin-right:4px; } "
+            "QPushButton:hover { background:#f3f4f6; border-color:#9ca3af; } "
+            "QPushButton:pressed { background:#e5e7eb; }"
         )
         self.btn_randomize.clicked.connect(self.randomize_all)
         hbox.addWidget(self.btn_randomize)
 
         self.btn_fullscreen = QPushButton("Full Screen", header)
         self.btn_fullscreen.setObjectName("settingsButton")
+        self.btn_fullscreen.setMinimumHeight(30)
+        self.btn_fullscreen.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.btn_fullscreen.setToolTip("Toggle fullscreen for the Control Deck")
         self.btn_fullscreen.clicked.connect(self.toggle_fullscreen)
         hbox.addWidget(self.btn_fullscreen)
 
         self.btn_close = QPushButton("Close", header)
         self.btn_close.setObjectName("resetButton")
+        self.btn_close.setMinimumHeight(30)
+        self.btn_close.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.btn_close.setToolTip("Close the Control Deck (configuration is applied live)")
         self.btn_close.clicked.connect(self.close)
         hbox.addWidget(self.btn_close)
         layout.addWidget(header)
@@ -94,7 +109,18 @@ class SettingsDialog(QDialog):
         # Tab Widget
         self.tabs = QTabWidget(self)
         self.tabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.tabs.setDocumentMode(False)
+        self.tabs.setUsesScrollButtons(True)
+        self.tabs.setElideMode(Qt.ElideRight)
+        self.tabs.setToolTip("Switch configuration sections — changes apply live")
         layout.addWidget(self.tabs, 1)
+
+        footer_hint = QLabel("Changes apply live • Randomize All keeps optical wavelength / modulation in sync", self)
+        footer_hint.setObjectName("footerHint")
+        footer_hint.setStyleSheet("color:#6b7280; font-size:10px; font-style:italic;")
+        footer_hint.setWordWrap(True)
+        footer_hint.setAlignment(Qt.AlignCenter)
+        layout.addWidget(footer_hint)
 
         from gui.panels.disturbances_panel import DisturbancesPanel
         from gui.panels.environment_panel import EnvironmentPanel
@@ -139,14 +165,18 @@ class SettingsDialog(QDialog):
     def _add_scrolled_tab(self, widget: QWidget, title: str) -> None:
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setStyleSheet(
-            "QScrollArea { border:none; background:#f9fafb; } "
+            "QScrollArea { border:none; background:#ffffff; } "
             "QScrollBar:vertical { background:#e5e7eb; width:8px; border-radius:4px; } "
             "QScrollBar::handle:vertical { background:#9ca3af; border-radius:4px; min-height:20px; } "
             "QScrollBar::handle:vertical:hover { background:#4b4d4f; }"
         )
+        widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         scroll.setWidget(widget)
-        self.tabs.addTab(scroll, title)
+        idx = self.tabs.addTab(scroll, title)
+        self.tabs.setTabToolTip(idx, f"{title} configuration")
 
     def randomize_all(self) -> None:
         """Randomize remote and local terminal configurations in sync on the go."""
@@ -182,7 +212,7 @@ class SettingsDialog(QDialog):
         try:
             if self._fullscreen or self.isFullScreen():
                 self._fullscreen = False
-                self.showNormal()
+                self.showMaximized()
                 self.btn_fullscreen.setText("Full Screen")
             else:
                 self._fullscreen = True

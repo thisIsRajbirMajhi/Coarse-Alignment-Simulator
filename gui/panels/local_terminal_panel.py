@@ -30,21 +30,7 @@ from PyQt5.QtWidgets import (
 )
 
 from gui.panels.base import BaseConfigPanel
-from local_terminal.config import (
-    AcquisitionConfig,
-    AngularModelConfig,
-    DetectionConfig,
-    DisplayConfig,
-    IdentityConfig,
-    LocalCameraConfig,
-    LocalCommunicationConfig,
-    LocalStateConfig,
-    LocalTerminalConfig,
-    PositionConfig,
-    PTZConfig,
-    RealismConfig,
-    TrackingConfig,
-)
+from local_terminal.config import (AcquisitionConfig, DetectionConfig, LocalStateConfig, LocalTerminalConfig, PositionConfig, PTZCameraConfig, TargetPayloadConfig, TrackingConfig)
 
 log = logging.getLogger(__name__)
 
@@ -108,8 +94,10 @@ class LocalTerminalPanel(BaseConfigPanel):
 
         # Row 1: Identity info + Quick action buttons
         id_row = QHBoxLayout()
+        id_row.setSpacing(8)
         self.lbl_id = QLabel("ID: <b>LT-001</b>")
         self.lbl_id.setStyleSheet("font-size:12px; color:#1e3a8a; padding:3px 8px; background:#eff6ff; border-radius:4px; border:1px solid #bfdbfe;")
+        self.lbl_id.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         id_row.addWidget(self.lbl_id)
 
         self.lbl_name = QLabel("Local PTZ Camera 01")
@@ -118,17 +106,21 @@ class LocalTerminalPanel(BaseConfigPanel):
 
         self.lbl_platform = QLabel("Platform: PLATFORM-001 • World Frame")
         self.lbl_platform.setStyleSheet("font-size:11px; color:#64748b; margin-left:8px;")
-        id_row.addWidget(self.lbl_platform)
+        self.lbl_platform.setWordWrap(True)
+        self.lbl_platform.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        id_row.addWidget(self.lbl_platform, 1)
         id_row.addStretch(1)
 
         self.btn_randomize_local = QPushButton("🎲 Randomize Local")
         self.btn_randomize_local.setObjectName("randomizeLocalButton")
         self.btn_randomize_local.setToolTip("Randomize scan pattern, slew speeds, and tracking parameters on the fly")
+        self.btn_randomize_local.setMinimumHeight(28)
+        self.btn_randomize_local.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.btn_randomize_local.setStyleSheet(
-            "QPushButton { background:#4f46e5; color:#ffffff; font-weight:700; font-size:11px; "
-            "border:1px solid #4338ca; border-radius:6px; padding:5px 12px; } "
-            "QPushButton:hover { background:#4338ca; border-color:#3730a3; } "
-            "QPushButton:pressed { background:#3730a3; }"
+            "QPushButton { background:#111827; color:#ffffff; font-weight:700; font-size:11px; "
+            "border:1px solid #111827; border-radius:6px; padding:5px 12px; } "
+            "QPushButton:hover { background:#1f2937; border-color:#1f2937; } "
+            "QPushButton:pressed { background:#030712; }"
         )
         self.btn_randomize_local.clicked.connect(lambda: self.randomize(emit=True))
         id_row.addWidget(self.btn_randomize_local)
@@ -138,9 +130,10 @@ class LocalTerminalPanel(BaseConfigPanel):
         id_row.addWidget(self.btn_reset_all)
         b_layout.addLayout(id_row)
 
-        # Row 2: Live Status Badges
-        chips_row = QHBoxLayout()
-        chips_row.setSpacing(8)
+        # Row 2: Live Status Badges (wrapping grid — never overflows narrow decks)
+        chips_grid = QGridLayout()
+        chips_grid.setSpacing(6)
+        chips_grid.setContentsMargins(0, 0, 0, 0)
         self.badge_power = self._make_badge("Power: ON", "#059669", "#ecfdf5", "#a7f3d0")
         self.badge_op = self._make_badge("Op: STANDBY", "#0284c7", "#f0f9ff", "#bae6fd")
         self.badge_ptz = self._make_badge("PTZ: IDLE", "#4b5563", "#f9fafb", "#e5e7eb")
@@ -150,10 +143,17 @@ class LocalTerminalPanel(BaseConfigPanel):
         self.badge_link = self._make_badge("Link: NO LINK", "#dc2626", "#fef2f2", "#fecaca")
         self.badge_autonomy = self._make_badge("Auto: SEARCHING", "#7c3aed", "#f5f3ff", "#ddd6fe")
 
-        for b in (self.badge_power, self.badge_op, self.badge_ptz, self.badge_acq, self.badge_det, self.badge_trk, self.badge_link, self.badge_autonomy):
-            chips_row.addWidget(b)
-        chips_row.addStretch(1)
-        b_layout.addLayout(chips_row)
+        _badges = (self.badge_power, self.badge_op, self.badge_ptz, self.badge_acq,
+                   self.badge_det, self.badge_trk, self.badge_link, self.badge_autonomy)
+        for i, b in enumerate(_badges):
+            b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            b.setAlignment(Qt.AlignCenter)
+            chips_grid.addWidget(b, i // 4, i % 4)
+        chips_grid.setColumnStretch(0, 1)
+        chips_grid.setColumnStretch(1, 1)
+        chips_grid.setColumnStretch(2, 1)
+        chips_grid.setColumnStretch(3, 1)
+        b_layout.addLayout(chips_grid)
         main_layout.addWidget(banner)
 
         # -------------------------------------------------------------
@@ -170,11 +170,8 @@ class LocalTerminalPanel(BaseConfigPanel):
         quick_grid.addWidget(self.det_wl_slider, 0, 1)
         quick_grid.addWidget(self.det_wl_label, 0, 2)
 
-        quick_grid.addWidget(self._label("Confidence Thresh / Live"), 0, 3)
+        quick_grid.addWidget(self._label("Signal / Live"), 0, 3)
         conf_h = QHBoxLayout()
-        self.det_conf_slider, self.det_conf_label, self.det_conf_factor = self._make_float_slider(0.5, 1.0, 0.85, decimals=2)
-        conf_h.addWidget(self.det_conf_slider, 1)
-        conf_h.addWidget(self.det_conf_label)
         self.prog_confidence = QProgressBar()
         self.prog_confidence.setRange(0, 100)
         self.prog_confidence.setValue(0)
@@ -205,8 +202,25 @@ class LocalTerminalPanel(BaseConfigPanel):
         sep1.setStyleSheet("background:#e2e8f0; margin:3px 0px;")
         quick_grid.addWidget(sep1, 2, 0, 1, 6)
 
-        # 1.2 Camera Resolution & FOV
-        quick_grid.addWidget(self._label("Resolution W x H (px)"), 3, 0)
+        # 1.1b Target Payload (Replaces legacy identity)
+        quick_grid.addWidget(self._label("Expected Terminal ID"), 3, 0)
+        self.tgt_id_edit = QLineEdit("RT-001")
+        self.tgt_id_edit.setMinimumHeight(26)
+        quick_grid.addWidget(self.tgt_id_edit, 3, 1, 1, 2)
+
+        quick_grid.addWidget(self._label("Expected Token"), 3, 3)
+        self.tgt_token_edit = QLineEdit("ALPHA-7")
+        self.tgt_token_edit.setMinimumHeight(26)
+        quick_grid.addWidget(self.tgt_token_edit, 3, 4, 1, 2)
+
+        # Separator line
+        sep1b = QLabel()
+        sep1b.setFixedHeight(1)
+        sep1b.setStyleSheet("background:#e2e8f0; margin:3px 0px;")
+        quick_grid.addWidget(sep1b, 4, 0, 1, 6)
+
+        # 1.2 PTZ Camera Configuration
+        quick_grid.addWidget(self._label("Resolution W x H (px)"), 5, 0)
         res_h = QHBoxLayout()
         self.fov_w_slider, self.fov_w_label = self._make_int_slider(320, 5000, 640, tooltip="Sensor pixel resolution width")
         self.fov_h_slider, self.fov_h_label = self._make_int_slider(240, 5000, 480, tooltip="Sensor pixel resolution height")
@@ -214,9 +228,9 @@ class LocalTerminalPanel(BaseConfigPanel):
         res_h.addWidget(self.fov_w_label)
         res_h.addWidget(self.fov_h_slider, 1)
         res_h.addWidget(self.fov_h_label)
-        quick_grid.addLayout(res_h, 3, 1, 1, 2)
+        quick_grid.addLayout(res_h, 5, 1, 1, 2)
 
-        quick_grid.addWidget(self._label("Optical FOV X x Y (deg)"), 3, 3)
+        quick_grid.addWidget(self._label("Optical FOV X x Y (deg)"), 5, 3)
         fov_h = QHBoxLayout()
         self.fov_x_slider, self.fov_x_label, self.fov_x_factor = self._make_float_slider(0.5, 20.0, 4.0, decimals=1, suffix="°")
         self.fov_y_slider, self.fov_y_label, self.fov_y_factor = self._make_float_slider(0.5, 20.0, 3.0, decimals=1, suffix="°")
@@ -224,70 +238,68 @@ class LocalTerminalPanel(BaseConfigPanel):
         fov_h.addWidget(self.fov_x_label)
         fov_h.addWidget(self.fov_y_slider, 1)
         fov_h.addWidget(self.fov_y_label)
-        quick_grid.addLayout(fov_h, 3, 4, 1, 2)
+        quick_grid.addLayout(fov_h, 5, 4, 1, 2)
 
         # Separator line
         sep2 = QLabel()
         sep2.setFixedHeight(1)
         sep2.setStyleSheet("background:#e2e8f0; margin:3px 0px;")
-        quick_grid.addWidget(sep2, 4, 0, 1, 6)
+        quick_grid.addWidget(sep2, 6, 0, 1, 6)
 
         # 1.3 Acquisition & Search Pattern
-        quick_grid.addWidget(self._label("Acquisition Mode"), 5, 0)
+        quick_grid.addWidget(self._label("Acquisition Mode"), 7, 0)
         self.combo_acq_mode = QComboBox()
         self.combo_acq_mode.addItems(["AUTO", "SEARCH", "AUTO_ACQUISITION", "MANUAL", "TARGET_POINTING"])
         self.combo_acq_mode.setMinimumHeight(26)
-        quick_grid.addWidget(self.combo_acq_mode, 5, 1, 1, 2)
+        quick_grid.addWidget(self.combo_acq_mode, 7, 1, 1, 2)
 
-        quick_grid.addWidget(self._label("Search Pattern"), 5, 3)
+        quick_grid.addWidget(self._label("Search Pattern"), 7, 3)
         self.combo_acq_pattern = QComboBox()
         self.combo_acq_pattern.addItems(["RANDOM", "RASTER", "SPIRAL", "SECTOR", "GRID", "CUSTOM", "FIGURE_8"])
         self.combo_acq_pattern.setMinimumHeight(26)
-        quick_grid.addWidget(self.combo_acq_pattern, 5, 4, 1, 2)
+        quick_grid.addWidget(self.combo_acq_pattern, 7, 4, 1, 2)
 
-        quick_grid.addWidget(self._label("Search Scan Speed"), 6, 0)
+        quick_grid.addWidget(self._label("Search Scan Speed"), 8, 0)
         self.acq_speed_slider, self.acq_speed_label, self.acq_speed_factor = self._make_float_slider(1.0, 30.0, 15.0, decimals=1, suffix=" deg/s")
-        quick_grid.addWidget(self.acq_speed_slider, 6, 1)
-        quick_grid.addWidget(self.acq_speed_label, 6, 2)
+        quick_grid.addWidget(self.acq_speed_slider, 8, 1)
+        quick_grid.addWidget(self.acq_speed_label, 8, 2)
 
-        quick_grid.addWidget(self._label("PTZ Control Mode"), 6, 3)
-        self.combo_ctrl_mode = QComboBox()
-        self.combo_ctrl_mode.addItems(["MANUAL", "SEARCH", "AUTO", "TRACKING"])
-        self.combo_ctrl_mode.setMinimumHeight(26)
-        quick_grid.addWidget(self.combo_ctrl_mode, 6, 4, 1, 2)
+        quick_grid.addWidget(self._hint("Timeout lives in Advanced → F (Fine Scan Region)."), 8, 3, 1, 3)
 
         # 1.4 PTZ Pan/Tilt Speeds
-        quick_grid.addWidget(self._label("PTZ Pan Speed"), 7, 0)
+        quick_grid.addWidget(self._label("PTZ Pan Speed"), 9, 0)
         self.pan_speed_slider, self.pan_speed_label, self.pan_speed_factor = self._make_float_slider(1.0, 30.0, 8.0, decimals=1, suffix=" deg/s")
-        quick_grid.addWidget(self.pan_speed_slider, 7, 1)
-        quick_grid.addWidget(self.pan_speed_label, 7, 2)
+        quick_grid.addWidget(self.pan_speed_slider, 9, 1)
+        quick_grid.addWidget(self.pan_speed_label, 9, 2)
 
-        quick_grid.addWidget(self._label("PTZ Tilt Speed"), 7, 3)
+        quick_grid.addWidget(self._label("PTZ Tilt Speed"), 9, 3)
         self.tilt_speed_slider, self.tilt_speed_label, self.tilt_speed_factor = self._make_float_slider(1.0, 30.0, 8.0, decimals=1, suffix=" deg/s")
-        quick_grid.addWidget(self.tilt_speed_slider, 7, 4)
-        quick_grid.addWidget(self.tilt_speed_label, 7, 5)
+        quick_grid.addWidget(self.tilt_speed_slider, 9, 4)
+        quick_grid.addWidget(self.tilt_speed_label, 9, 5)
 
         # 1.5 Tracking Mode & Algorithm
-        quick_grid.addWidget(self._label("Tracking Mode"), 8, 0)
+        quick_grid.addWidget(self._label("Tracking Mode"), 10, 0)
         self.combo_trk_mode = QComboBox()
         self.combo_trk_mode.addItems(["OFF", "TRACKING", "AUTO"])
         self.combo_trk_mode.setMinimumHeight(26)
-        quick_grid.addWidget(self.combo_trk_mode, 8, 1, 1, 2)
+        quick_grid.addWidget(self.combo_trk_mode, 10, 1, 1, 2)
 
-        quick_grid.addWidget(self._label("Tracking Algorithm"), 8, 3)
+        quick_grid.addWidget(self._label("Tracking Algorithm"), 10, 3)
         self.combo_trk_algo = QComboBox()
         self.combo_trk_algo.addItems(["CENTROID", "PEAK", "KALMAN"])
         self.combo_trk_algo.setMinimumHeight(26)
-        quick_grid.addWidget(self.combo_trk_algo, 8, 4, 1, 2)
+        quick_grid.addWidget(self.combo_trk_algo, 10, 4, 1, 2)
 
         # Diagnostics / Readouts in Quick Setup
         self.lbl_target_ident = QLabel("Target Discrimination: Autonomous scan active • Candidates in FOV: 0 | Identified Target: None")
+        self.lbl_target_ident.setWordWrap(True)
         self.lbl_target_ident.setStyleSheet("color:#4338ca; font-weight:600; font-size:11px; padding-top:4px;")
-        quick_grid.addWidget(self.lbl_target_ident, 9, 0, 1, 6)
+        quick_grid.addWidget(self.lbl_target_ident, 11, 0, 1, 6)
 
         self.lbl_trk_offsets = QLabel("Tracking Error: Δx = 0.0 px (0.0 µrad) • Δy = 0.0 px (0.0 µrad)")
+        self.lbl_trk_offsets.setWordWrap(True)
         self.lbl_trk_offsets.setStyleSheet("color:#1e3a8a; font-weight:600; font-size:11px; padding-top:2px;")
-        quick_grid.addWidget(self.lbl_trk_offsets, 10, 0, 1, 6)
+        quick_grid.addWidget(self.lbl_trk_offsets, 12, 0, 1, 6)
 
         main_layout.addWidget(quick_box)
 
@@ -381,7 +393,7 @@ class LocalTerminalPanel(BaseConfigPanel):
         self.update_rate_slider, self.update_rate_label = self._make_int_slider(20, 120, 30, tooltip="Actuator refresh frequency")
         mech_grid.addWidget(self.update_rate_slider, 4, 1)
         mech_grid.addWidget(self.update_rate_label, 4, 2)
-        layout.addWidget(mech_box); mech_box.hide()
+        layout.addWidget(mech_box)
 
         # Group C: Display Screen & Viewport Sizes
         disp_box, disp_grid = self._make_group("C — Display & Screen Viewport Dimensions")
@@ -409,7 +421,7 @@ class LocalTerminalPanel(BaseConfigPanel):
         self.god_h_slider.setEnabled(False)
         disp_grid.addWidget(self.god_h_slider, 1, 4)
         disp_grid.addWidget(self.god_h_label, 1, 5)
-        layout.addWidget(disp_box); disp_box.hide()
+        layout.addWidget(disp_box)
 
         # Group D: Dynamic Angular Model
         ang_box, ang_grid = self._make_group("D — Derived Pixel ↔ Angle Model (Dynamically Computed)")
@@ -439,7 +451,7 @@ class LocalTerminalPanel(BaseConfigPanel):
         ang_hint = QLabel("Derived automatically from optical geometry: θ = FOV / Resolution.")
         ang_hint.setStyleSheet("color:#64748b; font-size:10px; font-style:italic;")
         ang_grid.addWidget(ang_hint, 2, 0, 1, 4)
-        layout.addWidget(ang_box); ang_box.hide()
+        layout.addWidget(ang_box)
 
         # Group E: Actuator Realism & Noise
         real_box, real_grid = self._make_group("E — Actuator Realism & Mechanical Imperfections")
@@ -465,7 +477,7 @@ class LocalTerminalPanel(BaseConfigPanel):
         self.jitter_slider, self.jitter_label, self.jitter_factor = self._make_float_slider(0.0, 20.0, 1.2, decimals=1, suffix=" ms")
         real_grid.addWidget(self.jitter_slider, 1, 4)
         real_grid.addWidget(self.jitter_label, 1, 5)
-        layout.addWidget(real_box); real_box.hide()
+        layout.addWidget(real_box)
 
         # Fine Acquisition & Scan Region
         acq_box, acq_grid = self._make_group("F — Fine Spatial Scan Region Coordinates")
@@ -658,6 +670,9 @@ class LocalTerminalPanel(BaseConfigPanel):
     # -----------------------------------------------------------------
     def _make_badge(self, text: str, fg: str, bg: str, border: str) -> QLabel:
         b = QLabel(text)
+        b.setAlignment(Qt.AlignCenter)
+        b.setWordWrap(True)
+        b.setMinimumHeight(22)
         b.setStyleSheet(
             f"color:{fg}; background:{bg}; border:1px solid {border}; "
             "border-radius:4px; font-weight:700; font-size:11px; padding:3px 8px;"
@@ -698,9 +713,10 @@ class LocalTerminalPanel(BaseConfigPanel):
             self.update_rate_slider, self.viewport_w_slider, self.viewport_h_slider,
             self.accel_slider, self.backlash_slider, self.encoder_slider, self.jitter_slider,
             self.acq_pmin_slider, self.acq_pmax_slider, self.acq_tmin_slider, self.acq_tmax_slider,
-            self.acq_speed_slider, self.acq_timeout_slider, self.det_wl_slider, self.det_bw_slider,
-            self.det_snr_slider, self.det_int_slider, self.det_spot_slider, self.det_tol_slider,
-            self.det_mod_freq_slider, self.det_conf_slider, self.trk_rate_slider,
+            self.acq_speed_slider, self.acq_timeout_slider,
+            self.det_wl_slider, self.det_bw_slider, self.det_snr_slider,
+            self.det_int_slider, self.det_spot_slider, self.det_tol_slider,
+            self.det_mod_freq_slider, self.trk_rate_slider,
             self.trk_horiz_slider, self.trk_smooth_slider,
             self.trk_kp_slider, self.trk_ki_slider, self.trk_kd_slider, self.trk_dz_slider,
         ]
@@ -708,7 +724,7 @@ class LocalTerminalPanel(BaseConfigPanel):
             s.valueChanged.connect(self._on_change)
 
         combos = [
-            self.combo_ctrl_mode, self.combo_acq_mode, self.combo_acq_pattern,
+            self.combo_acq_mode, self.combo_acq_pattern,
             self.combo_mod_type, self.combo_trk_mode, self.combo_trk_algo, self.combo_lost_action,
         ]
         for c in combos:
@@ -750,12 +766,14 @@ class LocalTerminalPanel(BaseConfigPanel):
     # -----------------------------------------------------------------
     def collect_config(self) -> LocalTerminalConfig:
         cfg = copy.deepcopy(self._config)
+        cfg.target_profile.expected_terminal_id = self.tgt_id_edit.text()
+        cfg.target_profile.expected_token = self.tgt_token_edit.text()
 
         # A: Camera Sensor
-        cfg.camera.resolution_width = int(self.fov_w_slider.value())
-        cfg.camera.resolution_height = int(self.fov_h_slider.value())
-        cfg.camera.fov_x = float(self.fov_x_slider.value() / self.fov_x_factor)
-        cfg.camera.fov_y = float(self.fov_y_slider.value() / self.fov_y_factor)
+        cfg.ptz_camera.resolution_width = int(self.fov_w_slider.value())
+        cfg.ptz_camera.resolution_height = int(self.fov_h_slider.value())
+        cfg.ptz_camera.fov_x = float(self.fov_x_slider.value() / self.fov_x_factor)
+        cfg.ptz_camera.fov_y = float(self.fov_y_slider.value() / self.fov_y_factor)
 
         # B: PTZ Mechanics
         cfg.ptz.pan_min = float(self.pan_min_slider.value())
@@ -766,22 +784,6 @@ class LocalTerminalPanel(BaseConfigPanel):
         cfg.ptz.home_tilt = float(self.home_tilt_slider.value())
         cfg.ptz.pan_speed = float(self.pan_speed_slider.value() / self.pan_speed_factor)
         cfg.ptz.tilt_speed = float(self.tilt_speed_slider.value() / self.tilt_speed_factor)
-        cfg.ptz.resolution = float(self.res_slider.value() / self.res_factor)
-        cfg.ptz.latency = int(self.latency_slider.value())
-        cfg.ptz.update_rate = int(self.update_rate_slider.value())
-        cfg.ptz.control_mode = self.combo_ctrl_mode.currentText()
-
-        # C: Display
-        cfg.display.camera_screen_width = int(self.viewport_w_slider.value())
-        cfg.display.camera_screen_height = int(self.viewport_h_slider.value())
-        cfg.display.god_view_width = int(self.god_w_slider.value())
-        cfg.display.god_view_height = int(self.god_h_slider.value())
-
-        # E: Realism
-        cfg.realism.max_acceleration = float(self.accel_slider.value() / self.accel_factor)
-        cfg.realism.backlash = float(self.backlash_slider.value() / self.backlash_factor)
-        cfg.realism.encoder_sigma = float(self.encoder_slider.value() / self.encoder_factor)
-        cfg.realism.latency_jitter = float(self.jitter_slider.value() / self.jitter_factor)
 
         # F: Acquisition
         cfg.acquisition.mode = self.combo_acq_mode.currentText()
@@ -802,7 +804,6 @@ class LocalTerminalPanel(BaseConfigPanel):
         cfg.detection.expected_spot_tolerance = float(self.det_tol_slider.value() / self.det_tol_factor)
         cfg.detection.modulation_type = self.combo_mod_type.currentText()
         cfg.detection.modulation_frequency = float(self.det_mod_freq_slider.value() / self.det_mod_freq_factor)
-        cfg.detection.confidence_threshold = float(self.det_conf_slider.value() / self.det_conf_factor)
 
         # H: Tracking
         cfg.tracking.mode = self.combo_trk_mode.currentText()
@@ -815,14 +816,6 @@ class LocalTerminalPanel(BaseConfigPanel):
         cfg.tracking.ki = float(self.trk_ki_slider.value() / self.trk_ki_factor)
         cfg.tracking.kd = float(self.trk_kd_slider.value() / self.trk_kd_factor)
         cfg.tracking.dead_zone = float(self.trk_dz_slider.value() / self.trk_dz_factor)
-
-        # I: Communication
-        caps = []
-        if self.chk_cap_rx.isChecked(): caps.append("OPTICAL_RX")
-        if self.chk_cap_tx.isChecked(): caps.append("OPTICAL_TX")
-        if self.chk_cap_trk.isChecked(): caps.append("TRACKING")
-        cfg.communication.capabilities = caps
-        cfg.communication.protocol = self.txt_comm_proto.text().strip()
 
         cfg.validate(self._scene_bounds)
         self._config = cfg
@@ -839,11 +832,15 @@ class LocalTerminalPanel(BaseConfigPanel):
             cfg = config.validate(self._scene_bounds)
             self._config = cfg
 
+            # Target Payload
+            self.tgt_id_edit.setText(cfg.target_profile.expected_terminal_id)
+            self.tgt_token_edit.setText(cfg.target_profile.expected_token)
+
             # A: Sensor
-            self.fov_w_slider.setValue(cfg.camera.resolution_width)
-            self.fov_h_slider.setValue(cfg.camera.resolution_height)
-            self.fov_x_slider.setValue(int(round(cfg.camera.fov_x * self.fov_x_factor)))
-            self.fov_y_slider.setValue(int(round(cfg.camera.fov_y * self.fov_y_factor)))
+            self.fov_w_slider.setValue(cfg.ptz_camera.resolution_width)
+            self.fov_h_slider.setValue(cfg.ptz_camera.resolution_height)
+            self.fov_x_slider.setValue(int(round(cfg.ptz_camera.fov_x * self.fov_x_factor)))
+            self.fov_y_slider.setValue(int(round(cfg.ptz_camera.fov_y * self.fov_y_factor)))
 
             # B: PTZ
             self.pan_min_slider.setValue(int(cfg.ptz.pan_min))
@@ -854,23 +851,6 @@ class LocalTerminalPanel(BaseConfigPanel):
             self.home_tilt_slider.setValue(int(cfg.ptz.home_tilt))
             self.pan_speed_slider.setValue(int(round(cfg.ptz.pan_speed * self.pan_speed_factor)))
             self.tilt_speed_slider.setValue(int(round(cfg.ptz.tilt_speed * self.tilt_speed_factor)))
-            self.res_slider.setValue(int(round(cfg.ptz.resolution * self.res_factor)))
-            self.latency_slider.setValue(int(cfg.ptz.latency))
-            self.update_rate_slider.setValue(int(cfg.ptz.update_rate))
-            idx = self.combo_ctrl_mode.findText(cfg.ptz.control_mode)
-            if idx >= 0: self.combo_ctrl_mode.setCurrentIndex(idx)
-
-            # C: Display
-            self.viewport_w_slider.setValue(int(cfg.display.camera_screen_width))
-            self.viewport_h_slider.setValue(int(cfg.display.camera_screen_height))
-            self.god_w_slider.setValue(int(cfg.display.god_view_width))
-            self.god_h_slider.setValue(int(cfg.display.god_view_height))
-
-            # E: Realism
-            self.accel_slider.setValue(int(round(cfg.realism.max_acceleration * self.accel_factor)))
-            self.backlash_slider.setValue(int(round(cfg.realism.backlash * self.backlash_factor)))
-            self.encoder_slider.setValue(int(round(cfg.realism.encoder_sigma * self.encoder_factor)))
-            self.jitter_slider.setValue(int(round(cfg.realism.latency_jitter * self.jitter_factor)))
 
             # F: Acquisition
             idx = self.combo_acq_mode.findText(cfg.acquisition.mode)
@@ -894,7 +874,6 @@ class LocalTerminalPanel(BaseConfigPanel):
             idx = self.combo_mod_type.findText(cfg.detection.modulation_type)
             if idx >= 0: self.combo_mod_type.setCurrentIndex(idx)
             self.det_mod_freq_slider.setValue(int(round(cfg.detection.modulation_frequency * self.det_mod_freq_factor)))
-            self.det_conf_slider.setValue(int(round(cfg.detection.confidence_threshold * self.det_conf_factor)))
 
             # H: Tracking
             idx = self.combo_trk_mode.findText(cfg.tracking.mode)
@@ -910,14 +889,6 @@ class LocalTerminalPanel(BaseConfigPanel):
             self.trk_ki_slider.setValue(int(round(cfg.tracking.ki * self.trk_ki_factor)))
             self.trk_kd_slider.setValue(int(round(cfg.tracking.kd * self.trk_kd_factor)))
             self.trk_dz_slider.setValue(int(round(cfg.tracking.dead_zone * self.trk_dz_factor)))
-
-            # I: Communication
-            self.txt_comm_id.setText(cfg.identity.id)
-            self.txt_comm_proto.setText(cfg.communication.protocol)
-            caps = cfg.communication.capabilities or []
-            self.chk_cap_rx.setChecked("OPTICAL_RX" in caps)
-            self.chk_cap_tx.setChecked("OPTICAL_TX" in caps)
-            self.chk_cap_trk.setChecked("TRACKING" in caps)
 
             self._update_derived_angular_labels()
         finally:

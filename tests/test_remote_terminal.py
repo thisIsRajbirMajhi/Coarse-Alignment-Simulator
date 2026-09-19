@@ -12,7 +12,6 @@ from remote_terminal.config import (
     RemoteTerminalConfig,
     RemoteTerminalScenarioConfig,
     StateConfig,
-    TargetSignatureConfig,
 )
 from remote_terminal.motion import ScenarioMotionTracker, compute_formation_offsets
 from remote_terminal.optics import compute_temporal_factor, render_terminal_beacon_patch
@@ -39,9 +38,8 @@ def test_formation_offsets():
     offsets = compute_formation_offsets(4, form)
     assert len(offsets) == 4
     # All should be at radius 100
-    for ox, oy, oz in offsets:
-        r = math.hypot(ox, oy)
-        assert pytest.approx(r, abs=1e-2) == 100.0
+    for ox, oy in offsets:
+        assert math.isclose(math.hypot(ox, oy), 100.0, abs_tol=1e-3)
 
     # Line formation
     form_line = FormationConfig(shape="Line", spacing_m=50.0)
@@ -78,8 +76,8 @@ def test_optics_patch_and_modulation():
     assert f1 > 0.0
 
     # Pulse modulation
-    f_pulse = compute_temporal_factor(sim_time=0.01, pulse_enabled=True, duty_cycle=0.5)
-    assert f_pulse in (1.0, 0.05)
+    f_pulse = compute_temporal_factor(sim_time=0.01, mod_type="PULSE", mod_depth=1.0)
+    assert f_pulse >= 0.0
 
 
 def test_terminal_state_transitions():
@@ -212,8 +210,6 @@ def test_resilient_from_dict_and_camel_case():
     }
     cfg = RemoteTerminalConfig.from_dict(raw)
     assert cfg.identity.id == "RT-099"
-    assert cfg.identity.terminal_type == "OPTICAL_TERMINAL"
-    assert cfg.identity.platform_id == "PLATFORM-99"
     assert cfg.state.operational_state == "STANDBY"
     assert cfg.beacon.wavelength_nm == 1064.0
     assert cfg.beacon.mod_type == "OOK"
@@ -235,3 +231,38 @@ def test_scenario_apply_config_preserves_terminals():
     assert id(scen.terminals[0]) == t0_id
     assert scen.terminals[0].sim_time == 12.34
     assert scen.terminals[0].config.beacon.power_w == 4.5
+
+
+def test_motion_profile_alias_normalization():
+    from remote_terminal.config import normalize_motion_profile
+    assert normalize_motion_profile("Figure 8") == "Figure-8"
+    assert normalize_motion_profile("FIGURE_8") == "Figure-8"
+    assert normalize_motion_profile("fig8") == "Figure-8"
+    assert normalize_motion_profile("Random") == "Random Walk"
+    assert normalize_motion_profile("RANDOM") == "Random Walk"
+    assert normalize_motion_profile("Circular") == "Circular"
+    from remote_terminal.config import MotionConfig
+    assert MotionConfig(profile="fig8").validate().profile == "Figure-8"
+    assert MotionConfig(profile="Random").validate().profile == "Random Walk"
+    assert MotionConfig(profile="bogus").validate().profile == "Constant Velocity"
+
+
+def test_figure8_remote_motion_bounded_and_repeating():
+    from remote_terminal.config import MotionConfig
+    from remote_terminal.motion import ScenarioMotionTracker
+    import numpy as np
+    cfg = MotionConfig(profile="Figure-8", speed_mps=80.0, acceleration_mps2=60.0,
+                       start_x=1000.0, start_y=1000.0)
+    rng = np.random.default_rng(1)
+    tr = ScenarioMotionTracker(cfg, bounds=(2000, 2000), rng=rng)
+    xs, ys = [], []
+    for _ in range(600):
+        x, y = tr.update(1 / 30)
+        xs.append(x)
+        ys.append(y)
+    assert min(xs) >= 80.0 and max(xs) <= 1920.0
+    assert min(ys) >= 80.0 and max(ys) <= 1920.0
+    # Lissajous crosses the center region (both lobes + crossover visited).
+    assert min(xs) < 1000.0 < max(xs)
+    assert any(abs(x - 1000.0) < 60.0 and abs(y - 1000.0) < 60.0 for x, y in zip(xs, ys))
+

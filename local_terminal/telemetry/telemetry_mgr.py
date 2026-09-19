@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from local_terminal.models import CandidateTrack, TargetState, UpdateOutput
+from local_terminal.core.models import CandidateTrack, TargetState, UpdateOutput
 
 
 def candidate_reason(t: CandidateTrack) -> str:

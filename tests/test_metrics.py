@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import math
 
-from local_terminal.metrics import TrackingMetrics
+from local_terminal.telemetry.metrics import TrackingMetrics
 
 
 def _tele(acq="SEARCHING", trk="OFF", active=None, cands=0, err=None):

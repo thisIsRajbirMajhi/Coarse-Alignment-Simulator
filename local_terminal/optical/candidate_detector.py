@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from local_terminal.detection import detect_beacon_candidates, estimate_wavelength_nm
-from local_terminal.models import DetectionCandidate, ProcessedFrame, SpectralObservation
+from local_terminal.optical.detection import detect_beacon_candidates, estimate_wavelength_nm
+from local_terminal.core.models import DetectionCandidate, ProcessedFrame, SpectralObservation
 
 
 class CandidateDetector:

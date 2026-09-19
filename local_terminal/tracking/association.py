@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import math
 
-from local_terminal.models import CandidateTrack, DetectionCandidate
-from local_terminal.states import CandidateState
+from local_terminal.core.models import CandidateTrack, DetectionCandidate
+from local_terminal.core.states import CandidateState
 
 # Dead tracks never absorb detections (§27): a reappearing source gets a
 # fresh BEACON-N id unless reacquisition validation explicitly merges it.

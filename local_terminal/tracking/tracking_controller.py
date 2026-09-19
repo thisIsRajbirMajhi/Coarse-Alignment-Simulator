@@ -1,7 +1,7 @@
 # local_terminal/tracking_controller.py - Module 9: Tracking Controller (§§20-21).
 from __future__ import annotations
 
-from local_terminal.tracking import TargetTracker
+from local_terminal.tracking.tracking import TargetTracker
 
 
 class TrackingController:

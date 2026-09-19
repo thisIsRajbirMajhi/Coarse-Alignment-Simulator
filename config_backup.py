@@ -96,13 +96,17 @@ class LocalStateConfig:
 # =====================================================================
 @dataclass
 class PositionConfig:
-    """Physical platform location (2D)."""
+    """Physical platform location in reference frame (distinct from PTZ pan/tilt)."""
     x: float = 0.0
     y: float = 0.0
+    z: float = 0.0
+    reference_frame: str = "WORLD"
 
     def validate(self) -> PositionConfig:
         self.x = float(self.x if self.x is not None else 0.0)
         self.y = float(self.y if self.y is not None else 0.0)
+        self.z = float(self.z if self.z is not None else 0.0)
+        self.reference_frame = str(self.reference_frame or "WORLD").strip()
         return self
 
     @classmethod
@@ -111,31 +115,76 @@ class PositionConfig:
 
 
 # =====================================================================
-# 4. PTZ CAMERA CONFIG
+# 4. CAMERA SENSOR CONFIG
 # =====================================================================
 @dataclass
-class PTZCameraConfig:
-    """PTZ Camera Configuration (2D)."""
+class LocalCameraConfig:
+    """Sensor resolution, optical FOV, and sensor characteristics."""
+    type: str = "MONOCHROME"
+    sensor_type: str = "FOCAL_PLANE_ARRAY"
     resolution_width: int = 640
     resolution_height: int = 480
     fov_x: float = 4.0  # degrees
     fov_y: float = 3.0  # degrees
-    pan_speed: float = 8.0   # deg/s
-    tilt_speed: float = 8.0  # deg/s
-    pan_min: float = 0.0
-    pan_max: float = 0.0
-    tilt_min: float = 0.0
-    tilt_max: float = 0.0
-    home_pan: float = 1000.0 # px
-    home_tilt: float = 1000.0 # px
 
-    def validate(self, scene_bounds: tuple[int, int] = (2000, 2000)) -> PTZCameraConfig:
+    def validate(self, scene_bounds: tuple[int, int] = (2000, 2000)) -> LocalCameraConfig:
         sw, sh = scene_bounds
+        self.type = str(self.type or "MONOCHROME").strip()
+        self.sensor_type = str(self.sensor_type or "FOCAL_PLANE_ARRAY").strip()
         self.resolution_width = int(max(20, min(self.resolution_width if self.resolution_width is not None else 640, max(sw, 5000))))
         self.resolution_height = int(max(20, min(self.resolution_height if self.resolution_height is not None else 480, max(sh, 5000))))
         self.fov_x = float(max(0.5, min(self.fov_x if self.fov_x is not None else 4.0, 30.0)))
         self.fov_y = float(max(0.5, min(self.fov_y if self.fov_y is not None else 3.0, 30.0)))
-        
+        return self
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> LocalCameraConfig:
+        if isinstance(data, dict):
+            # Support nested resolution and fieldOfView dicts per LocalTerminal.md
+            res = data.get("resolution")
+            if isinstance(res, dict):
+                data = dict(data)
+                if "width" in res:
+                    data["resolution_width"] = res["width"]
+                if "height" in res:
+                    data["resolution_height"] = res["height"]
+            fov = data.get("fieldOfView") or data.get("field_of_view")
+            if isinstance(fov, dict):
+                data = dict(data)
+                if "x" in fov:
+                    data["fov_x"] = fov["x"]
+                if "y" in fov:
+                    data["fov_y"] = fov["y"]
+        return cls(**_filter_dataclass_fields(cls, data)).validate()
+
+
+# =====================================================================
+# 5. PTZ MECHANICS CONFIG
+# =====================================================================
+@dataclass
+class PTZConfig:
+    """Pan-Tilt actuator limits, dynamics, quantization, and update rate."""
+    pan_min: float = 0.0     # 0 = auto FOV/2
+    pan_max: float = 0.0     # 0 = auto W - FOV/2
+    home_pan: float = 1000.0 # px
+    pan_speed: float = 8.0   # deg/s
+    pan_resolution: float = 0.10  # px
+
+    tilt_min: float = 0.0    # 0 = auto FOV/2
+    tilt_max: float = 0.0    # 0 = auto H - FOV/2
+    home_tilt: float = 1000.0 # px
+    tilt_speed: float = 8.0  # deg/s
+    tilt_resolution: float = 0.10 # px
+
+    resolution: float = 0.10 # px
+    latency: int = 12        # ms
+    update_rate: int = 30    # Hz
+    control_mode: str = "AUTO"  # MANUAL | SEARCH | AUTO | TRACKING
+
+    def validate(self, scene_bounds: tuple[int, int] = (2000, 2000), fov_size: tuple[int, int] = (640, 480)) -> PTZConfig:
+        sw, sh = scene_bounds
+        fw, fh = fov_size
+
         self.pan_min = float(self.pan_min if self.pan_min is not None else 0.0)
         self.pan_max = float(self.pan_max if self.pan_max is not None else 0.0)
         self.tilt_min = float(self.tilt_min if self.tilt_min is not None else 0.0)
@@ -148,29 +197,33 @@ class PTZCameraConfig:
 
         self.pan_speed = float(max(1.0, min(self.pan_speed if self.pan_speed is not None else 8.0, 60.0)))
         self.tilt_speed = float(max(1.0, min(self.tilt_speed if self.tilt_speed is not None else 8.0, 60.0)))
+        self.resolution = float(max(0.001, min(self.resolution if self.resolution is not None else 0.10, 10.0)))
+        self.pan_resolution = self.resolution
+        self.tilt_resolution = self.resolution
+        self.latency = int(max(0, min(self.latency if self.latency is not None else 12, 1000)))
+        self.update_rate = int(max(1, min(self.update_rate if self.update_rate is not None else 30, 240)))
+        self.control_mode = str(self.control_mode or "MANUAL").strip()
         return self
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> PTZCameraConfig:
+    def from_dict(cls, data: dict[str, Any] | None) -> PTZConfig:
         if isinstance(data, dict):
+            # Support nested pan and tilt objects per LocalTerminal.md
             d = dict(data)
-            # handle nested dicts from legacy
-            if "resolution" in d and isinstance(d["resolution"], dict):
-                if "width" in d["resolution"]: d["resolution_width"] = d["resolution"]["width"]
-                if "height" in d["resolution"]: d["resolution_height"] = d["resolution"]["height"]
-            if "fieldOfView" in d and isinstance(d["fieldOfView"], dict):
-                if "x" in d["fieldOfView"]: d["fov_x"] = d["fieldOfView"]["x"]
-                if "y" in d["fieldOfView"]: d["fov_y"] = d["fieldOfView"]["y"]
-            if "pan" in d and isinstance(d["pan"], dict):
-                if "min" in d["pan"]: d["pan_min"] = d["pan"]["min"]
-                if "max" in d["pan"]: d["pan_max"] = d["pan"]["max"]
-                if "home" in d["pan"]: d["home_pan"] = d["pan"]["home"]
-                if "speed" in d["pan"]: d["pan_speed"] = d["pan"]["speed"]
-            if "tilt" in d and isinstance(d["tilt"], dict):
-                if "min" in d["tilt"]: d["tilt_min"] = d["tilt"]["min"]
-                if "max" in d["tilt"]: d["tilt_max"] = d["tilt"]["max"]
-                if "home" in d["tilt"]: d["home_tilt"] = d["tilt"]["home"]
-                if "speed" in d["tilt"]: d["tilt_speed"] = d["tilt"]["speed"]
+            pan_obj = d.get("pan")
+            if isinstance(pan_obj, dict):
+                if "min" in pan_obj: d["pan_min"] = pan_obj["min"]
+                if "max" in pan_obj: d["pan_max"] = pan_obj["max"]
+                if "home" in pan_obj: d["home_pan"] = pan_obj["home"]
+                if "speed" in pan_obj: d["pan_speed"] = pan_obj["speed"]
+                if "resolution" in pan_obj: d["resolution"] = pan_obj["resolution"]
+            tilt_obj = d.get("tilt")
+            if isinstance(tilt_obj, dict):
+                if "min" in tilt_obj: d["tilt_min"] = tilt_obj["min"]
+                if "max" in tilt_obj: d["tilt_max"] = tilt_obj["max"]
+                if "home" in tilt_obj: d["home_tilt"] = tilt_obj["home"]
+                if "speed" in tilt_obj: d["tilt_speed"] = tilt_obj["speed"]
+                if "resolution" in tilt_obj: d["resolution"] = tilt_obj["resolution"]
             return cls(**_filter_dataclass_fields(cls, d)).validate()
         return cls().validate()
 
@@ -352,17 +405,25 @@ class AcquisitionConfig:
 # =====================================================================
 @dataclass
 class DetectionConfig:
-    """Optical detection parameters."""
+    """Optical detection parameters matching Remote Terminal targetSignature."""
     wavelength: float = 1550.0            # nm
     bandwidth: float = 10.0               # nm
     intensity_threshold: float = 0.0      # DN / power threshold
     minimum_snr: float = 8.0              # dB
-    expected_spot_size: float = 1.0       # mrad
-    expected_spot_tolerance: float = 1.5  # mrad
+    expected_spot_size: float = 1.0       # mrad (measured spot = rendered div*0.25 + min-patch; 1.0±1.5 covers div 1..3)
+    expected_spot_tolerance: float = 1.5  # mrad (accepts 0..2.5 mrad out-of-box)
     expected_spot_unit: str = "mrad"
-    modulation_type: str = "AM"           # AM | OOK | NONE
+    modulation_type: str = "AM"           # AM | PM | OOK | PPM
     modulation_frequency: float = 10.0    # kHz
     modulation_unit: str = "kHz"
+    confidence_threshold: float = 0.85
+    # Expected code is receiver configuration, not a reference to a simulator
+    # object.  Empty disables code correlation.
+    identification_code: str = ""
+    identification_code_chip_rate_hz: float = 8.0
+    code_correlation_threshold: float = 0.75
+    code_persistence: int = 2
+    target_id_filter: str = ""            # legacy alias; do not use for identity
 
     def validate(self) -> DetectionConfig:
         self.wavelength = float(max(400.0, min(self.wavelength, 2000.0)))
@@ -373,16 +434,22 @@ class DetectionConfig:
         self.expected_spot_tolerance = float(max(0.0, min(self.expected_spot_tolerance, 20.0)))
         self.expected_spot_unit = str(self.expected_spot_unit or "mrad").strip()
         self.modulation_type = str(self.modulation_type or "AM").strip().upper()
-        if self.modulation_type not in {"AM", "OOK", "NONE"}:
-            self.modulation_type = "AM"
         self.modulation_frequency = float(max(0.0, min(self.modulation_frequency, 1000.0)))
         self.modulation_unit = str(self.modulation_unit or "kHz").strip()
+        self.confidence_threshold = float(max(0.0, min(self.confidence_threshold, 1.0)))
+        self.identification_code = str(self.identification_code or "").strip()[:32]
+        self.identification_code_chip_rate_hz = float(max(0.5, min(self.identification_code_chip_rate_hz, 30.0)))
+        self.code_correlation_threshold = float(max(0.0, min(self.code_correlation_threshold, 1.0)))
+        self.code_persistence = int(max(1, min(self.code_persistence, 20)))
+        self.target_id_filter = str(self.target_id_filter or "").strip()
         return self
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> DetectionConfig:
         if isinstance(data, dict):
             d = dict(data)
+            if "targetIdFilter" in d and "target_id_filter" not in d:
+                d["target_id_filter"] = d["targetIdFilter"]
             ss = d.get("expectedSpotSize") or d.get("expected_spot_size")
             if isinstance(ss, dict):
                 if "value" in ss: d["expected_spot_size"] = ss["value"]
@@ -396,52 +463,122 @@ class DetectionConfig:
             return cls(**_filter_dataclass_fields(cls, d)).validate()
         return cls().validate()
 
+    def build_target_profile(self) -> "TargetProfile":
+        """Construct a TargetProfile from this DetectionConfig (backward compat)."""
+        return TargetProfile(
+            expected_terminal_id=self.identification_code,
+            expected_network_id=0,
+            min_decode_confidence=float(self.code_correlation_threshold),
+            min_consecutive_valid=int(self.code_persistence),
+            chip_rate_hz=float(self.identification_code_chip_rate_hz),
+        ).validate()
+
 
 # =====================================================================
 # 10b. TARGET PROFILE (Phase-2 identity configuration)
 # =====================================================================
 @dataclass
-class ReceivingPayloadConfig:
-    """Receiving Payload Configuration (matches RT BeaconPayload)."""
-    expected_terminal_id: str = "RT-001"
-    expected_token: str = "ALPHA-7"
-    expected_wavelength_nm: float = 1550.0
-    expected_network_id: int = 0
-    required_capabilities: int = 0
-    expected_protocol_version: int = 1
-    expected_message_type: int = 1
-    chip_rate_hz: float = 12.0
-    min_decode_confidence: float = 0.40
-    min_consecutive_valid: int = 3
-    
-    # Tracking identity retention
+class TargetPayloadConfig:
+    """What the local terminal expects to receive from the authorised target beacon per Plans/New Upgrades.md §11.
+
+    Configured locally; never fetched from a RemoteTerminal object.
+    This is the sole authoritative source for identity decisions.
+    """
+    # Identity fields ─────────────────────────────────────────────────
+    expected_terminal_id:      str   = "RT-001"
+    expected_terminal_id_byte: int   = 0
+    expected_network_id:       int   = 0
+    expected_token:            str   = "ALPHA-7"
+    expected_wavelength_nm:    float = 1550.0
+    wavelength_tolerance_nm:   float = 20.0
+    expected_protocol_version: int   = 1
+    expected_message_type:     int   = 1
+    required_capabilities:     int   = 0
+
+    # Decode quality gates ─────────────────────────────────────────────
+    chip_rate_hz:           float = 12.0    # expected chip rate (bps)
+    min_decode_confidence:  float = 0.40    # fraction of CRC-passing frames in sliding window
+    min_consecutive_valid:  int   = 3       # consecutive valid frames before IDENTIFIED
+    required_valid_frames:  int   = 3
+
+    # Validation guards ────────────────────────────────────────────────
+    require_sequence_advance: bool = True
+    sequence_validation_enabled: bool = True
+    wavelength_validation_enabled: bool = True
+
+    # Tracking identity retention ──────────────────────────────────────
     max_sequence_gap: int = 0
     identity_timeout_s: float = 5.0
     max_identity_fail_streak: int = 10
-    sequence_validation_enabled: bool = True
-    wavelength_validation_enabled: bool = True
+    legacy_optical_identification_enabled: bool = False
     allow_wavelength_override: bool = False
 
-    def validate(self) -> ReceivingPayloadConfig:
+    def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> "TargetPayloadConfig":
         self.expected_terminal_id = str(self.expected_terminal_id or "").strip()
+        if self.expected_terminal_id:
+            try:
+                from common.protocol.beacon import terminal_id_to_byte
+                self.expected_terminal_id_byte = terminal_id_to_byte(self.expected_terminal_id)
+            except Exception:
+                pass
         self.expected_token = str(self.expected_token or "").strip()
         self.expected_wavelength_nm = float(self.expected_wavelength_nm if self.expected_wavelength_nm is not None else 1550.0)
-        self.expected_network_id = int(self.expected_network_id or 0)
-        self.required_capabilities = int(self.required_capabilities or 0)
+        self.wavelength_tolerance_nm = float(max(0.1, float(self.wavelength_tolerance_nm or 20.0)))
         self.expected_protocol_version = int(self.expected_protocol_version if self.expected_protocol_version is not None else 1)
         self.expected_message_type = int(self.expected_message_type if self.expected_message_type is not None else 1)
         self.chip_rate_hz = float(max(0.5, min(float(self.chip_rate_hz or 12.0), 60.0)))
         self.min_decode_confidence = float(max(0.0, min(float(self.min_decode_confidence or 0.4), 1.0)))
-        self.min_consecutive_valid = int(max(1, self.min_consecutive_valid or 3))
+        if self.required_valid_frames != 3 and self.min_consecutive_valid == 3:
+            self.min_consecutive_valid = int(max(1, self.required_valid_frames))
+        elif self.min_consecutive_valid != 3 and self.required_valid_frames == 3:
+            self.required_valid_frames = int(max(1, self.min_consecutive_valid))
+        else:
+            self.min_consecutive_valid = int(max(1, self.min_consecutive_valid or 3))
+            self.required_valid_frames = self.min_consecutive_valid
         self.max_identity_fail_streak = int(max(1, self.max_identity_fail_streak if self.max_identity_fail_streak is not None else 10))
         self.identity_timeout_s = float(max(0.1, float(self.identity_timeout_s or 5.0)))
         self.sequence_validation_enabled = bool(self.sequence_validation_enabled)
         self.wavelength_validation_enabled = bool(self.wavelength_validation_enabled)
+        self.legacy_optical_identification_enabled = bool(self.legacy_optical_identification_enabled)
         return self
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> ReceivingPayloadConfig:
-        return cls(**_filter_dataclass_fields(cls, data)).validate()
+    def from_detection_config(cls, cfg: Any) -> "TargetPayloadConfig":
+        try:
+            from common.protocol.beacon import terminal_id_to_byte
+            code = str(getattr(cfg, "identification_code", "") or "").strip()
+            tid_byte = terminal_id_to_byte(code) if code else 0
+            wl = float(getattr(cfg, "wavelength", 1550.0) or 1550.0)
+            corr = float(getattr(cfg, "code_correlation_threshold", 0.4) or 0.4)
+            pers = int(getattr(cfg, "code_persistence", 3) or 3)
+            return cls(
+                expected_terminal_id=code,
+                expected_terminal_id_byte=tid_byte,
+                expected_token="ALPHA-7",
+                expected_wavelength_nm=wl,
+                min_decode_confidence=corr,
+                min_consecutive_valid=pers,
+                required_valid_frames=pers,
+                require_sequence_advance=True,
+                sequence_validation_enabled=True,
+            ).validate()
+        except Exception:
+            return cls().validate()
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> "TargetPayloadConfig":
+        cleaned = _filter_dataclass_fields(cls, data) if isinstance(data, dict) else {}
+        if "required_valid_frames" in cleaned and "min_consecutive_valid" not in cleaned:
+            cleaned["min_consecutive_valid"] = cleaned["required_valid_frames"]
+        elif "min_consecutive_valid" in cleaned and "required_valid_frames" not in cleaned:
+            cleaned["required_valid_frames"] = cleaned["min_consecutive_valid"]
+        return cls(**cleaned).validate()
+
+
+TargetProfile = TargetPayloadConfig
 
 
 # =====================================================================
@@ -490,22 +627,57 @@ class TrackingConfig:
 
 
 # =====================================================================
+# 12. COMMUNICATION CONFIG
+# =====================================================================
+@dataclass
+class LocalCommunicationConfig:
+    """Optical communications, capabilities, and active link state."""
+    terminal_id: str = "LT-001"
+    protocol: str = "OPTICAL_LINK"
+    capabilities: list[str] = field(default_factory=lambda: ["OPTICAL_RX", "OPTICAL_TX", "TRACKING"])
+    link_state: str = "NO_LINK"           # NO_LINK | OPTICAL_LOCK | HANDSHAKE | CONNECTED
+
+    def validate(self) -> LocalCommunicationConfig:
+        self.terminal_id = str(self.terminal_id or "LT-001").strip()
+        self.protocol = str(self.protocol or "OPTICAL_LINK").strip()
+        if not isinstance(self.capabilities, list):
+            self.capabilities = ["OPTICAL_RX", "OPTICAL_TX", "TRACKING"]
+        else:
+            self.capabilities = [str(c).strip() for c in self.capabilities]
+        valid_links = {"NO_LINK", "OPTICAL_LOCK", "HANDSHAKE", "CONNECTED"}
+        if self.link_state not in valid_links:
+            self.link_state = "NO_LINK"
+        return self
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> LocalCommunicationConfig:
+        return cls(**_filter_dataclass_fields(cls, data)).validate()
+
+
+# =====================================================================
 # TOP-LEVEL LOCAL TERMINAL CONFIG
 # =====================================================================
 @dataclass
 class LocalTerminalConfig:
-    """Complete configuration container for the Local Terminal (2D-minimal)."""
+    """
+    Complete configuration container for the Local Terminal per LocalTerminal.md.
+    Provides convenience flat attribute accessors for legacy callers.
+    """
     identity: IdentityConfig = field(default_factory=IdentityConfig)
     state: LocalStateConfig = field(default_factory=LocalStateConfig)
     position: PositionConfig = field(default_factory=PositionConfig)
-    ptz_camera: PTZCameraConfig = field(default_factory=PTZCameraConfig)
+    camera: LocalCameraConfig = field(default_factory=LocalCameraConfig)
+    ptz: PTZConfig = field(default_factory=PTZConfig)
     display: DisplayConfig = field(default_factory=DisplayConfig)
     angular_model: AngularModelConfig = field(default_factory=AngularModelConfig)
     realism: RealismConfig = field(default_factory=RealismConfig)
     acquisition: AcquisitionConfig = field(default_factory=AcquisitionConfig)
     detection: DetectionConfig = field(default_factory=DetectionConfig)
     tracking: TrackingConfig = field(default_factory=TrackingConfig)
-    receiving_payload: ReceivingPayloadConfig = field(default_factory=ReceivingPayloadConfig)
+    communication: LocalCommunicationConfig = field(default_factory=LocalCommunicationConfig)
+    target_payload: TargetPayloadConfig = field(default_factory=lambda: TargetPayloadConfig(expected_terminal_id=""))
+
+    # Optional optical vignetting (sensor effect)
     vignetting: float = 0.0
 
     def validate(self, scene_bounds: tuple[int, int] = (2000, 2000)) -> LocalTerminalConfig:
@@ -513,196 +685,152 @@ class LocalTerminalConfig:
         self.identity.validate()
         self.state.validate()
         self.position.validate()
-        self.ptz_camera.validate(scene_bounds)
+        self.camera.validate(scene_bounds)
+        self.ptz.validate(scene_bounds, (self.camera.resolution_width, self.camera.resolution_height))
         self.display.validate(scene_bounds)
         self.angular_model.recalculate(
-            self.ptz_camera.fov_x, self.ptz_camera.fov_y,
-            self.ptz_camera.resolution_width, self.ptz_camera.resolution_height,
+            self.camera.fov_x, self.camera.fov_y,
+            self.camera.resolution_width, self.camera.resolution_height,
         )
         self.realism.validate()
         self.acquisition.validate()
         self.detection.validate()
         self.tracking.validate()
-        self.receiving_payload.validate()
+        self.communication.validate()
+        self.target_payload.validate()
+        self.vignetting = float(max(0.0, min(self.vignetting, 0.95)))
         return self
 
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> LocalTerminalConfig:
-        if not isinstance(data, dict):
-            return cls().validate()
-
-        root = data.get("localTerminal") or data.get("local_terminal") or data
-
-        cfg = cls()
-        if "identity" in root: cfg.identity = IdentityConfig.from_dict(root["identity"])
-        if "state" in root: cfg.state = LocalStateConfig.from_dict(root["state"])
-        if "position" in root: cfg.position = PositionConfig.from_dict(root["position"])
-        
-        # Backward compatibility for PTZ and Camera splits
-        if "ptz_camera" in root:
-            cfg.ptz_camera = PTZCameraConfig.from_dict(root["ptz_camera"])
-        else:
-            cam_data = root.get("camera", {})
-            ptz_data = root.get("ptz", {})
-            merged = {**cam_data, **ptz_data}
-            if merged: cfg.ptz_camera = PTZCameraConfig.from_dict(merged)
-            
-        if "display" in root: cfg.display = DisplayConfig.from_dict(root["display"])
-        if "angularModel" in root or "angular_model" in root:
-            cfg.angular_model = AngularModelConfig.from_dict(root.get("angularModel") or root.get("angular_model"))
-        if "realism" in root: cfg.realism = RealismConfig.from_dict(root["realism"])
-        if "acquisition" in root: cfg.acquisition = AcquisitionConfig.from_dict(root["acquisition"])
-        if "detection" in root: cfg.detection = DetectionConfig.from_dict(root["detection"])
-        if "tracking" in root: cfg.tracking = TrackingConfig.from_dict(root["tracking"])
-        
-        # Backward compat for payload names
-        if "receiving_payload" in root:
-            cfg.receiving_payload = ReceivingPayloadConfig.from_dict(root["receiving_payload"])
-        elif "target_payload" in root or "targetPayload" in root:
-            cfg.receiving_payload = ReceivingPayloadConfig.from_dict(root.get("target_payload") or root.get("targetPayload"))
-        elif "target_profile" in root or "targetProfile" in root:
-            cfg.receiving_payload = ReceivingPayloadConfig.from_dict(root.get("target_profile") or root.get("targetProfile"))
-
-        return cfg.validate()
-
     @property
-    def camera(self): return self.ptz_camera
-    @camera.setter
-    def camera(self, val): self.ptz_camera = val
-    @property
-    def ptz(self): return self.ptz_camera
-    @ptz.setter
-    def ptz(self, val): self.ptz_camera = val
-    @property
-    def target_payload(self): return self.receiving_payload
-    @target_payload.setter
-    def target_payload(self, val): self.receiving_payload = val
-    @property
-    def target_profile(self): return self.receiving_payload
+    def target_profile(self) -> TargetPayloadConfig:
+        """Alias for target_payload per Plans/New Upgrades.md §11."""
+        return self.target_payload
+
     @target_profile.setter
-    def target_profile(self, val): self.receiving_payload = val
+    def target_profile(self, val: Any) -> None:
+        if isinstance(val, dict):
+            self.target_payload = TargetPayloadConfig.from_dict(val)
+        elif val is not None:
+            self.target_payload = val
 
-# --- Convenience flat attribute accessors ---
+    # --- Convenience flat attribute accessors ---
     @property
     def fov_width(self) -> int:
-        return self.ptz_camera.resolution_width
+        return self.camera.resolution_width
 
     @fov_width.setter
     def fov_width(self, val: int) -> None:
-        self.ptz_camera.resolution_width = int(val)
-        self.angular_model.recalculate(self.ptz_camera.fov_x, self.ptz_camera.fov_y, self.ptz_camera.resolution_width, self.ptz_camera.resolution_height)
+        self.camera.resolution_width = int(val)
+        self.angular_model.recalculate(self.camera.fov_x, self.camera.fov_y, self.camera.resolution_width, self.camera.resolution_height)
 
     @property
     def fov_height(self) -> int:
-        return self.ptz_camera.resolution_height
+        return self.camera.resolution_height
 
     @fov_height.setter
     def fov_height(self, val: int) -> None:
-        self.ptz_camera.resolution_height = int(val)
-        self.angular_model.recalculate(self.ptz_camera.fov_x, self.ptz_camera.fov_y, self.ptz_camera.resolution_width, self.ptz_camera.resolution_height)
+        self.camera.resolution_height = int(val)
+        self.angular_model.recalculate(self.camera.fov_x, self.camera.fov_y, self.camera.resolution_width, self.camera.resolution_height)
 
     @property
     def pan_min(self) -> float:
-        return self.ptz_camera.pan_min
+        return self.ptz.pan_min
 
     @pan_min.setter
     def pan_min(self, val: float) -> None:
-        self.ptz_camera.pan_min = float(val)
+        self.ptz.pan_min = float(val)
 
     @property
     def pan_max(self) -> float:
-        return self.ptz_camera.pan_max
+        return self.ptz.pan_max
 
     @pan_max.setter
     def pan_max(self, val: float) -> None:
-        self.ptz_camera.pan_max = float(val)
+        self.ptz.pan_max = float(val)
 
     @property
     def tilt_min(self) -> float:
-        return self.ptz_camera.tilt_min
+        return self.ptz.tilt_min
 
     @tilt_min.setter
     def tilt_min(self, val: float) -> None:
-        self.ptz_camera.tilt_min = float(val)
+        self.ptz.tilt_min = float(val)
 
     @property
     def tilt_max(self) -> float:
-        return self.ptz_camera.tilt_max
+        return self.ptz.tilt_max
 
     @tilt_max.setter
     def tilt_max(self, val: float) -> None:
-        self.ptz_camera.tilt_max = float(val)
+        self.ptz.tilt_max = float(val)
 
     @property
     def home_pan(self) -> float:
-        return self.ptz_camera.home_pan
+        return self.ptz.home_pan
 
     @home_pan.setter
     def home_pan(self, val: float) -> None:
-        self.ptz_camera.home_pan = float(val)
+        self.ptz.home_pan = float(val)
 
     @property
     def home_tilt(self) -> float:
-        return self.ptz_camera.home_tilt
+        return self.ptz.home_tilt
 
     @home_tilt.setter
     def home_tilt(self, val: float) -> None:
-        self.ptz_camera.home_tilt = float(val)
+        self.ptz.home_tilt = float(val)
 
     @property
     def max_pan_speed_deg(self) -> float:
-        return self.ptz_camera.pan_speed
+        return self.ptz.pan_speed
 
     @max_pan_speed_deg.setter
     def max_pan_speed_deg(self, val: float) -> None:
-        self.ptz_camera.pan_speed = float(val)
+        self.ptz.pan_speed = float(val)
 
     @property
     def max_tilt_speed_deg(self) -> float:
-        return self.ptz_camera.tilt_speed
+        return self.ptz.tilt_speed
 
     @max_tilt_speed_deg.setter
     def max_tilt_speed_deg(self, val: float) -> None:
-        self.ptz_camera.tilt_speed = float(val)
+        self.ptz.tilt_speed = float(val)
 
     @property
     def max_slew_rate(self) -> float:
         # Convert deg/s to pixels/s via angular model
-        deg_per_px = self.ptz_camera.fov_x / max(1, self.ptz_camera.resolution_width)
-        return float(self.ptz_camera.pan_speed / deg_per_px) if deg_per_px > 0 else 800.0
+        deg_per_px = self.camera.fov_x / max(1, self.camera.resolution_width)
+        return float(self.ptz.pan_speed / deg_per_px) if deg_per_px > 0 else 800.0
 
     @max_slew_rate.setter
     def max_slew_rate(self, val: float) -> None:
-        deg_per_px = self.ptz_camera.fov_x / max(1, self.ptz_camera.resolution_width)
+        deg_per_px = self.camera.fov_x / max(1, self.camera.resolution_width)
         if deg_per_px > 0:
-            self.ptz_camera.pan_speed = float(val) * deg_per_px
+            self.ptz.pan_speed = float(val) * deg_per_px
 
     @property
     def resolution(self) -> float:
-        return self.ptz_camera.resolution
+        return self.ptz.resolution
 
     @resolution.setter
     def resolution(self, val: float) -> None:
-        self.ptz_camera.resolution = float(val)
+        self.ptz.resolution = float(val)
 
     @property
     def latency_ms(self) -> int:
-        return self.ptz_camera.latency
+        return self.ptz.latency
 
     @latency_ms.setter
     def latency_ms(self, val: int) -> None:
-        self.ptz_camera.latency = int(val)
+        self.ptz.latency = int(val)
 
     @property
     def update_rate_hz(self) -> int:
-        return self.ptz_camera.update_rate
+        return self.ptz.update_rate
 
     @update_rate_hz.setter
     def update_rate_hz(self, val: int) -> None:
-        self.ptz_camera.update_rate = int(val)
+        self.ptz.update_rate = int(val)
 
     @property
     def viewport_width(self) -> int:
@@ -785,7 +913,137 @@ class LocalTerminalConfig:
         """Compatibility property forwarding to tracking configuration."""
         return self.tracking
 
-
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "localTerminal": {
+                "identity": {
+                    "id": self.identity.id,
+                    "name": self.identity.name,
+                    "type": self.identity.type,
+                    "platformId": self.identity.platform_id,
+                },
+                "state": {
+                    "operationalState": self.state.operational_state,
+                    "powerState": self.state.power_state,
+                    "ptzState": self.state.ptz_state,
+                    "acquisitionState": self.state.acquisition_state,
+                    "detectionState": self.state.detection_state,
+                    "trackingState": self.state.tracking_state,
+                    "linkState": self.state.link_state,
+                },
+                "position": {
+                    "x": self.position.x,
+                    "y": self.position.y,
+                    "z": self.position.z,
+                    "referenceFrame": self.position.reference_frame,
+                },
+                "camera": {
+                    "type": self.camera.type,
+                    "sensorType": self.camera.sensor_type,
+                    "resolution": {
+                        "width": self.camera.resolution_width,
+                        "height": self.camera.resolution_height,
+                    },
+                    "fieldOfView": {
+                        "x": self.camera.fov_x,
+                        "y": self.camera.fov_y,
+                    },
+                },
+                "ptz": {
+                    "pan": {
+                        "min": self.ptz.pan_min,
+                        "max": self.ptz.pan_max,
+                        "home": self.ptz.home_pan,
+                        "speed": self.ptz.pan_speed,
+                        "resolution": self.ptz.pan_resolution,
+                    },
+                    "tilt": {
+                        "min": self.ptz.tilt_min,
+                        "max": self.ptz.tilt_max,
+                        "home": self.ptz.home_tilt,
+                        "speed": self.ptz.tilt_speed,
+                        "resolution": self.ptz.tilt_resolution,
+                    },
+                    "latency": self.ptz.latency,
+                    "updateRate": self.ptz.update_rate,
+                    "controlMode": self.ptz.control_mode,
+                },
+                "display": {
+                    "cameraScreen": {
+                        "width": self.display.camera_screen_width,
+                        "height": self.display.camera_screen_height,
+                    },
+                    "godView": {
+                        "width": self.display.god_view_width,
+                        "height": self.display.god_view_height,
+                    },
+                    "worldSize": self.display.world_size,
+                },
+                "angularModel": {
+                    "pixelToAngleX": self.angular_model.pixel_to_angle_x,
+                    "pixelToAngleY": self.angular_model.pixel_to_angle_y,
+                    "angleToPixelX": self.angular_model.angle_to_pixel_x,
+                    "angleToPixelY": self.angular_model.angle_to_pixel_y,
+                    "unit": self.angular_model.unit,
+                },
+                "realism": {
+                    "maxAcceleration": self.realism.max_acceleration,
+                    "backlash": self.realism.backlash,
+                    "encoderSigma": self.realism.encoder_sigma,
+                    "latencyJitter": self.realism.latency_jitter,
+                },
+                "acquisition": {
+                    "mode": self.acquisition.mode,
+                    "searchPattern": self.acquisition.search_pattern,
+                    "searchRegion": {
+                        "panMin": self.acquisition.search_region_pan_min,
+                        "panMax": self.acquisition.search_region_pan_max,
+                        "tiltMin": self.acquisition.search_region_tilt_min,
+                        "tiltMax": self.acquisition.search_region_tilt_max,
+                    },
+                    "searchSpeed": self.acquisition.search_speed,
+                    "timeout": self.acquisition.timeout,
+                },
+                "detection": {
+                    "wavelength": self.detection.wavelength,
+                    "bandwidth": self.detection.bandwidth,
+                    "intensityThreshold": self.detection.intensity_threshold,
+                    "minimumSNR": self.detection.minimum_snr,
+                    "expectedSpotSize": {
+                        "value": self.detection.expected_spot_size,
+                        "tolerance": self.detection.expected_spot_tolerance,
+                        "unit": self.detection.expected_spot_unit,
+                    },
+                    "modulation": {
+                        "type": self.detection.modulation_type,
+                        "frequency": self.detection.modulation_frequency,
+                        "unit": self.detection.modulation_unit,
+                    },
+                    "confidenceThreshold": self.detection.confidence_threshold,
+                    "targetIdFilter": self.detection.target_id_filter,
+                },
+                "tracking": {
+                    "mode": self.tracking.mode,
+                    "algorithm": self.tracking.algorithm,
+                    "updateRate": self.tracking.update_rate,
+                    "prediction": self.tracking.prediction,
+                    "predictionHorizon": self.tracking.prediction_horizon,
+                    "smoothing": self.tracking.smoothing,
+                    "lostTargetBehavior": self.tracking.lost_target_behavior,
+                    "kp": self.tracking.kp,
+                    "ki": self.tracking.ki,
+                    "kd": self.tracking.kd,
+                    "deadZone": self.tracking.dead_zone,
+                    "outputClamp": self.tracking.output_clamp,
+                },
+                "communication": {
+                    "terminalId": self.communication.terminal_id,
+                    "protocol": self.communication.protocol,
+                    "capabilities": list(self.communication.capabilities),
+                    "linkState": self.communication.link_state,
+                },
+            }
+        }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> LocalTerminalConfig:
@@ -839,21 +1097,21 @@ class LocalTerminalConfig:
     @classmethod
     def from_camera_config(cls, cam: Any) -> LocalTerminalConfig:
         cfg = cls()
-        if hasattr(cam, "fov_width"): cfg.ptz_camera.resolution_width = int(cam.fov_width)
-        if hasattr(cam, "fov_height"): cfg.ptz_camera.resolution_height = int(cam.fov_height)
-        if hasattr(cam, "fov_deg_x"): cfg.ptz_camera.fov_x = float(cam.fov_deg_x)
-        if hasattr(cam, "fov_deg_y"): cfg.ptz_camera.fov_y = float(cam.fov_deg_y)
-        if hasattr(cam, "pan_min") and cam.pan_min is not None: cfg.ptz_camera.pan_min = float(cam.pan_min)
-        if hasattr(cam, "pan_max") and cam.pan_max is not None: cfg.ptz_camera.pan_max = float(cam.pan_max)
-        if hasattr(cam, "tilt_min") and cam.tilt_min is not None: cfg.ptz_camera.tilt_min = float(cam.tilt_min)
-        if hasattr(cam, "tilt_max") and cam.tilt_max is not None: cfg.ptz_camera.tilt_max = float(cam.tilt_max)
-        if hasattr(cam, "home_pan") and cam.home_pan is not None: cfg.ptz_camera.home_pan = float(cam.home_pan)
-        if hasattr(cam, "home_tilt") and cam.home_tilt is not None: cfg.ptz_camera.home_tilt = float(cam.home_tilt)
-        if hasattr(cam, "max_pan_speed_deg"): cfg.ptz_camera.pan_speed = float(cam.max_pan_speed_deg)
-        if hasattr(cam, "max_tilt_speed_deg"): cfg.ptz_camera.tilt_speed = float(cam.max_tilt_speed_deg)
-        if hasattr(cam, "resolution"): cfg.ptz_camera.resolution = float(cam.resolution)
-        if hasattr(cam, "latency_ms"): cfg.ptz_camera.latency = int(cam.latency_ms)
-        if hasattr(cam, "update_rate_hz"): cfg.ptz_camera.update_rate = int(cam.update_rate_hz)
+        if hasattr(cam, "fov_width"): cfg.camera.resolution_width = int(cam.fov_width)
+        if hasattr(cam, "fov_height"): cfg.camera.resolution_height = int(cam.fov_height)
+        if hasattr(cam, "fov_deg_x"): cfg.camera.fov_x = float(cam.fov_deg_x)
+        if hasattr(cam, "fov_deg_y"): cfg.camera.fov_y = float(cam.fov_deg_y)
+        if hasattr(cam, "pan_min") and cam.pan_min is not None: cfg.ptz.pan_min = float(cam.pan_min)
+        if hasattr(cam, "pan_max") and cam.pan_max is not None: cfg.ptz.pan_max = float(cam.pan_max)
+        if hasattr(cam, "tilt_min") and cam.tilt_min is not None: cfg.ptz.tilt_min = float(cam.tilt_min)
+        if hasattr(cam, "tilt_max") and cam.tilt_max is not None: cfg.ptz.tilt_max = float(cam.tilt_max)
+        if hasattr(cam, "home_pan") and cam.home_pan is not None: cfg.ptz.home_pan = float(cam.home_pan)
+        if hasattr(cam, "home_tilt") and cam.home_tilt is not None: cfg.ptz.home_tilt = float(cam.home_tilt)
+        if hasattr(cam, "max_pan_speed_deg"): cfg.ptz.pan_speed = float(cam.max_pan_speed_deg)
+        if hasattr(cam, "max_tilt_speed_deg"): cfg.ptz.tilt_speed = float(cam.max_tilt_speed_deg)
+        if hasattr(cam, "resolution"): cfg.ptz.resolution = float(cam.resolution)
+        if hasattr(cam, "latency_ms"): cfg.ptz.latency = int(cam.latency_ms)
+        if hasattr(cam, "update_rate_hz"): cfg.ptz.update_rate = int(cam.update_rate_hz)
         if hasattr(cam, "viewport_width"): cfg.display.camera_screen_width = int(cam.viewport_width)
         if hasattr(cam, "viewport_height"): cfg.display.camera_screen_height = int(cam.viewport_height)
         if hasattr(cam, "god_width"): cfg.display.god_view_width = int(cam.god_width)
@@ -864,8 +1122,3 @@ class LocalTerminalConfig:
         if hasattr(cam, "latency_jitter_ms"): cfg.realism.latency_jitter = float(cam.latency_jitter_ms)
         if hasattr(cam, "vignetting"): cfg.vignetting = float(cam.vignetting)
         return cfg.validate()
-# Aliases for backward compatibility
-TargetPayloadConfig = ReceivingPayloadConfig
-TargetProfile = ReceivingPayloadConfig
-LocalCameraConfig = PTZCameraConfig
-PTZConfig = PTZCameraConfig

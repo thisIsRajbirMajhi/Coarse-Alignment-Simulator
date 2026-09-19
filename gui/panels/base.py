@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from typing import Any, Generator
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton, QSlider, QWidget
+from PyQt5.QtWidgets import QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QSlider, QWidget
 
 class BaseConfigPanel(QWidget):
     """
@@ -81,8 +81,9 @@ class BaseConfigPanel(QWidget):
         if tooltip:
             slider.setToolTip(tooltip)
         val_label = QLabel(str(int(init_val)))
-        val_label.setFixedWidth(48)
+        val_label.setMinimumWidth(56)
         val_label.setMinimumHeight(22)
+        val_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         val_label.setAlignment(Qt.AlignCenter)
         val_label.setStyleSheet(self._PILL_IDLE)
         # Highlight value pill while slider is pressed/dragged
@@ -121,8 +122,9 @@ class BaseConfigPanel(QWidget):
             slider.setToolTip(tooltip)
         fmt = f"{{:.{decimals}f}}{{}}"
         val_label = QLabel(fmt.format(init_val, suffix))
-        val_label.setFixedWidth(64)
+        val_label.setMinimumWidth(84)
         val_label.setMinimumHeight(22)
+        val_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         val_label.setAlignment(Qt.AlignCenter)
         val_label.setStyleSheet(self._PILL_IDLE)
         def _on_pressed():

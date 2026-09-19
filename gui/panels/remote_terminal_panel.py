@@ -85,34 +85,57 @@ class RemoteTerminalPanel(BaseConfigPanel):
         # TOP TOOLBAR: TERMINAL SWITCHER & QUICK ACTIONS
         # -------------------------------------------------------------
         switcher_box = QWidget()
-        s_layout = QHBoxLayout(switcher_box)
+        s_layout = QVBoxLayout(switcher_box)
         s_layout.setContentsMargins(0, 0, 0, 0)
-        s_layout.setSpacing(8)
+        s_layout.setSpacing(6)
+
+        top_row = QHBoxLayout()
+        top_row.setContentsMargins(0, 0, 0, 0)
+        top_row.setSpacing(8)
 
         lbl_term = QLabel("Active Remote Terminal:")
         lbl_term.setStyleSheet("font-weight:700; color:#1e293b; font-size:12px;")
-        s_layout.addWidget(lbl_term)
+        lbl_term.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        top_row.addWidget(lbl_term)
 
-        self.terminal_buttons_layout = QHBoxLayout()
+        # Scrollable switcher — up to 8 terminals never push actions off-screen
+        self.terminal_buttons_scroll = QScrollArea()
+        self.terminal_buttons_scroll.setWidgetResizable(True)
+        self.terminal_buttons_scroll.setFrameShape(QScrollArea.NoFrame)
+        self.terminal_buttons_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.terminal_buttons_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.terminal_buttons_scroll.setFixedHeight(34)
+        self.terminal_buttons_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        _switcher_inner = QWidget()
+        self.terminal_buttons_layout = QHBoxLayout(_switcher_inner)
+        self.terminal_buttons_layout.setContentsMargins(0, 0, 0, 0)
         self.terminal_buttons_layout.setSpacing(6)
-        s_layout.addLayout(self.terminal_buttons_layout)
-        s_layout.addStretch(1)
+        self.terminal_buttons_scroll.setWidget(_switcher_inner)
+        top_row.addWidget(self.terminal_buttons_scroll, 1)
 
         self.btn_randomize_remote = QPushButton("🎲 Randomize Remote")
         self.btn_randomize_remote.setObjectName("randomizeRemoteButton")
         self.btn_randomize_remote.setToolTip("Randomize 2D scenario + beacon parameters")
+        self.btn_randomize_remote.setMinimumHeight(28)
+        self.btn_randomize_remote.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.btn_randomize_remote.setStyleSheet(
-            "QPushButton { background:#4f46e5; color:#ffffff; font-weight:700; font-size:11px; "
-            "border:1px solid #4338ca; border-radius:6px; padding:5px 12px; } "
-            "QPushButton:hover { background:#4338ca; border-color:#3730a3; } "
-            "QPushButton:pressed { background:#3730a3; }"
+            "QPushButton { background:#111827; color:#ffffff; font-weight:700; font-size:11px; "
+            "border:1px solid #111827; border-radius:6px; padding:5px 12px; } "
+            "QPushButton:hover { background:#1f2937; border-color:#1f2937; } "
+            "QPushButton:pressed { background:#030712; }"
         )
         self.btn_randomize_remote.clicked.connect(lambda: self.randomize(emit=True))
-        s_layout.addWidget(self.btn_randomize_remote)
+        top_row.addWidget(self.btn_randomize_remote)
+        s_layout.addLayout(top_row)
 
         self.live_status_badge = QLabel("STATUS: ACTIVE | EMITTING | NO LINK")
+        self.live_status_badge.setWordWrap(True)
+        self.live_status_badge.setAlignment(Qt.AlignCenter)
+        self.live_status_badge.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.live_status_badge.setMinimumHeight(24)
         self.live_status_badge.setStyleSheet(
-            "background:#111827; color:#38bdf8; font-family:'Consolas','Courier New',monospace; "
+            "color:#1e3a8a; background:#eff6ff; border:1px solid #bfdbfe; "
+            "font-family:'Consolas','Courier New',monospace; "
             "font-size:11px; font-weight:700; border-radius:6px; padding:5px 10px;"
         )
         s_layout.addWidget(self.live_status_badge)
@@ -188,14 +211,19 @@ class RemoteTerminalPanel(BaseConfigPanel):
         self.op_mode_combo.setMinimumHeight(26)
         quick_grid.addWidget(self.op_mode_combo, 4, 4, 1, 2)
 
-        # Row 5: switches + token
+        # Row 5: switches + token (exclusive ON/OFF pairs — never both off)
         quick_grid.addWidget(self._label("Power & Emission"), 5, 0)
         pwr_h = QHBoxLayout()
+        pwr_h.setSpacing(4)
         self.btn_power_on = QPushButton("POWER ON")
         self.btn_power_off = QPushButton("POWER OFF")
         self.btn_power_on.setCheckable(True)
         self.btn_power_off.setCheckable(True)
         self.btn_power_on.setChecked(True)
+        self.btn_power_on.setMinimumHeight(26)
+        self.btn_power_off.setMinimumHeight(26)
+        self.btn_power_on.setToolTip("Power the selected terminal on")
+        self.btn_power_off.setToolTip("Power the selected terminal off")
         pwr_h.addWidget(self.btn_power_on)
         pwr_h.addWidget(self.btn_power_off)
 
@@ -204,9 +232,23 @@ class RemoteTerminalPanel(BaseConfigPanel):
         self.btn_beacon_on.setCheckable(True)
         self.btn_beacon_off.setCheckable(True)
         self.btn_beacon_on.setChecked(True)
+        self.btn_beacon_on.setMinimumHeight(26)
+        self.btn_beacon_off.setMinimumHeight(26)
+        self.btn_beacon_on.setToolTip("Enable beacon emission")
+        self.btn_beacon_off.setToolTip("Disable beacon emission")
         pwr_h.addWidget(self.btn_beacon_on)
         pwr_h.addWidget(self.btn_beacon_off)
         quick_grid.addLayout(pwr_h, 5, 1, 1, 2)
+
+        # Exclusive groups guard against both-off / both-on clicks
+        self._power_group = QButtonGroup(self)
+        self._power_group.setExclusive(True)
+        self._power_group.addButton(self.btn_power_on)
+        self._power_group.addButton(self.btn_power_off)
+        self._beacon_group = QButtonGroup(self)
+        self._beacon_group.setExclusive(True)
+        self._beacon_group.addButton(self.btn_beacon_on)
+        self._beacon_group.addButton(self.btn_beacon_off)
 
         quick_grid.addWidget(self._label("Auth Token"), 5, 3)
         self.sig_code_edit = QLineEdit("ALPHA-7")
@@ -501,12 +543,18 @@ class RemoteTerminalPanel(BaseConfigPanel):
             btn = QPushButton(tid)
             btn.setCheckable(True)
             btn.setChecked(i == self._selected_idx)
+            btn.setMinimumWidth(72)
+            btn.setMinimumHeight(24)
+            btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            btn.setToolTip(f"Edit {tid}")
             btn.setStyleSheet(
                 "QPushButton { padding: 4px 10px; font-weight:700; font-family:Consolas,monospace; } "
                 "QPushButton:checked { background:#111827; color:#ffffff; border:1px solid #111827; }"
             )
             btn.clicked.connect(lambda checked, idx=i: self._select_terminal(idx))
             self.terminal_buttons_layout.addWidget(btn)
+        # Keep scroll content tight; stretch pushes buttons left
+        self.terminal_buttons_layout.addStretch(1)
 
     def _select_terminal(self, idx: int) -> None:
         self._save_selected_terminal()

@@ -283,3 +283,32 @@ def test_dialog_sync_back_after_world_change(window):
     dlg.sync_from_session(window.session)
     assert dlg.camera_panel.fov_h_slider.value() == int(window.session.camera_config.fov_height)
     dlg.close()
+
+
+def test_tracker_point_overlay_drawn_on_camera_screen():
+    pytest = __import__("pytest")
+    pytest.importorskip("PyQt5.QtWidgets", reason="PyQt5 required")
+    import numpy as np
+    from gui.core.renderer import Renderer
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    plain = Renderer.render_viewport(frame, None, telemetry=None)
+    tele = {"autonomy": {"state": "LOCKED", "active_target_id": "RT-1",
+                         "candidates": [{"terminal_id": "RT-1", "fov_x": 400.0,
+                                         "fov_y": 300.0, "confidence": 0.95,
+                                         "confirmed": True}]},
+            "state": {}}
+    marker = Renderer.tracker_marker_from_telemetry(tele, (640, 480))
+    assert marker is not None
+    assert marker[3] == "RT-1 LOCKED"
+    marked = Renderer.render_viewport(frame, None, telemetry=tele)
+    assert marked.sum() > plain.sum()
+    # Out-of-frame candidate yields no marker (never raises).
+    tele_out = {"autonomy": {"state": "SEARCHING", "active_target_id": None,
+                             "candidates": [{"terminal_id": "RT-9", "fov_x": 9999.0,
+                                             "fov_y": 9999.0, "confidence": 0.1,
+                                             "confirmed": False}]},
+                "state": {}}
+    assert Renderer.tracker_marker_from_telemetry(tele_out, (640, 480)) is None
+    assert Renderer.tracker_marker_from_telemetry(None) is None
+    assert Renderer.render_viewport(frame, None) is not None
+

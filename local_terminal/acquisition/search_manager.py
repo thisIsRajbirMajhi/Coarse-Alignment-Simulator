@@ -3,9 +3,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from local_terminal.acquisition import AcquisitionScanner
-from local_terminal.models import SearchCommand
-from local_terminal.states import LocalTerminalState
+from local_terminal.acquisition.acquisition import AcquisitionScanner
+from local_terminal.core.models import SearchCommand
+from local_terminal.core.states import LocalTerminalState
 
 
 class SearchManager:

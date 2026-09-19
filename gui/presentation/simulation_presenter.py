@@ -13,7 +13,7 @@ class SimulationPresenter:
 
     def __init__(self):
         self._err_window: list[float] = []
-        from local_terminal.metrics import TrackingMetrics
+        from local_terminal.telemetry.metrics import TrackingMetrics
         self.metrics = TrackingMetrics()
 
     def reset(self) -> None:

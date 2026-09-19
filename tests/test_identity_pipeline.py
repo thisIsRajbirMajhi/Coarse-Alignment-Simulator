@@ -23,7 +23,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
-from local_terminal.beacon_frame import (
+from local_terminal.signal.beacon_frame import (
     BeaconFrame,
     PREAMBLE, SYNC_WORD,
     crc8,
@@ -33,9 +33,9 @@ from local_terminal.beacon_frame import (
     terminal_id_to_byte,
     bytes_to_chips,
 )
-from local_terminal.frame_decoder import DecodedFrame, FrameDecoder, TrackDecodeState
-from local_terminal.identity_matcher import IdentityDecision, IdentityMatcher, TargetProfile
-from local_terminal.signal_analyzer import SignalAnalyzer
+from local_terminal.signal.frame_decoder import DecodedFrame, FrameDecoder, TrackDecodeState
+from local_terminal.signal.identity_matcher import IdentityDecision, IdentityMatcher, TargetProfile
+from local_terminal.signal.signal_analyzer import SignalAnalyzer
 from remote_terminal.beacon_encoder import BeaconEncoder, BeaconEncoderConfig
 
 
@@ -50,7 +50,7 @@ def build_profile(terminal_id: str = "RT-001", network_id: int = 0,
         expected_network_id=network_id,
         min_decode_confidence=min_conf,
         min_consecutive_valid=min_consec,
-        require_sequence_advance=False,  # disable for isolated tests
+          # disable for isolated tests
     ).validate()
 
 
@@ -368,7 +368,7 @@ def test_beacon_encoder_produces_repeating_signal():
     v0 = enc.get_intensity_factor(0.0)
     v1 = enc.get_intensity_factor(period)
     # Both should be valid intensity values
-    from local_terminal.beacon_frame import CHIP_HIGH, CHIP_LOW
+    from local_terminal.signal.beacon_frame import CHIP_HIGH, CHIP_LOW
     assert v0 in (CHIP_LOW, CHIP_HIGH)
     assert v1 in (CHIP_LOW, CHIP_HIGH)
 

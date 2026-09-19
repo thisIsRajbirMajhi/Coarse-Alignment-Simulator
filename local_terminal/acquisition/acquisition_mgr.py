@@ -11,8 +11,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from local_terminal.models import AcquisitionResult, CandidateTrack
-from local_terminal.states import CandidateState
+from local_terminal.core.models import AcquisitionResult, CandidateTrack
+from local_terminal.core.states import CandidateState
 
 
 @dataclass

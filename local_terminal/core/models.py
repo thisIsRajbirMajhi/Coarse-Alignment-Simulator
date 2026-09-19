@@ -13,17 +13,17 @@ from typing import Any
 
 import numpy as np
 
-from local_terminal.states import CandidateState, LocalTerminalState
-from local_terminal.beacon_frame import (
+from local_terminal.core.states import CandidateState, LocalTerminalState
+from local_terminal.signal.beacon_frame import (
     BeaconDecodeResult,
     BeaconFrame,
     DecodedPayload,
 )
-from local_terminal.signal_analyzer import (
+from local_terminal.signal.signal_analyzer import (
     OpticalMeasurement,
     SignalMeasurement,
 )
-from local_terminal.identity_matcher import (
+from local_terminal.signal.identity_matcher import (
     IdentityDecision,
     TargetPayloadConfig,
     TargetProfile,

@@ -1,7 +1,7 @@
 # local_terminal/state_machine.py - Module 12: State Machine (§28).
 from __future__ import annotations
 
-from local_terminal.states import LocalTerminalState
+from local_terminal.core.states import LocalTerminalState
 
 
 class LocalStateMachine:

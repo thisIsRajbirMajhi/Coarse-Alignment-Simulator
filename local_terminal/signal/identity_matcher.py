@@ -7,13 +7,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from local_terminal.beacon_frame import (
+from local_terminal.signal.beacon_frame import (
     BeaconFrame,
     DecodedPayload,
     byte_to_terminal_id,
     terminal_id_to_byte,
 )
-from local_terminal.frame_decoder import DecodedFrame
+from local_terminal.signal.frame_decoder import DecodedFrame
 
 
 from local_terminal.config import TargetPayloadConfig, TargetProfile
@@ -154,12 +154,11 @@ class IdentityValidator:
 
         # Gate 3: Terminal identity
         expected_id = p.expected_terminal_id.strip()
-        expected_byte = int(p.expected_terminal_id_byte)
 
         if not expected_id or expected_id == "0":
             # Wildcard: accept any terminal
             dec.terminal_id_ok = True
-        elif tid_str == expected_id or (expected_byte != 0 and tid_byte == expected_byte):
+        elif tid_str == expected_id:
             dec.terminal_id_ok = True
         else:
             # Impostor
@@ -211,46 +210,37 @@ class IdentityValidator:
 
         # Gate 7: Wavelength consistency (§20)
         decoded_wl = float(getattr(decoded, "wavelength_nm", 0.0))
-        if p.expected_wavelength_nm > 0.0 and decoded_wl > 0.0 and getattr(p, "wavelength_validation_enabled", True):
-            if abs(decoded_wl - p.expected_wavelength_nm) > p.wavelength_tolerance_nm:
+        if p.expected_wavelength_nm > 0.0 and decoded_wl > 0.0:
+            if abs(decoded_wl - p.expected_wavelength_nm) > 50.0:
                 dec.wavelength_valid = False
-                if not getattr(p, "allow_wavelength_override", False):
-                    dec.status = "WAVELENGTH_MISMATCH"
-                    dec.reason = "WAVELENGTH_MISMATCH"
-                    return dec
-        if optical_wavelength_nm > 0.0 and p.expected_wavelength_nm > 0.0 and getattr(p, "wavelength_validation_enabled", True):
-            if abs(optical_wavelength_nm - p.expected_wavelength_nm) > max(p.wavelength_tolerance_nm, 50.0):
+                dec.status = "WAVELENGTH_MISMATCH"
+                dec.reason = "WAVELENGTH_MISMATCH"
+                return dec
+        if optical_wavelength_nm > 0.0 and p.expected_wavelength_nm > 0.0:
+            if abs(optical_wavelength_nm - p.expected_wavelength_nm) > 50.0:
                 dec.wavelength_valid = False
-                if not getattr(p, "allow_wavelength_override", False):
-                    dec.status = "WAVELENGTH_MISMATCH"
-                    dec.reason = "OPTICAL_WAVELENGTH_MISMATCH"
-                    return dec
+                dec.status = "WAVELENGTH_MISMATCH"
+                dec.reason = "OPTICAL_WAVELENGTH_MISMATCH"
+                return dec
         dec.wavelength_valid = True
 
         # Gate 8: Sequence validation / Replay guard (§18)
         seq = int(getattr(decoded, "sequence_number", -1))
         last_seq = self._last_seq.get(observation_id, -1)
-        if p.sequence_validation_enabled and p.require_sequence_advance and seq >= 0:
-            if last_seq >= 0:
-                if seq == last_seq:
-                    dec.sequence_valid = False
-                    dec.sequence_ok = False
-                    dec.status = CanonicalStatus("DUPLICATE_SEQUENCE", "INVALID_SEQUENCE")
-                    dec.reason = "DUPLICATE_SEQUENCE"
-                    return dec
-                elif seq < last_seq:
-                    dec.sequence_valid = False
-                    dec.sequence_ok = False
-                    dec.status = CanonicalStatus("OLD_SEQUENCE", "INVALID_SEQUENCE")
-                    dec.reason = "OLD_SEQUENCE"
-                    return dec
-                elif getattr(p, "max_sequence_gap", 0) > 0 and (seq - last_seq) > p.max_sequence_gap:
-                    dec.sequence_valid = False
-                    dec.sequence_ok = False
-                    dec.status = CanonicalStatus("SEQUENCE_DISCONTINUITY", "INVALID_SEQUENCE")
-                    dec.reason = "SEQUENCE_DISCONTINUITY"
-                    return dec
-            self._last_seq[observation_id] = seq
+        if seq >= 0 and last_seq >= 0:
+            if seq == last_seq:
+                dec.sequence_valid = False
+                dec.sequence_ok = False
+                dec.status = CanonicalStatus("DUPLICATE_SEQUENCE", "INVALID_SEQUENCE")
+                dec.reason = "DUPLICATE_SEQUENCE"
+                return dec
+            elif seq < last_seq:
+                dec.sequence_valid = False
+                dec.sequence_ok = False
+                dec.status = CanonicalStatus("OLD_SEQUENCE", "INVALID_SEQUENCE")
+                dec.reason = "OLD_SEQUENCE"
+                return dec
+        self._last_seq[observation_id] = seq
         dec.sequence_valid = True
         dec.sequence_ok = True
 
@@ -263,7 +253,7 @@ class IdentityValidator:
         dec.confidence_ok = True
 
         # Gate 10: Multi-frame persistence streak
-        required_valid = max(p.min_consecutive_valid, p.required_valid_frames)
+        required_valid = p.min_consecutive_valid
         if dec.consecutive_valid < required_valid:
             dec.status = "UNKNOWN"
             dec.reason = "BUILDING"

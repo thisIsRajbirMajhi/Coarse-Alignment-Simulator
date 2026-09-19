@@ -15,15 +15,15 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from local_terminal.acquisition_mgr import AcquisitionConfig2, AcquisitionManager
-from local_terminal.association import CandidateAssociationManager
-from local_terminal.candidate_detector import CandidateDetector
-from local_terminal.estimator import TrackStateEstimator
-from local_terminal.frame_decoder import FrameDecoder
-from local_terminal.frame_processor import FrameProcessor
-from local_terminal.identity_matcher import IdentityMatcher, TargetProfile
-from local_terminal.lifecycle import CandidateLifecycleManager
-from local_terminal.models import (
+from local_terminal.acquisition.acquisition_mgr import AcquisitionConfig2, AcquisitionManager
+from local_terminal.tracking.association import CandidateAssociationManager
+from local_terminal.optical.candidate_detector import CandidateDetector
+from local_terminal.tracking.estimator import TrackStateEstimator
+from local_terminal.signal.frame_decoder import FrameDecoder
+from local_terminal.signal.frame_processor import FrameProcessor
+from local_terminal.signal.identity_matcher import IdentityMatcher, TargetProfile
+from local_terminal.core.lifecycle import CandidateLifecycleManager
+from local_terminal.core.models import (
     AcquisitionResult,
     BeamProfile,
     CameraFrame,
@@ -40,14 +40,14 @@ from local_terminal.models import (
     UpdateInput,
     UpdateOutput,
 )
-from local_terminal.reacquisition import ReacquisitionConfig, ReacquisitionManager
-from local_terminal.search_manager import SearchManager
-from local_terminal.signal_analyzer import SignalAnalyzer
-from local_terminal.signature import SignatureAnalyzer
-from local_terminal.state_machine import LocalStateMachine
-from local_terminal.states import CandidateState, LocalTerminalState
-from local_terminal.telemetry_mgr import TelemetryManager
-from local_terminal.tracking_controller import TrackingController
+from local_terminal.acquisition.reacquisition import ReacquisitionConfig, ReacquisitionManager
+from local_terminal.acquisition.search_manager import SearchManager
+from local_terminal.signal.signal_analyzer import SignalAnalyzer
+from local_terminal.optical.signature import SignatureAnalyzer
+from local_terminal.core.state_machine import LocalStateMachine
+from local_terminal.core.states import CandidateState, LocalTerminalState
+from local_terminal.telemetry.telemetry_mgr import TelemetryManager
+from local_terminal.tracking.tracking_controller import TrackingController
 
 
 class LocalTerminalSystem:
@@ -731,7 +731,7 @@ class LocalTerminalSystem:
                 # Identity-gated merge: reappearing beacon keeps its old lock
                 # instead of spawning a fresh BEACON-N (§27/§30).
                 try:
-                    from local_terminal.reacquisition import can_merge_reacquisition as _can_merge
+                    from local_terminal.acquisition.reacquisition import can_merge_reacquisition as _can_merge
                     if prev is not None:
                         for _cand in (alive or []):
                             try:

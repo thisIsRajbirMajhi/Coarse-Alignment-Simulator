@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from local_terminal.models import CameraFrame, ProcessedFrame
+from local_terminal.core.models import CameraFrame, ProcessedFrame
 
 
 class FrameProcessor:

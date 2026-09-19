@@ -122,6 +122,9 @@ class DisturbancesPanel(BaseConfigPanel):
 
         # ── Tabs ──
         self.tabs = QTabWidget()
+        self.tabs.setUsesScrollButtons(True)
+        self.tabs.setElideMode(Qt.ElideRight)
+        self.tabs.setDocumentMode(False)
         layout.addWidget(self.tabs, 1)
         self._build_air_tab()
         self._build_camera_tab()
@@ -440,6 +443,8 @@ class DisturbancesPanel(BaseConfigPanel):
         self.label_gaussian_max_val.setStyleSheet("color:#374151; font-size:11px;")
         gg.addWidget(self.slider_gaussian_max, 1, 2)
         gg.addWidget(self.label_gaussian_max_val, 1, 3)
+        self.label_gaussian_off_hint = self._hint("Off — enable Gaussian to reveal strength controls.")
+        gg.addWidget(self.label_gaussian_off_hint, 2, 0, 1, 4)
         tl.addWidget(g_box)
 
         # Salt & pepper card
@@ -475,6 +480,8 @@ class DisturbancesPanel(BaseConfigPanel):
         self.label_salt_ratio_val.setStyleSheet("color:#374151; font-size:11px;")
         sg.addWidget(self.slider_salt_ratio, 1, 2)
         sg.addWidget(self.label_salt_ratio_val, 1, 3)
+        self.label_salt_off_hint = self._hint("Off — enable Salt & Pepper to reveal amount controls.")
+        sg.addWidget(self.label_salt_off_hint, 2, 0, 1, 4)
         tl.addWidget(sp_box)
 
         # Poisson card
@@ -510,6 +517,8 @@ class DisturbancesPanel(BaseConfigPanel):
         self.label_poisson_peak_val.setStyleSheet("color:#374151; font-size:11px;")
         pg.addWidget(self.slider_poisson_peak, 1, 2)
         pg.addWidget(self.label_poisson_peak_val, 1, 3)
+        self.label_poisson_off_hint = self._hint("Off — enable Poisson to reveal flicker controls.")
+        pg.addWidget(self.label_poisson_off_hint, 2, 0, 1, 4)
         tl.addWidget(p_box)
 
         self.chk_sensor_details = QCheckBox("Show fine-tuning (ceilings, balance, peak)")
@@ -621,7 +630,7 @@ class DisturbancesPanel(BaseConfigPanel):
         self._emit_config()
 
     def _sync_image_noise_visibility(self):
-        """Only selected types show their strength rows."""
+        """Only selected types show their strength rows; unchecked cards show a hint."""
         show_details = bool(getattr(self, "chk_sensor_details", None) is not None
                             and self.chk_sensor_details.isChecked())
         is_sp = bool(self.chk_salt_pepper.isChecked())
@@ -637,9 +646,17 @@ class DisturbancesPanel(BaseConfigPanel):
         self.label_gaussian_sigma_val.setVisible(is_g)
         for w in [self.label_gaussian_max, self.slider_gaussian_max, self.label_gaussian_max_val]:
             w.setVisible(is_g and show_details)
-        for w in [self.label_poisson_scale, self.slider_poisson_scale, self.label_poisson_scale_val,
-                  self.label_poisson_peak, self.slider_poisson_peak, self.label_poisson_peak_val]:
+        for w in [self.label_poisson_scale, self.slider_poisson_scale, self.label_poisson_scale_val]:
+            w.setVisible(is_p)
+        for w in [self.label_poisson_peak, self.slider_poisson_peak, self.label_poisson_peak_val]:
             w.setVisible(is_p and show_details)
+        # Empty-state hints (guarded for set_config paths before build finishes)
+        try:
+            self.label_gaussian_off_hint.setVisible(not is_g)
+            self.label_salt_off_hint.setVisible(not is_sp)
+            self.label_poisson_off_hint.setVisible(not is_p)
+        except AttributeError:
+            pass
 
     def _sync_atmo_enabled(self):
         is_user = str(self.combo_atmospheric.currentText()) == "User Defined"

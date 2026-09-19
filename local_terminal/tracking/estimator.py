@@ -1,7 +1,7 @@
 # local_terminal/estimator.py - Module 8: Track State Estimator (§19).
 from __future__ import annotations
 
-from local_terminal.models import CandidateTrack, TargetState
+from local_terminal.core.models import CandidateTrack, TargetState
 
 
 class TrackStateEstimator:

@@ -12,8 +12,8 @@
 # works: tracks advance through the legacy VALIDATING → IDENTIFIED path.
 from __future__ import annotations
 
-from local_terminal.models import CandidateTrack
-from local_terminal.states import CandidateState
+from local_terminal.core.models import CandidateTrack
+from local_terminal.core.states import CandidateState
 
 
 class CandidateLifecycleManager:

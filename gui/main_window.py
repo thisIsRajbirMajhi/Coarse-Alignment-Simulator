@@ -65,25 +65,6 @@ class MainWindow(QMainWindow):
         self.setStatusBar(sb)
         self._statusbar = sb
 
-        # Testing presets (auto-configure + auto-start).
-        try:
-            from presets import list_presets as _list_presets
-            self._presets = _list_presets()
-        except Exception as e:
-            log.debug("presets unavailable: %s", e)
-            self._presets = []
-        try:
-            self.controls.preset_combo.clear()
-            for item in self._presets:
-                self.controls.preset_combo.addItem(
-                    f"[{item['category']}] {item['name']}", userData=item["id"])
-            if self.controls.preset_combo.count() == 0:
-                self.controls.preset_combo.addItem("No presets", userData=None)
-                self.controls.btn_preset.setEnabled(False)
-        except Exception as e:
-            log.debug("preset combo populate skipped: %s", e)
-        self.controls.btn_preset.clicked.connect(self._on_preset_run)
-
         # --- signals: views -> controller -> session ---
         self.controls.btn_start.clicked.connect(self.controller.start)
         self.controls.btn_stop.clicked.connect(self.controller.stop)
@@ -158,53 +139,6 @@ class MainWindow(QMainWindow):
                     self.windows._settings.update_telemetry(telemetry_packet)
                 except Exception as e:
                     log.debug("dialog telemetry update skipped: %s", e)
-
-    # -- testing presets ----------------------------------------------
-    def _on_preset_run(self) -> None:
-        """Apply selected preset to ALL modules and start automatically."""
-        try:
-            preset_id = self.controls.preset_combo.currentData()
-        except Exception:
-            preset_id = None
-        if not preset_id:
-            self._statusbar.showMessage("No testing preset selected")
-            return
-        self.apply_preset(preset_id, autostart=True)
-
-    def apply_preset(self, preset_id: str, autostart: bool = True) -> bool:
-        """Auto-configure session from preset; optionally auto-start. Returns ok."""
-        try:
-            from presets.runner import apply_to_session
-            from presets.presets import get_preset
-            preset = get_preset(preset_id)
-        except Exception as e:
-            self._statusbar.showMessage(f"Unknown preset: {preset_id}")
-            log.error("preset lookup failed: %s", e)
-            return False
-        try:
-            apply_to_session(self.session, preset_id)
-        except Exception as e:
-            self.controller.errorRaised.emit(f"Preset apply failed: {e}")
-            log.exception("preset apply failed")
-            return False
-        try:
-            self.sim_view.invalidate_world_cache()
-            self.presenter.reset()
-            self.windows.drop_settings()
-            self.windows.sync_dialog(self.session)
-        except Exception as e:
-            log.debug("preset view sync skipped: %s", e)
-        try:
-            self._statusbar.showMessage(f"Preset: {preset.name} — starting")
-        except Exception:
-            pass
-        if autostart:
-            try:
-                self.controller.stop()
-            except Exception:
-                pass
-            self.controller.start()
-        return True
 
     # -- slots --------------------------------------------------------
     def _on_pause_button(self) -> None:

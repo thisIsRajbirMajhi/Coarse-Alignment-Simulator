@@ -8,13 +8,13 @@ from typing import Any
 import numpy as np
 
 from common.rng import get_rng
-from local_terminal.acquisition import AcquisitionScanner
+from local_terminal.acquisition.acquisition import AcquisitionScanner
 from local_terminal.config import LocalTerminalConfig
-from local_terminal.detection import detect_beacon_candidates, estimate_wavelength_nm
-from local_terminal.models import CameraFrame, UpdateInput
-from local_terminal.states import LocalTerminalState as _PipelineState
-from local_terminal.system import LocalTerminalSystem
-from local_terminal.tracking import TargetTracker
+from local_terminal.optical.detection import detect_beacon_candidates, estimate_wavelength_nm
+from local_terminal.core.models import CameraFrame, UpdateInput
+from local_terminal.core.states import LocalTerminalState as _PipelineState
+from local_terminal.core.system import LocalTerminalSystem
+from local_terminal.tracking.tracking import TargetTracker
 
 
 class LocalTerminal:
@@ -140,11 +140,7 @@ class LocalTerminal:
         self.tilt = float(np.clip(self.tilt, tilt_lo, tilt_hi))
 
     def _quantize(self, delta: float) -> float:
-        res = float(self.config.ptz.resolution)
-        if res <= 1e-6:
-            return float(delta)
-        steps = round(delta / res)
-        return float(steps * res)
+        return float(delta)
 
     def _slew_limit(self, delta: float, dt: float, is_pan: bool = True) -> float:
         if dt <= 1e-9:
@@ -203,28 +199,7 @@ class LocalTerminal:
             if is_pan:
                 self._last_dir_x = dir_sign
                 self._backlash_pending_x = pending
-            else:
-                self._last_dir_y = dir_sign
-                self._backlash_pending_y = pending
-        return float(delta)
-
     def _apply_delta(self, d_pan: float, d_tilt: float, dt: float) -> None:
-        d_pan = self._apply_backlash(d_pan, is_pan=True)
-        d_tilt = self._apply_backlash(d_tilt, is_pan=False)
-
-        d_pan = self._slew_limit(d_pan, dt, is_pan=True)
-        d_tilt = self._slew_limit(d_tilt, dt, is_pan=False)
-
-        if dt > 1e-9:
-            des_vx = float(d_pan) / float(dt)
-            des_vy = float(d_tilt) / float(dt)
-            lim_vx = self._accel_limit(des_vx, self._last_vx, dt, is_pan=True)
-            lim_vy = self._accel_limit(des_vy, self._last_vy, dt, is_pan=False)
-            d_pan = float(lim_vx * dt)
-            d_tilt = float(lim_vy * dt)
-            self._last_vx = float(lim_vx)
-            self._last_vy = float(lim_vy)
-
         d_pan = self._quantize(d_pan)
         d_tilt = self._quantize(d_tilt)
 
@@ -259,27 +234,11 @@ class LocalTerminal:
     def move(self, d_pan: float, d_tilt: float, dt: float | None = None) -> None:
         """Queue or immediately apply relative pan/tilt motion."""
         if dt is None:
-            # Legacy direct path: still run through actuator physics with a
-            # large dt so slew/accel don't clip test jumps, but backlash,
-            # quantization and clamping are honoured (no silent bypass).
+            # Legacy direct path
             self._apply_delta(float(d_pan), float(d_tilt), 1.0)
             return
 
-        latency_s = float(self.config.ptz.latency) / 1000.0
-        jit_ms = float(self.config.realism.latency_jitter)
-        if jit_ms > 1e-9 and latency_s > 1e-6:
-            j = float(np.clip(self._rng.normal(0, jit_ms), -jit_ms * 2.5, jit_ms * 2.5)) / 1000.0
-            latency_s = max(0.0, latency_s + j)
-
-        if latency_s <= 1e-6:
-            self._apply_delta(d_pan, d_tilt, dt)
-        else:
-            due = self._time + latency_s
-            self._pending.append((due, float(d_pan), float(d_tilt), float(dt)))
-            # Bound the queue (§36): drop oldest under sustained overload
-            # so memory stays flat and commands stay fresh.
-            while len(self._pending) > 32:
-                self._pending.popleft()
+        self._apply_delta(d_pan, d_tilt, dt)
 
     def _clamp_search_region_to_reachable(self) -> None:
         """Clip deg search region to what the PTZ can actually reach.
@@ -763,7 +722,6 @@ class LocalTerminal:
             elif not out.tracking_status.target_acquired:
                 self._lock_dwell_time = 0.0
                 self.config.state.link_state = "NO_LINK"
-            self.config.communication.link_state = self.config.state.link_state
         except Exception:
             pass
 
@@ -791,7 +749,6 @@ class LocalTerminal:
             "position": {
                 "x": float(self.config.position.x),
                 "y": float(self.config.position.y),
-                "z": float(self.config.position.z),
                 "pan": float(self.pan),
                 "tilt": float(self.tilt),
                 "readout_pan": float(self.readout_pan),
@@ -825,12 +782,6 @@ class LocalTerminal:
                     else "DISCRIMINATING" if self.config.state.detection_state == "DISCRIMINATING"
                     else "IDLE"
                 ),
-            },
-            "communication": {
-                "terminal_id": self.config.communication.terminal_id,
-                "protocol": self.config.communication.protocol,
-                "capabilities": list(self.config.communication.capabilities),
-                "link_state": self.config.communication.link_state,
-                "dwell_time": float(self._lock_dwell_time),
+                "link_dwell_time": float(self._lock_dwell_time),
             },
         }

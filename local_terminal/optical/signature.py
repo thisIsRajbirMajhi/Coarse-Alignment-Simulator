@@ -6,7 +6,7 @@ from typing import Any
 
 import numpy as np
 
-from local_terminal.models import (
+from local_terminal.core.models import (
     CandidateTrack,
     OpticalConsistencyScore,
     SignatureScores,

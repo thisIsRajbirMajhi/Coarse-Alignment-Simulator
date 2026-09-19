@@ -16,7 +16,7 @@ from common.protocol.beacon import (
     decode_chips,
     terminal_id_to_byte,
 )
-from local_terminal.signal_analyzer import SignalMeasurement
+from local_terminal.signal.signal_analyzer import SignalMeasurement
 
 
 @dataclass
