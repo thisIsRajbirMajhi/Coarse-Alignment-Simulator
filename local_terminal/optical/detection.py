@@ -12,12 +12,16 @@ from typing import Any
 import numpy as np
 
 
-def detect_beacon_candidates(frame, *, minimum_peak: float = 40.0) -> list[dict[str, Any]]:
+def detect_beacon_candidates(frame, *, minimum_peak: float = 40.0,
+                             min_area: int = 2) -> list[dict[str, Any]]:
     """Find bright compact optical sources using *only* the captured image.
 
     Returned positions, size, colour and SNR are measured quantities.  This is
     deliberately independent of ``RemoteTerminal`` or world coordinates so it
     can be used unchanged with a real camera feed.
+
+    min_area: hot-pixel rejection floor in px (default 2; use 1 for
+    long-range mode where a real beacon may be a single pixel).
     """
     if frame is None:
         return []
@@ -51,10 +55,11 @@ def detect_beacon_candidates(frame, *, minimum_peak: float = 40.0) -> list[dict[
 
     candidates: list[dict[str, Any]] = []
     h, w = gray.shape
+    floor = max(1, int(min_area))
     for label in range(1, count):
         x, y, cw, ch, area = stats[label]
         # Reject isolated hot pixels and broad bright scenery.
-        if area < 2 or area > max(400, (h * w) // 20):
+        if area < floor or area > max(400, (h * w) // 20):
             continue
         component = labels[y:y + ch, x:x + cw] == label
         values = gray[y:y + ch, x:x + cw][component]

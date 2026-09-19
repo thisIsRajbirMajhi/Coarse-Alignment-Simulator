@@ -151,10 +151,11 @@ class OOKDemodulator:
         # Decision
         raw_bits = [1 if float(s) >= threshold else 0 for s in chip_samples]
 
-        # Natural corruption if BER is significant
+        # Natural corruption if BER is significant. Deterministic seed
+        # (reproducible runs); pass an explicit rng_seed to vary.
         recovered_bits = list(raw_bits)
         if bit_error_estimate > 0.05:
-            rng = random.Random(rng_seed)
+            rng = random.Random(0 if rng_seed is None else rng_seed)
             for idx in range(len(recovered_bits)):
                 if rng.random() < bit_error_estimate:
                     recovered_bits[idx] = 1 - recovered_bits[idx]
@@ -205,9 +206,10 @@ class SignalAnalyzer:
         hi = float(np.percentile(intensity_history, 95))
         meas.modulation_depth = float(np.clip(span / max(hi, 1.0), 0.0, 1.0))
 
-        # BER estimate from SNR
+        # BER estimate from SNR (coherent OOK: 0.5*erfc(sqrt(Eb/N0)/2) with
+        # chip energy ≈ bit energy and matched filtering assumed).
         snr_lin = 10.0 ** (meas.chip_snr_db / 20.0)
-        meas.bit_error_estimate = float(0.5 * math.erfc(snr_lin / (2.0 * math.sqrt(2.0))))
+        meas.bit_error_estimate = float(0.5 * math.erfc(snr_lin / 2.0))
         meas.bit_error_estimate = float(np.clip(meas.bit_error_estimate, 0.0, 0.5))
 
         # Signal quality
@@ -243,13 +245,17 @@ class SignalAnalyzer:
                 pass
         meas.estimated_chip_rate_hz = chip_rate
 
-        # Resample to chip rate grid
+        # Resample to chip rate grid. Floor-partitioned bins cover [0, n)
+        # exactly once each: per-bin round() could drop a bin (i1 == i0) or
+        # double-count a sample on non-integer grids (up to half-chip skew).
         samples_per_chip = max(1.0, frame_rate / chip_rate)
         n_chips_avail = int(n / samples_per_chip)
         chip_vals: list[float] = []
         for ci in range(n_chips_avail):
-            i0 = int(round(ci * samples_per_chip))
-            i1 = min(n, int(round((ci + 1) * samples_per_chip)))
+            i0 = min(n - 1, int(ci * samples_per_chip))
+            i1 = min(n, int((ci + 1) * samples_per_chip))
+            if i1 <= i0:
+                i1 = min(n, i0 + 1)
             if i1 > i0:
                 chip_vals.append(float(normed[i0:i1].mean()))
         meas.chip_samples = chip_vals

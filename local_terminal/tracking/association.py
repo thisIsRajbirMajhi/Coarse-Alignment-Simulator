@@ -28,8 +28,8 @@ class CandidateAssociationManager:
     # Lifecycle rank shared with the overload cap (system.py): identified
     # tracks outrank tentative ones when competing for a measurement.
     _RANK = {
-        "TRACKING": 9, "ACQUIRED": 8, "SELECTED": 7, "IDENTIFIED": 6,
-        "REACQUIRING": 5, "DEGRADED": 4, "VALIDATING": 3, "TENTATIVE": 2,
+        "TRACKING": 9, "ACQUIRED": 8, "ACQUIRING": 8, "SELECTED": 7, "IDENTIFIED": 6,
+        "REACQUIRING": 5, "DEGRADED": 4, "TENTATIVE": 2,
         "SEEN": 1, "LOST": 0, "REJECTED": -1, "EXPIRED": -2,
     }
 

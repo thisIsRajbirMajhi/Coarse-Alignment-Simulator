@@ -93,6 +93,10 @@ class TargetTracker:
             self.target_locked = False
             if self.lost_time > 1.0:
                 self._initialized = False
+                # Long outage: bleed the integral so a reappearance far away
+                # does not start from a fully wound-up accumulator.
+                self._integral_x *= 0.9
+                self._integral_y *= 0.9
             return {
                 "active": self.config.mode in ("TRACKING", "AUTO"),
                 "locked": False,
@@ -106,8 +110,21 @@ class TargetTracker:
             }
 
         # Spot is present
+        was_lost = self.lost_time > 0.5
+        prev_lost_time = float(self.lost_time)
         self.lost_time = 0.0
         self.target_locked = True
+        if was_lost:
+            # Reappearance after outage: scale the integral by remaining
+            # trust so stale windup cannot drive a huge transient when the
+            # target returns at a very different position.
+            scale = max(0.0, 1.0 - prev_lost_time)
+            self._integral_x *= scale
+            self._integral_y *= scale
+            self._prev_err_x = None
+            self._prev_err_y = None
+            self._prev_deriv_x = 0.0
+            self._prev_deriv_y = 0.0
         sx, sy = spot_center_fov
         raw_err_x = sx - cx_target
         raw_err_y = sy - cy_target
@@ -155,7 +172,10 @@ class TargetTracker:
             self._last_raw_x = raw_err_x
             self._last_raw_y = raw_err_y
 
-            # Exponential smoothing
+            # Exponential smoothing: alpha blends raw measurement in.
+            # NOTE(smoothing semantics): alpha = 1 - smoothing, so a LARGER
+            # smoothing value means a SLOWER (more heavily filtered) response
+            # and a smaller value means more responsive tracking.
             alpha = max(0.01, min(1.0, 1.0 - self.config.smoothing))
             self.smoothed_err_x = alpha * raw_err_x + (1.0 - alpha) * self.smoothed_err_x
             self.smoothed_err_y = alpha * raw_err_y + (1.0 - alpha) * self.smoothed_err_y
@@ -217,13 +237,15 @@ class TargetTracker:
         i_x = float(self.config.ki) * self._integral_x
         i_y = float(self.config.ki) * self._integral_y
 
-        # Derivative with low-pass filtering
+        # Derivative with low-pass filtering (alpha from config so different
+        # mechanics can tune damping without code changes).
         if self._prev_err_x is None or self._prev_err_y is None:
             deriv_x, deriv_y = 0.0, 0.0
         else:
             raw_dx = (eff_err_x - self._prev_err_x) / dt
             raw_dy = (eff_err_y - self._prev_err_y) / dt
-            alpha_d = 0.3
+            alpha_d = float(getattr(self.config, "derivative_alpha", 0.3) or 0.3)
+            alpha_d = max(0.01, min(1.0, alpha_d))
             deriv_x = alpha_d * raw_dx + (1.0 - alpha_d) * self._prev_deriv_x
             deriv_y = alpha_d * raw_dy + (1.0 - alpha_d) * self._prev_deriv_y
             self._prev_deriv_x = deriv_x

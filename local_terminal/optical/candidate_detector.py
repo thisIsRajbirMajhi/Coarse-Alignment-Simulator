@@ -14,17 +14,25 @@ class CandidateDetector:
         self.config = config
         self._next_measurement = 1
 
+    def reset_counter(self, start: int = 1) -> None:
+        """Restart measurement IDs (called when the track pool drains)."""
+        self._next_measurement = int(max(1, start))
+
     def detect(self, processed: ProcessedFrame | None, timestamp: float = 0.0,
                raw_frame: Any = None) -> list[DetectionCandidate]:
         if processed is None or processed.raw_image is None:
             return []
         try:
             intensity_floor = 30.0
+            min_area = 2
             try:
-                intensity_floor = max(30.0, float(getattr(getattr(self.config, "detection", self.config), "intensity_threshold", 30.0)))
+                det_cfg = getattr(self.config, "detection", self.config)
+                intensity_floor = max(30.0, float(getattr(det_cfg, "intensity_threshold", 30.0)))
+                min_area = int(getattr(det_cfg, "min_detection_area", 2) or 2)
             except Exception:
                 pass
-            raw_list = detect_beacon_candidates(processed.raw_image, minimum_peak=intensity_floor)
+            raw_list = detect_beacon_candidates(processed.raw_image, minimum_peak=intensity_floor,
+                                                min_area=min_area)
         except Exception:
             return []
         out: list[DetectionCandidate] = []

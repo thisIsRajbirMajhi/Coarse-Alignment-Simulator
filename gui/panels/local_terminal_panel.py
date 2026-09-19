@@ -326,13 +326,6 @@ class LocalTerminalPanel(BaseConfigPanel):
 
         self._setup_backward_compatibility_aliases()
         self._wire_signals()
-        # Restore persisted Advanced state (default collapsed per spec).
-        try:
-            from gui.components import expansion_state as _exp_state
-            if _exp_state("local/advanced", False):
-                self.toggle_advanced()
-        except Exception:
-            pass
 
     def toggle_advanced(self) -> None:
         self._advanced_visible = not getattr(self, "_advanced_visible", False)

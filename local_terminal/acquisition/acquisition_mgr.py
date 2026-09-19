@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from local_terminal.core.lifecycle import transition_track
 from local_terminal.core.models import AcquisitionResult, CandidateTrack
 from local_terminal.core.states import CandidateState
 
@@ -56,12 +57,22 @@ class AcquisitionManager:
         self._confirm_windows: dict[str, list[float]] = {}
         self._prev_centroid: dict[str, tuple[float, float]] = {}
 
+    def prune_dead(self, live_ids: set[str]) -> None:
+        """Drop per-track windows/centroids for dead tracks (memory hygiene)."""
+        for store in (self._confirm_windows, self._prev_centroid):
+            for tid in [k for k in store if k not in live_ids]:
+                store.pop(tid, None)
+        # Hard cap against pathological growth (oldest out).
+        for store in (self._confirm_windows, self._prev_centroid):
+            while len(store) > 256:
+                store.pop(next(iter(store)), None)
+
     def select(self, tracks: list[CandidateTrack]) -> CandidateTrack | None:
         """Pick the best candidate from the active track pool.
 
         Phase-2 priority order:
           1. identity_matched + IDENTIFIED/ACQUIRED/TRACKING (identity-confirmed)
-          2. IDENTIFIED/VALIDATING without identity data (optical path)
+          2. IDENTIFIED without identity data (optical path)
           3. DECODING / IDENTITY_UNKNOWN (still accumulating)
           4. Others
 
@@ -82,6 +93,7 @@ class AcquisitionManager:
                         if t.identity_matched
                         and t.lifecycle_state in (
                             CandidateState.IDENTIFIED, CandidateState.SELECTED,
+                            CandidateState.ACQUIRING,
                             CandidateState.ACQUIRED, CandidateState.TRACKING,
                             CandidateState.DEGRADED, CandidateState.REACQUIRING)]
         # Tier 2: optical-only identified (no identity data / wildcard)
@@ -89,6 +101,7 @@ class AcquisitionManager:
                           if not t.identity_matched
                           and t.lifecycle_state in (
                               CandidateState.IDENTIFIED, CandidateState.SELECTED,
+                              CandidateState.ACQUIRING,
                               CandidateState.ACQUIRED, CandidateState.TRACKING,
                               CandidateState.DEGRADED, CandidateState.REACQUIRING)]
         # Tier 3: still decoding
@@ -99,9 +112,9 @@ class AcquisitionManager:
 
         pool = id_confirmed or opt_identified or decoding
         if not pool:
-            # Fall back to any alive candidate
+            # Fall back to any alive pre-identification candidate
             pool = [t for t in eligible if t.lifecycle_state in (
-                CandidateState.VALIDATING, CandidateState.TENTATIVE)]
+                CandidateState.TENTATIVE,)]
         if not pool:
             return None
 
@@ -115,9 +128,13 @@ class AcquisitionManager:
                     t.hit_count, -t.miss_count)
 
         pool.sort(key=key, reverse=True)
-        return pool[0]
+        best = pool[0]
+        if best.lifecycle_state == CandidateState.IDENTIFIED:
+            transition_track(best, CandidateState.SELECTED, "acq-selected")
+        return best
 
-    def confirm(self, track: CandidateTrack | None, timestamp: float) -> AcquisitionResult:
+    def confirm(self, track: CandidateTrack | None, timestamp: float,
+                update_lifecycle: bool = True) -> AcquisitionResult:
         """Evaluate dual lock and update confirmation window.
 
         Returns acquired=True only when IDENTITY LOCK + SPATIAL LOCK are both active
@@ -145,7 +162,7 @@ class AcquisitionManager:
         if track.is_impostor:
             window = self._confirm_windows.setdefault(track.observation_id, [])
             window.append(-2.0)
-            del window[:-32]
+            del window[:-max(32, int(self.config.minimum_confirmation_count * 5) + 4)]
             return AcquisitionResult(acquired=False, observation_id=track.observation_id,
                                      confidence=float(track.signature.overall_score),
                                      timestamp=float(timestamp))
@@ -156,23 +173,27 @@ class AcquisitionManager:
             id_locked = bool(track.signal_state.identity_matched)
 
         # ── Confirmation window ───────────────────────────────────────────
+        # Window sized to the check horizon so large minimum_confirmation_count
+        # values can actually accumulate enough positives.
+        window_cap = max(32, int(self.config.minimum_confirmation_count * 5) + 4)
         window = self._confirm_windows.setdefault(track.observation_id, [])
         window.append(float(timestamp) if (spatial_lock and id_locked) else -1.0)
-        del window[:-32]
+        del window[:-window_cap]
 
         positives = sum(1 for v in window[-int(self.config.minimum_confirmation_count * 5):] if v >= 0)
         acquired = bool(
             positives >= self.config.minimum_confirmation_count
             and track.lifecycle_state in (
                 CandidateState.IDENTIFIED, CandidateState.SELECTED,
+                CandidateState.ACQUIRING,
                 CandidateState.ACQUIRED, CandidateState.TRACKING,
                 CandidateState.DEGRADED, CandidateState.REACQUIRING)
         )
 
-        if acquired and track.lifecycle_state == CandidateState.IDENTIFIED:
-            track.lifecycle_state = CandidateState.SELECTED
-        if acquired:
-            track.lifecycle_state = CandidateState.ACQUIRED
+        # Dual-lock confirmation transition
+        if acquired and update_lifecycle:
+            if track.lifecycle_state in (CandidateState.IDENTIFIED, CandidateState.SELECTED, CandidateState.ACQUIRING):
+                transition_track(track, CandidateState.ACQUIRED, "dual-lock")
 
         return AcquisitionResult(acquired=acquired, observation_id=track.observation_id,
                                  confidence=float(track.signature.overall_score),

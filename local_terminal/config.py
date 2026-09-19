@@ -314,6 +314,7 @@ class AcquisitionConfig:
     search_region_tilt_max: float = 10.0  # deg
     search_speed: float = 15.0            # deg/s
     timeout: float = 30.0                 # s
+    reacquisition_timeout: float = 1.5    # s — REACQ coast budget before LOST
 
     def validate(self) -> AcquisitionConfig:
         modes = {"MANUAL", "SEARCH", "AUTO", "AUTO_ACQUISITION", "TARGET_POINTING"}
@@ -333,6 +334,7 @@ class AcquisitionConfig:
             self.search_region_tilt_min, self.search_region_tilt_max = self.search_region_tilt_max, self.search_region_tilt_min
         self.search_speed = float(max(0.1, min(self.search_speed, 60.0)))
         self.timeout = float(max(1.0, min(self.timeout, 300.0)))
+        self.reacquisition_timeout = float(max(0.5, min(float(self.reacquisition_timeout or 1.5), 30.0)))
         return self
 
     @classmethod
@@ -363,6 +365,7 @@ class DetectionConfig:
     bandwidth: float = 10.0               # nm
     intensity_threshold: float = 0.0      # DN / power threshold
     minimum_snr: float = 8.0              # dB
+    min_detection_area: int = 2           # px — hot-pixel floor (1 = long-range)
     expected_spot_size: float = 1.0       # mrad
     expected_spot_tolerance: float = 1.5  # mrad
     expected_spot_unit: str = "mrad"
@@ -375,6 +378,7 @@ class DetectionConfig:
         self.bandwidth = float(max(0.1, min(self.bandwidth, 200.0)))
         self.intensity_threshold = float(max(0.0, self.intensity_threshold))
         self.minimum_snr = float(max(0.0, min(self.minimum_snr, 100.0)))
+        self.min_detection_area = int(max(1, min(int(self.min_detection_area or 2), 16)))
         self.expected_spot_size = float(max(0.01, min(self.expected_spot_size, 50.0)))
         self.expected_spot_tolerance = float(max(0.0, min(self.expected_spot_tolerance, 20.0)))
         self.expected_spot_unit = str(self.expected_spot_unit or "mrad").strip()
@@ -461,11 +465,12 @@ class TrackingConfig:
     update_rate: int = 30                 # Hz
     prediction: bool = True
     prediction_horizon: float = 0.15      # s (0.5s overshoots with noisy vel estimates)
-    smoothing: float = 0.2
+    smoothing: float = 0.2  # 0..1 EMA factor: LARGER = slower/smoother, smaller = responsive
     lost_target_behavior: str = "RESUME_SEARCH"  # RESUME_SEARCH | HOLD_POSITION | RETURN_HOME
     kp: float = 0.25                      # Proportional gain
     ki: float = 0.05                      # Integral gain
     kd: float = 0.02                      # Derivative gain
+    derivative_alpha: float = 0.3         # low-pass alpha for D term (0..1)
     dead_zone: float = 0.5                # px deadband
     output_clamp: float = 500.0           # max correction clamp
 
@@ -486,6 +491,7 @@ class TrackingConfig:
         self.kp = float(max(0.0, min(self.kp, 10.0)))
         self.ki = float(max(0.0, min(self.ki, 10.0)))
         self.kd = float(max(0.0, min(self.kd, 10.0)))
+        self.derivative_alpha = float(max(0.01, min(float(self.derivative_alpha or 0.3), 1.0)))
         self.dead_zone = float(max(0.0, min(self.dead_zone, 50.0)))
         self.output_clamp = float(max(1.0, min(self.output_clamp, 5000.0)))
         return self

@@ -1,7 +1,26 @@
 # local_terminal/reacquisition.py - Module 11: Reacquisition Manager (§§26-27).
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
+from typing import Any
+
+SEQ_MODULUS = 256  # 8-bit beacon sequence counter
+SEQ_FORWARD_WINDOW = 128  # forward distances below this count as advancing
+
+
+def seq_is_newer(new_seq: int, old_seq: int) -> bool:
+    """Modular strictly-advancing check handling 255→0 wrap and reboot.
+
+    old_seq < 0 (unknown) accepts anything. Duplicate (distance 0) is not
+    newer. Forward distance in 1..127 counts as advancing; anything else
+    (replay, stale) does not.
+    """
+    if old_seq is None or int(old_seq) < 0:
+        return True
+    if new_seq is None or int(new_seq) < 0:
+        return False
+    return 1 <= (int(new_seq) - int(old_seq)) % SEQ_MODULUS <= SEQ_FORWARD_WINDOW - 1
 
 
 @dataclass
@@ -13,6 +32,7 @@ class ReacquisitionStage:
 @dataclass
 class ReacquisitionConfig:
     lost_target_timeout: float = 1.5
+    velocity_decay_tau_s: float = 2.0  # coast velocity decay (zero-order hold otherwise)
     stages: list[ReacquisitionStage] = field(default_factory=lambda: [
         ReacquisitionStage(2.0, "±2° around prediction"),
         ReacquisitionStage(5.0, "±5°"),
@@ -53,14 +73,32 @@ class ReacquisitionManager:
         self.old_observation_id = None
 
     def predict(self, dt: float) -> tuple[float, float] | None:
+        """Non-mutating prediction (safe to call any number of times)."""
         if not self.active or self.last_known is None:
             return None
         dt = max(0.0, float(dt))
         lx, ly = self.last_known
         vx, vy = self.velocity
-        px, py = lx + vx * dt, ly + vy * dt
-        self.last_known = (px, py)
-        return (px, py)
+        return (lx + vx * dt, ly + vy * dt)
+
+    def advance(self, dt: float) -> tuple[float, float] | None:
+        """Predict AND commit (single authorized coast step per frame).
+
+        Velocity decays exponentially (tau from config) so a decelerating
+        target does not overshoot the prediction cone forever.
+        """
+        pred = self.predict(dt)
+        if pred is None:
+            return None
+        self.last_known = pred
+        try:
+            tau = max(0.2, float(self.config.velocity_decay_tau_s))
+            decay = math.exp(-max(0.0, float(dt)) / tau)
+        except (TypeError, ValueError):
+            decay = 0.98
+        vx, vy = self.velocity
+        self.velocity = (vx * decay, vy * decay)
+        return pred
 
     def stage(self) -> ReacquisitionStage:
         t = self.elapsed
@@ -130,7 +168,7 @@ def can_merge_reacquisition(
 
     old_seq = int(getattr(old_track, "last_valid_sequence", -1))
     new_seq = int(getattr(new_track, "last_valid_sequence", -1))
-    if old_seq >= 0 and new_seq <= old_seq:
+    if not seq_is_newer(new_seq, old_seq):
         return False
 
     # Spatial check

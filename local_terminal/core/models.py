@@ -257,6 +257,10 @@ class CandidateTrack:
     meas_intensity: float = 0.0
     meas_snr: float = 0.0
     meas_spot_px: float = 0.0
+    meas_wavelength_nm: float = 0.0
+    wavelength_confidence: float = 0.0
+    meas_modulation_depth: float = 0.0
+    temporal_match_score: float = 0.0
     # state estimate (pixels + velocity/accel)
     est_x: float = 0.0
     est_y: float = 0.0

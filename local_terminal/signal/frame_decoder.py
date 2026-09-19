@@ -55,6 +55,8 @@ class TrackDecodeState:
     """Per-track streaming state machine for frame synchronisation (§13, §18)."""
 
     WINDOW = 1600  # hold sufficient chips for multiple frames
+    # Max chips appended per update: bounds reset floods; steady flow is ~1.
+    MAX_APPEND = 64
 
     def __init__(self) -> None:
         self._bit_buf: list[int] = []
@@ -87,6 +89,13 @@ class TrackDecodeState:
                 # History buffer was cleared/reset; restart from 0
                 self.last_processed_sample_index = 0
             new_samples = chip_samples[self.last_processed_sample_index : sample_index]
+            if len(new_samples) > self.MAX_APPEND:
+                # Reset flood guard: a rebuilt window is not all-new data.
+                new_samples = new_samples[-self.MAX_APPEND :]
+            if not new_samples and chip_samples:
+                # Window slid without index advance (capped history): keep the
+                # stream flowing with the newest chip instead of stalling.
+                new_samples = chip_samples[-1:]
             self.last_processed_sample_index = sample_index
         else:
             # Direct/standalone push (e.g. unit tests)
@@ -117,15 +126,16 @@ class TrackDecodeState:
                 self._consec_valid = 1
                 self._success_count += 1
                 self.last_valid_frame = result.frame
-            elif seq > self._last_seq:
+            elif seq == self._last_seq:
+                # Duplicate sequence: valid decode but does NOT increment valid persistence (§18)
+                is_new = False
+            elif 1 <= (int(seq) - int(self._last_seq)) % 256 <= 127:
+                # Advancing (modular: tolerates 255→0 wrap / reboot)
                 is_new = True
                 self._last_seq = seq
                 self._consec_valid += 1
                 self._success_count += 1
                 self.last_valid_frame = result.frame
-            elif seq == self._last_seq:
-                # Duplicate sequence: valid decode but does NOT increment valid persistence (§18)
-                is_new = False
             else:
                 # Older sequence: invalid sequence
                 is_new = False

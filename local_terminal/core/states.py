@@ -43,7 +43,7 @@ class CandidateState(str, Enum):
 
     SEEN = "SEEN"
     TENTATIVE = "TENTATIVE"
-    VALIDATING = "VALIDATING"
+    VALIDATING = "VALIDATING"              # Optical-path validation state (§4, §23)
     # Phase-2 communication-path states
     SIGNAL_DETECTED = "SIGNAL_DETECTED"    # modulated signal observed
     DECODING = "DECODING"                  # actively decoding beacon frames

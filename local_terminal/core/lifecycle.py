@@ -4,16 +4,114 @@
 # New state path:
 #   SEEN → TENTATIVE → SIGNAL_DETECTED → DECODING → IDENTITY_UNKNOWN
 #                                                     ↓  (identity matched)
-#                                                 IDENTIFIED → SELECTED → ACQUIRED → TRACKING
+#                                                 IDENTIFIED → SELECTED → ACQUIRING → ACQUIRED → TRACKING
 #                                                     ↓  (impostor)
 #                                                 REJECTED  (hard, permanent)
 #
-# The optical-only path (no identification_code / wildcard profile) still
-# works: tracks advance through the legacy VALIDATING → IDENTIFIED path.
+# Optical-only path (wildcard profile / legacy optical mode): tracks advance
+# TENTATIVE → IDENTIFIED directly on signature/score confirmation.
 from __future__ import annotations
+
+import logging
+from collections import deque
 
 from local_terminal.core.models import CandidateTrack
 from local_terminal.core.states import CandidateState
+
+log = logging.getLogger(__name__)
+
+# Bounded audit trail of recent lifecycle transitions (diagnostics, X3).
+_TRANSITION_HISTORY: deque[tuple[str, str, str, str]] = deque(maxlen=256)
+
+
+def recent_transitions(n: int = 20) -> list[tuple[str, str, str, str]]:
+    """Last n (observation_id, old, new, reason) transitions."""
+    return list(_TRANSITION_HISTORY)[-max(1, int(n)):]
+
+# Central transition table: every legal lifecycle edge. transition_track()
+# warns (and allows) anything outside it so illegal races surface in logs
+# instead of silently corrupting state.
+_VALID_TRANSITIONS: dict[CandidateState, frozenset[CandidateState]] = {
+    CandidateState.SEEN: frozenset({
+        CandidateState.TENTATIVE, CandidateState.SIGNAL_DETECTED,
+        CandidateState.REJECTED, CandidateState.EXPIRED}),
+    CandidateState.TENTATIVE: frozenset({
+        CandidateState.VALIDATING, CandidateState.SIGNAL_DETECTED,
+        CandidateState.IDENTIFIED, CandidateState.REJECTED, CandidateState.EXPIRED}),
+    CandidateState.VALIDATING: frozenset({
+        CandidateState.SIGNAL_DETECTED, CandidateState.IDENTIFIED,
+        CandidateState.REJECTED, CandidateState.EXPIRED}),
+    CandidateState.SIGNAL_DETECTED: frozenset({
+        CandidateState.DECODING, CandidateState.IDENTIFIED,
+        CandidateState.REJECTED, CandidateState.EXPIRED}),
+    CandidateState.DECODING: frozenset({
+        CandidateState.IDENTITY_UNKNOWN, CandidateState.IDENTIFIED,
+        CandidateState.REJECTED, CandidateState.EXPIRED}),
+    CandidateState.IDENTITY_UNKNOWN: frozenset({
+        CandidateState.IDENTIFIED, CandidateState.REJECTED, CandidateState.EXPIRED}),
+    CandidateState.IDENTIFIED: frozenset({
+        CandidateState.SELECTED, CandidateState.ACQUIRING, CandidateState.ACQUIRED,
+        CandidateState.DEGRADED, CandidateState.REJECTED, CandidateState.EXPIRED}),
+    CandidateState.SELECTED: frozenset({
+        CandidateState.ACQUIRING, CandidateState.ACQUIRED,
+        CandidateState.DEGRADED, CandidateState.REJECTED, CandidateState.EXPIRED}),
+    CandidateState.ACQUIRING: frozenset({
+        CandidateState.ACQUIRED, CandidateState.TRACKING,
+        CandidateState.DEGRADED, CandidateState.REJECTED, CandidateState.EXPIRED}),
+    CandidateState.ACQUIRED: frozenset({
+        CandidateState.TRACKING, CandidateState.DEGRADED, CandidateState.REACQUIRING,
+        CandidateState.LOST, CandidateState.REJECTED, CandidateState.EXPIRED}),
+    CandidateState.TRACKING: frozenset({
+        CandidateState.DEGRADED, CandidateState.REACQUIRING,
+        CandidateState.LOST, CandidateState.REJECTED, CandidateState.EXPIRED}),
+    CandidateState.DEGRADED: frozenset({
+        CandidateState.TRACKING, CandidateState.ACQUIRED, CandidateState.REACQUIRING,
+        CandidateState.LOST, CandidateState.REJECTED, CandidateState.EXPIRED}),
+    CandidateState.REACQUIRING: frozenset({
+        CandidateState.TRACKING, CandidateState.ACQUIRED, CandidateState.LOST,
+        CandidateState.REJECTED, CandidateState.EXPIRED}),
+    CandidateState.LOST: frozenset({
+        CandidateState.REACQUIRING,
+        CandidateState.REJECTED, CandidateState.EXPIRED}),
+    CandidateState.REJECTED: frozenset(),
+    CandidateState.EXPIRED: frozenset(),
+}
+
+
+def transition_track(track: CandidateTrack, new_state: CandidateState,
+                     reason: str = "") -> CandidateState:
+    """Validated lifecycle transition with audit logging.
+
+    Warns on illegal edges (fail-open: still applies so the pipeline cannot
+    strand a track). Terminal states REJECTED/EXPIRED never leave.
+    """
+    try:
+        old = track.lifecycle_state
+    except AttributeError:
+        return new_state
+    if old == new_state:
+        return old
+    if old in (CandidateState.REJECTED, CandidateState.EXPIRED):
+        log.warning("LT lifecycle blocked %s -> %s (%s) for %s",
+                    old, new_state, reason,
+                    getattr(track, "observation_id", "?"))
+        return old
+    allowed = _VALID_TRANSITIONS.get(old, frozenset())
+    if new_state not in allowed:
+        log.warning("LT lifecycle illegal %s -> %s (%s) for %s",
+                    old, new_state, reason,
+                    getattr(track, "observation_id", "?"))
+    else:
+        log.debug("LT lifecycle %s -> %s (%s) for %s",
+                  old, new_state, reason,
+                  getattr(track, "observation_id", "?"))
+    try:
+        _TRANSITION_HISTORY.append(
+            (str(getattr(track, "observation_id", "?")), str(old), str(new_state), str(reason)))
+    except Exception:
+        pass
+    track.lifecycle_state = new_state
+    return new_state
 
 
 class CandidateLifecycleManager:
@@ -47,12 +145,12 @@ class CandidateLifecycleManager:
 
         # Impostors are immediately and permanently rejected
         if track.is_impostor:
-            track.lifecycle_state = CandidateState.REJECTED
-            return CandidateState.REJECTED
+            return transition_track(track, CandidateState.REJECTED, "impostor")
 
         # Track already in a post-identification state — do not regress
         if st in (CandidateState.IDENTIFIED, CandidateState.SELECTED,
-                  CandidateState.ACQUIRED, CandidateState.TRACKING,
+                  CandidateState.ACQUIRING, CandidateState.ACQUIRED,
+                  CandidateState.TRACKING,
                   CandidateState.DEGRADED, CandidateState.REACQUIRING):
             return st
 
@@ -64,23 +162,22 @@ class CandidateLifecycleManager:
         # A decode was attempted — advance through comm-path states
         if st in (CandidateState.SEEN, CandidateState.TENTATIVE, CandidateState.VALIDATING):
             if ss.num_chip_samples >= 20:
-                track.lifecycle_state = CandidateState.SIGNAL_DETECTED
+                transition_track(track, CandidateState.SIGNAL_DETECTED, "samples")
                 st = CandidateState.SIGNAL_DETECTED
 
         if st == CandidateState.SIGNAL_DETECTED and ss.total_attempts > 0:
-            track.lifecycle_state = CandidateState.DECODING
+            transition_track(track, CandidateState.DECODING, "attempt")
             st = CandidateState.DECODING
 
         if st == CandidateState.DECODING:
             if ss.frame_valid:
-                track.lifecycle_state = CandidateState.IDENTITY_UNKNOWN
+                transition_track(track, CandidateState.IDENTITY_UNKNOWN, "frame")
                 st = CandidateState.IDENTITY_UNKNOWN
 
         if st == CandidateState.IDENTITY_UNKNOWN:
             if ss.identity_matched:
                 track.confirm_count += 1
-                track.lifecycle_state = CandidateState.IDENTIFIED
-                return CandidateState.IDENTIFIED
+                return transition_track(track, CandidateState.IDENTIFIED, "identity-match")
             # Specific failure reasons that are non-fatal (may resolve next frame)
             if reason in ("LOW_CONF", "BUILDING", "REPLAY"):
                 pass  # stay IDENTITY_UNKNOWN until match or timeout
@@ -102,8 +199,7 @@ class CandidateLifecycleManager:
 
         # Impostors must never be promoted by optical scoring
         if track.is_impostor or st == CandidateState.REJECTED:
-            track.lifecycle_state = CandidateState.REJECTED
-            return CandidateState.REJECTED
+            return transition_track(track, CandidateState.REJECTED, "impostor-hit")
 
         # Apply identity result first ONLY when identity data is active
         # (non-NO_DATA reason). Wildcard profile → reason stays NO_DATA → optical path.
@@ -121,15 +217,23 @@ class CandidateLifecycleManager:
 
         # Legacy optical path (used ONLY when legacy_optical_identification_enabled is explicitly True per §4, §23)
         if st == CandidateState.SEEN:
-            track.lifecycle_state = (CandidateState.TENTATIVE if track.hit_count >= self.tentative_hits
-                                     else CandidateState.SEEN)
+            transition_track(track, (CandidateState.TENTATIVE if track.hit_count >= self.tentative_hits
+                                     else CandidateState.SEEN), "hits")
         elif st == CandidateState.TENTATIVE:
-            track.lifecycle_state = CandidateState.VALIDATING if track.hit_count >= self.tentative_hits else st
+            if track.hit_count >= self.tentative_hits:
+                if self.legacy_optical_identification_enabled and signature_ok and score_ok:
+                    track.confirm_count += 1
+                    transition_track(track, CandidateState.IDENTIFIED, "optical-confirm")
+                elif not self.legacy_optical_identification_enabled:
+                    transition_track(track, CandidateState.VALIDATING, "validating-optical")
+                else:
+                    track.confirm_count = 0
+                # else: hold TENTATIVE until scores confirm or misses reject
         elif st == CandidateState.VALIDATING:
             if self.legacy_optical_identification_enabled and signature_ok and score_ok:
                 track.confirm_count += 1
                 if track.confirm_count >= 1:
-                    track.lifecycle_state = CandidateState.IDENTIFIED
+                    transition_track(track, CandidateState.IDENTIFIED, "optical-confirm")
             else:
                 track.confirm_count = 0
         elif st == CandidateState.IDENTIFIED:
@@ -138,22 +242,23 @@ class CandidateLifecycleManager:
             else:
                 track.confirm_count = max(0, track.confirm_count - 1)
                 if track.confidence < self.degrade_below:
-                    track.lifecycle_state = CandidateState.DEGRADED
-        elif st in (CandidateState.SELECTED, CandidateState.ACQUIRED, CandidateState.TRACKING):
+                    transition_track(track, CandidateState.DEGRADED, "low-confidence")
+        elif st in (CandidateState.SELECTED, CandidateState.ACQUIRING,
+                    CandidateState.ACQUIRED, CandidateState.TRACKING):
             if not signature_ok and track.confidence < self.degrade_below:
-                track.lifecycle_state = CandidateState.DEGRADED
+                transition_track(track, CandidateState.DEGRADED, "low-confidence")
         elif st == CandidateState.DEGRADED:
             if signature_ok and score_ok:
-                track.lifecycle_state = CandidateState.TRACKING
+                transition_track(track, CandidateState.TRACKING, "recovered")
             elif track.miss_count > 5:
-                track.lifecycle_state = CandidateState.REACQUIRING
+                transition_track(track, CandidateState.REACQUIRING, "misses")
         elif st == CandidateState.REACQUIRING:
             if signature_ok and score_ok:
-                track.lifecycle_state = CandidateState.TRACKING
+                transition_track(track, CandidateState.TRACKING, "recovered")
         elif st == CandidateState.LOST:
             if signature_ok and score_ok:
                 track.miss_count = 0
-                track.lifecycle_state = CandidateState.REACQUIRING
+                transition_track(track, CandidateState.REACQUIRING, "re-hit")
         elif st in (CandidateState.REJECTED, CandidateState.EXPIRED):
             pass
         return track.lifecycle_state
@@ -164,21 +269,22 @@ class CandidateLifecycleManager:
                  CandidateState.SIGNAL_DETECTED, CandidateState.DECODING, CandidateState.IDENTITY_UNKNOWN)
         if track.lifecycle_state in early:
             if track.miss_count > 10:
-                track.lifecycle_state = CandidateState.REJECTED
+                transition_track(track, CandidateState.REJECTED, "early-misses")
         elif track.lifecycle_state in (CandidateState.IDENTIFIED, CandidateState.SELECTED,
+                                       CandidateState.ACQUIRING,
                                        CandidateState.ACQUIRED, CandidateState.TRACKING,
                                        CandidateState.DEGRADED):
             if track.miss_count > 3:
-                track.lifecycle_state = CandidateState.REACQUIRING
+                transition_track(track, CandidateState.REACQUIRING, "misses")
             elif track.lifecycle_state in (CandidateState.TRACKING, CandidateState.ACQUIRED):
-                track.lifecycle_state = CandidateState.DEGRADED
+                transition_track(track, CandidateState.DEGRADED, "miss")
         elif track.lifecycle_state == CandidateState.REACQUIRING:
             if track.miss_count > 60:
-                track.lifecycle_state = CandidateState.LOST
+                transition_track(track, CandidateState.LOST, "reacq-misses")
         elif track.lifecycle_state == CandidateState.LOST:
             if track.miss_count > 90:
-                track.lifecycle_state = CandidateState.EXPIRED
+                transition_track(track, CandidateState.EXPIRED, "lost-misses")
         return track.lifecycle_state
 
     def reject(self, track: CandidateTrack) -> None:
-        track.lifecycle_state = CandidateState.REJECTED
+        transition_track(track, CandidateState.REJECTED, "manual")

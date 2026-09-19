@@ -20,7 +20,15 @@ from local_terminal.config import TargetPayloadConfig, TargetProfile
 
 
 class CanonicalStatus(str):
-    """String subclass that matches both specific sequence reason and canonical INVALID_SEQUENCE (§18)."""
+    """String subclass that matches both specific sequence reason and canonical INVALID_SEQUENCE (§18).
+
+    Equality is canonical-aware and symmetric between CanonicalStatus
+    instances; against a plain str it matches the specific value or the
+    canonical alias. (A plain str on the LEFT can never see the alias —
+    inherent to str subclassing; compare ``status == "INVALID_SEQUENCE"``
+    with the CanonicalStatus on the left.)
+    Hash is the canonical hash so equal values hash equal.
+    """
 
     def __new__(cls, value: str, canonical: str = "INVALID_SEQUENCE") -> CanonicalStatus:
         obj = str.__new__(cls, value)
@@ -28,12 +36,18 @@ class CanonicalStatus(str):
         return obj
 
     def __eq__(self, other: Any) -> bool:
-        if super().__eq__(other):
-            return True
-        return self._canonical == other
+        if isinstance(other, CanonicalStatus):
+            return self._canonical == other._canonical
+        if isinstance(other, str):
+            return str(self) == other or self._canonical == other
+        return NotImplemented
+
+    def __ne__(self, other: Any) -> bool:
+        eq = self.__eq__(other)
+        return eq if eq is NotImplemented else not eq
 
     def __hash__(self) -> int:
-        return super().__hash__()
+        return hash(self._canonical)
 
 
 @dataclass
@@ -225,6 +239,9 @@ class IdentityValidator:
         dec.wavelength_valid = True
 
         # Gate 8: Sequence validation / Replay guard (§18)
+        # Modular 8-bit comparison: advancing, duplicate, wrap (255→0) and
+        # reboot (small new seq after large old) are distinguished. A genuine
+        # reboot looks exactly like a wrap, so it is accepted and logged.
         seq = int(getattr(decoded, "sequence_number", -1))
         last_seq = self._last_seq.get(observation_id, -1)
         if seq >= 0 and last_seq >= 0:
@@ -234,12 +251,17 @@ class IdentityValidator:
                 dec.status = CanonicalStatus("DUPLICATE_SEQUENCE", "INVALID_SEQUENCE")
                 dec.reason = "DUPLICATE_SEQUENCE"
                 return dec
-            elif seq < last_seq:
+            fwd = (seq - last_seq) % 256
+            if not 1 <= fwd <= 127:
                 dec.sequence_valid = False
                 dec.sequence_ok = False
                 dec.status = CanonicalStatus("OLD_SEQUENCE", "INVALID_SEQUENCE")
                 dec.reason = "OLD_SEQUENCE"
                 return dec
+            if seq < last_seq:
+                import logging as _logging
+                _logging.getLogger(__name__).info(
+                    "LT identity seq wrap/reset %s: %d -> %d", observation_id, last_seq, seq)
         self._last_seq[observation_id] = seq
         dec.sequence_valid = True
         dec.sequence_ok = True

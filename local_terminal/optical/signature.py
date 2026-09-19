@@ -137,7 +137,7 @@ class SignatureAnalyzer:
         wl_diff = abs(wl - sig.spectral_center_nm)
         spectral = max(0.0, 1.0 - wl_diff / max(1.0, sig.spectral_tolerance_nm * 2.0))
         # spectral ambiguous gate handled by caller; keep raw score here
-        temporal, _, _, _, _ = self._temporal_scores(track)
+        temporal, est_hz, freq_conf, mod_conf, _ = self._temporal_scores(track)
         # spatial: spot size mrad
         spot_mrad = float(track.meas_spot_px * pixel_to_angle_mrad)
         spatial = max(0.0, 1.0 - abs(spot_mrad - sig.expected_spot_mrad) / max(0.1, sig.expected_spot_tol_mrad * 2.0))
@@ -153,6 +153,12 @@ class SignatureAnalyzer:
                                  quality_score=float(quality), overall_score=float(overall))
         track.signature = scores
         track.confidence = float(overall)
+        # Explicit separate measurement vs score assignments (§15, Rebuild.md)
+        track.meas_wavelength_nm = float(wl)
+        track.wavelength_confidence = float(spectral)
+        track.meas_modulation_depth = float(mod_conf)
+        track.temporal_match_score = float(temporal)
+        track.optical_quality = float(quality)
         return scores
 
     def confirmed(self, track: CandidateTrack) -> tuple[bool, str]:

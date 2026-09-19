@@ -12,10 +12,12 @@
 #   Step 7b — Continuous identity verification during TRACKING
 from __future__ import annotations
 
+import logging
 import math
 from typing import Any
 
 from local_terminal.acquisition.acquisition_mgr import AcquisitionConfig2, AcquisitionManager
+from local_terminal.core.lifecycle import transition_track
 from local_terminal.tracking.association import CandidateAssociationManager
 from local_terminal.optical.candidate_detector import CandidateDetector
 from local_terminal.tracking.estimator import TrackStateEstimator
@@ -47,7 +49,10 @@ from local_terminal.optical.signature import SignatureAnalyzer
 from local_terminal.core.state_machine import LocalStateMachine
 from local_terminal.core.states import CandidateState, LocalTerminalState
 from local_terminal.telemetry.telemetry_mgr import TelemetryManager
+from local_terminal.tracking.estimator import update_track_velocity
 from local_terminal.tracking.tracking_controller import TrackingController
+
+log = logging.getLogger(__name__)
 
 
 class LocalTerminalSystem:
@@ -94,7 +99,7 @@ class LocalTerminalSystem:
         acq_raw = getattr(config, "acquisition", None) if config is not None else None
         self.search = SearchManager(acq_raw, rng=self._rng)
         self.reacq = ReacquisitionManager(ReacquisitionConfig(
-            lost_target_timeout=1.5))
+            lost_target_timeout=float(getattr(acq_raw, "reacquisition_timeout", 1.5) or 1.5)))
         mode = str(getattr(acq_raw, "mode", "AUTO") or "AUTO").upper()
         init = (LocalTerminalState.SEARCHING if mode in ("SEARCH", "AUTO", "AUTO_ACQUISITION")
                 else LocalTerminalState.IDLE)
@@ -121,6 +126,16 @@ class LocalTerminalSystem:
             getattr(self._target_profile, "legacy_optical_identification_enabled", False)
         ) or (not require_id)
         self._id_check_counter: int = 0   # for periodic identity re-check during tracking
+        self._error_counts: dict[str, int] = {}  # per-stage swallowed-error diagnostics
+        self._loss_streak: int = 0  # consecutive non-acquired frames on the active lock
+
+    def _count_error(self, stage: str, exc: BaseException) -> None:
+        """Count + debug-log a contained pipeline error (never silent)."""
+        try:
+            self._error_counts[stage] = int(self._error_counts.get(stage, 0)) + 1
+        except Exception:
+            pass
+        log.debug("LT stage %s contained %r", stage, exc)
 
 
     # -- config helpers -------------------------------------------------
@@ -179,8 +194,8 @@ class LocalTerminalSystem:
         self.acquisition.config = self._build_acq(config)
         try:
             self.detector.config = config
-        except Exception:
-            pass
+        except Exception as e:
+            self._count_error("refresh_config", e)
         try:
             trk = getattr(config, "tracking", None)
             ang = getattr(config, "angular_model", None)
@@ -190,12 +205,20 @@ class LocalTerminalSystem:
                 self.estimator.prediction_horizon = float(getattr(trk, "prediction_horizon", 0.15) or 0.15)
             if ang is not None:
                 self.controller.angular_model = ang
-        except Exception:
-            pass
+        except Exception as e:
+            self._count_error("refresh_config", e)
         try:
             self.search.scanner.config = getattr(config, "acquisition", self.search.scanner.config)
-        except Exception:
-            pass
+        except Exception as e:
+            self._count_error("refresh_config", e)
+        # Propagate the reacquisition coast budget (R5) — never silently stale.
+        try:
+            acq = getattr(config, "acquisition", None)
+            if acq is not None and hasattr(self.reacq, "config"):
+                self.reacq.config.lost_target_timeout = float(
+                    getattr(acq, "reacquisition_timeout", 3.0) or 3.0)
+        except Exception as e:
+            self._count_error("refresh_config", e)
         self.acquisition_threshold = float(self.signature_cfg.minimum_score)
         # Phase-2: refresh identity pipeline
         try:
@@ -206,8 +229,106 @@ class LocalTerminalSystem:
             self.lifecycle.legacy_optical_identification_enabled = bool(
                 getattr(self._target_profile, "legacy_optical_identification_enabled", False)
             ) or (not require_id)
-        except Exception:
-            pass
+        except Exception as e:
+            self._count_error("refresh_config", e)
+
+    def _run_comm_path(self, tr: CandidateTrack, ts: float, dt: float,
+                       processed: Any, stamp_ts: float | None = None) -> None:
+        """Signal analysis + decode + identity for one track (§§9-14).
+
+        Shared by the hit branch and the brief-miss branch (P1): on misses
+        the persisted intensity history keeps chip continuity across AM
+        nulls. stamp_ts overrides the valid-frame timestamp (miss branch
+        stamps the last-seen time, not the gap frame).
+        """
+        try:
+            hist = list(tr.temporal.intensity_history)
+            times = list(tr.temporal.timestamps) if tr.temporal.timestamps else []
+            chip_rate = float(getattr(self._target_profile, "chip_rate_hz", 8.0))
+            bg_est = float(getattr(processed, "background_estimate", 0.0) if processed else 0.0)
+            sig_meas = self._signal_analyzer.analyze(hist, times, chip_rate, bg_est)
+
+            # §8 & §27: OpticalMeasurement
+            tr.optical_measurement = OpticalMeasurement(
+                centroid_x=float(tr.meas_x),
+                centroid_y=float(tr.meas_y),
+                peak_intensity=float(tr.meas_intensity),
+                integrated_intensity=float(tr.meas_intensity * max(1.0, tr.meas_spot_px)),
+                snr=float(tr.meas_snr),
+                apparent_diameter=float(tr.meas_spot_px),
+                background_level=bg_est,
+                spectral_estimate=float(getattr(tr.signature, "spectral_score", 1.0) * 1550.0),
+                timestamp=float(ts),
+            )
+            # §9 & §27: SignalMeasurement
+            tr.signal_measurement = sig_meas
+            tr.optical_quality = float(tr.signature.overall_score)
+            tr.signal_quality = float(sig_meas.signal_quality)
+            tr.filtered_position = (float(tr.est_x), float(tr.est_y))
+            tr.predicted_position = (float(tr.est_x + tr.est_vx * dt), float(tr.est_y + tr.est_vy * dt))
+            tr.velocity = (float(tr.est_vx), float(tr.est_vy))
+            tr.acceleration = (float(tr.est_ax), float(tr.est_ay))
+
+            # Update SignalState from signal measurement
+            ss = tr.signal_state
+            ss.chip_rate_hz = float(sig_meas.estimated_chip_rate_hz)
+            ss.modulation_depth = float(sig_meas.modulation_depth)
+            ss.chip_snr_db = float(sig_meas.chip_snr_db)
+            ss.bit_error_estimate = float(sig_meas.bit_error_estimate)
+            ss.num_chip_samples = int(sig_meas.num_samples)
+            if sig_meas.sufficient_data:
+                ss.state = "DECODING"
+            elif sig_meas.num_samples >= 20:
+                ss.state = "SAMPLING"
+
+            # §12: Frame decoder
+            df = self._frame_decoder.update(
+                tr.observation_id, sig_meas, tr._decoded_frame)
+            tr._decoded_frame = df
+            ss.frame_valid = bool(df.valid)
+            ss.decoded_terminal_id_byte = int(df.terminal_id_byte)
+            ss.decoded_network_id = int(df.network_id)
+            ss.decoded_sequence = int(df.sequence_number)
+            ss.decoded_capabilities = int(df.capabilities)
+            ss.decode_confidence = float(df.confidence)
+            ss.consecutive_valid = int(df.consecutive_valid)
+            ss.total_attempts = int(df.attempt_count)
+            ss.total_successes = int(df.success_count)
+            if df.valid:
+                ss.state = "VALID"
+
+            # §14: Identity validator
+            decision = self._id_matcher.match(tr.observation_id, df)
+            tr._identity_decision = decision
+            ss.identity_matched = bool(decision.matched)
+            ss.identity_reason = str(decision.reason)
+            ss.identity_confidence = float(decision.confidence)
+
+            # Populate §27 candidate track fields
+            tr.decoded_terminal_id = str(df.terminal_id) or str(df.terminal_id_str)
+            tr.decoded_token = str(getattr(df, "token", ""))
+            tr.decoded_wavelength_nm = float(getattr(df, "wavelength_nm", 0.0))
+            tr.sequence_number = int(df.sequence_number)
+            tr.identity_state = str(decision.status)
+            tr.identity_confidence = float(decision.confidence)
+            if df.valid and df.crc_ok:
+                tr.valid_frame_count += 1
+                tr.last_valid_frame_time = float(ts if stamp_ts is None else stamp_ts)
+                tr.last_valid_sequence = int(df.sequence_number)
+                tr.latest_frame = df.frame
+            elif sig_meas.sufficient_data:
+                tr.invalid_frame_count += 1
+
+            tr.synchronization_state = {
+                "synced": bool(df.valid or (sig_meas.sufficient_data and sig_meas.num_samples >= 20)),
+                "confidence": float(df.confidence),
+            }
+
+            # Hard-reject impostors immediately (§14, §17)
+            if tr.is_impostor:
+                transition_track(tr, CandidateState.REJECTED, "impostor")
+        except Exception as e:
+            self._count_error("comm_path", e)
 
 
     # -- main step ------------------------------------------------------
@@ -275,15 +396,17 @@ class LocalTerminalSystem:
         if power_on and frame is not None and frame.valid():
             try:
                 processed = self.frame_processor.process(frame)
-            except Exception:
+            except Exception as e:
+                self._count_error("frame_process", e)
                 processed = None
             try:
                 self.detector.config = cfg
-            except Exception:
-                pass
+            except Exception as e:
+                self._count_error("detect_config", e)
             try:
                 detections = self.detector.detect(processed, timestamp=ts, raw_frame=frame.image)
-            except Exception:
+            except Exception as e:
+                self._count_error("detect", e)
                 detections = []
 
         # 4. Association
@@ -312,16 +435,10 @@ class LocalTerminalSystem:
             for tr in list(self.tracks.values()):
                 if any(d is not None for d in detections) and tr.miss_count == 0 and tr.last_seen_timestamp == ts:
                     try:
-                        prev_ex, prev_ey = tr.est_x, tr.est_y
-                        inst_vx = (tr.meas_x - prev_ex) / max(dt, 1e-3) + cam_vx if (prev_ex or prev_ey) else 0.0
-                        inst_vy = (tr.meas_y - prev_ey) / max(dt, 1e-3) + cam_vy if (prev_ex or prev_ey) else 0.0
-                        inst_vx = max(-2000.0, min(2000.0, inst_vx))
-                        inst_vy = max(-2000.0, min(2000.0, inst_vy))
-                        tr.est_vx = 0.5 * inst_vx + 0.5 * tr.est_vx
-                        tr.est_vy = 0.5 * inst_vy + 0.5 * tr.est_vy
+                        update_track_velocity(tr, tr.meas_x, tr.meas_y, dt, cam_vx, cam_vy)
                         tr.est_x, tr.est_y = tr.meas_x, tr.meas_y
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        self._count_error("velocity", e)
                     try:
                         self.signature.score_track(tr, pixel_to_angle_mrad=px_scale)
                         # EMA smoothing over the AM envelope: instantaneous
@@ -337,103 +454,20 @@ class LocalTerminalSystem:
                     # ── Step 4b: Beam Profile (optical characterisation) ─────────
                     try:
                         tr.beam_profile = BeamProfile(
+                            wavelength_nm=float(getattr(tr, "meas_wavelength_nm", 0.0) or 0.0),
                             power_dn=float(tr.meas_intensity),
                             snr_db=float(tr.meas_snr),
                             spot_mrad=float(tr.meas_spot_px * px_scale),
-                            modulation_depth=float(tr.signature.temporal_score),
+                            modulation_depth=float(getattr(tr, "meas_modulation_depth", 0.0) or 0.0),
+                            mod_freq_hz=float(getattr(tr.temporal, "estimated_frequency", 0.0) or 0.0),
                         )
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        self._count_error("beam_profile", e)
 
                     # ── Step 4c: Communication path — signal + decode + identity ─
-                    try:
-                        hist = list(tr.temporal.intensity_history)
-                        times = list(tr.temporal.timestamps) if tr.temporal.timestamps else []
-                        chip_rate = float(getattr(self._target_profile, "chip_rate_hz", 8.0))
-                        bg_est = float(getattr(processed, "background_estimate", 0.0) if processed else 0.0)
-                        sig_meas = self._signal_analyzer.analyze(hist, times, chip_rate, bg_est)
-
-                        # §8 & §27: OpticalMeasurement
-                        tr.optical_measurement = OpticalMeasurement(
-                            centroid_x=float(tr.meas_x),
-                            centroid_y=float(tr.meas_y),
-                            peak_intensity=float(tr.meas_intensity),
-                            integrated_intensity=float(tr.meas_intensity * max(1.0, tr.meas_spot_px)),
-                            snr=float(tr.meas_snr),
-                            apparent_diameter=float(tr.meas_spot_px),
-                            background_level=bg_est,
-                            spectral_estimate=float(getattr(tr.signature, "spectral_score", 1.0) * 1550.0),
-                            timestamp=float(ts),
-                        )
-                        # §9 & §27: SignalMeasurement
-                        tr.signal_measurement = sig_meas
-                        tr.optical_quality = float(tr.signature.overall_score)
-                        tr.signal_quality = float(sig_meas.signal_quality)
-                        tr.filtered_position = (float(tr.est_x), float(tr.est_y))
-                        tr.predicted_position = (float(tr.est_x + tr.est_vx * dt), float(tr.est_y + tr.est_vy * dt))
-                        tr.velocity = (float(tr.est_vx), float(tr.est_vy))
-                        tr.acceleration = (float(tr.est_ax), float(tr.est_ay))
-
-                        # Update SignalState from signal measurement
-                        ss = tr.signal_state
-                        ss.chip_rate_hz = float(sig_meas.estimated_chip_rate_hz)
-                        ss.modulation_depth = float(sig_meas.modulation_depth)
-                        ss.chip_snr_db = float(sig_meas.chip_snr_db)
-                        ss.bit_error_estimate = float(sig_meas.bit_error_estimate)
-                        ss.num_chip_samples = int(sig_meas.num_samples)
-                        if sig_meas.sufficient_data:
-                            ss.state = "DECODING"
-                        elif sig_meas.num_samples >= 20:
-                            ss.state = "SAMPLING"
-
-                        # §12: Frame decoder
-                        df = self._frame_decoder.update(
-                            tr.observation_id, sig_meas, tr._decoded_frame)
-                        tr._decoded_frame = df
-                        ss.frame_valid = bool(df.valid)
-                        ss.decoded_terminal_id_byte = int(df.terminal_id_byte)
-                        ss.decoded_network_id = int(df.network_id)
-                        ss.decoded_sequence = int(df.sequence_number)
-                        ss.decoded_capabilities = int(df.capabilities)
-                        ss.decode_confidence = float(df.confidence)
-                        ss.consecutive_valid = int(df.consecutive_valid)
-                        ss.total_attempts = int(df.attempt_count)
-                        ss.total_successes = int(df.success_count)
-                        if df.valid:
-                            ss.state = "VALID"
-
-                        # §14: Identity validator
-                        decision = self._id_matcher.match(tr.observation_id, df)
-                        tr._identity_decision = decision
-                        ss.identity_matched = bool(decision.matched)
-                        ss.identity_reason = str(decision.reason)
-                        ss.identity_confidence = float(decision.confidence)
-
-                        # Populate §27 candidate track fields
-                        tr.decoded_terminal_id = str(df.terminal_id) or str(df.terminal_id_str)
-                        tr.decoded_token = str(getattr(df, "token", ""))
-                        tr.decoded_wavelength_nm = float(getattr(df, "wavelength_nm", 0.0))
-                        tr.sequence_number = int(df.sequence_number)
-                        tr.identity_state = str(decision.status)
-                        tr.identity_confidence = float(decision.confidence)
-                        if df.valid and df.crc_ok:
-                            tr.valid_frame_count += 1
-                            tr.last_valid_frame_time = float(ts)
-                            tr.last_valid_sequence = int(df.sequence_number)
-                            tr.latest_frame = df.frame
-                        elif sig_meas.sufficient_data:
-                            tr.invalid_frame_count += 1
-
-                        tr.synchronization_state = {
-                            "synced": bool(df.valid or (sig_meas.sufficient_data and sig_meas.num_samples >= 20)),
-                            "confidence": float(df.confidence),
-                        }
-
-                        # Hard-reject impostors immediately (§14, §17)
-                        if tr.is_impostor:
-                            tr.lifecycle_state = CandidateState.REJECTED
-                    except Exception:
-                        pass
+                    # Runs on hits AND brief misses (chip continuity across AM
+                    # nulls): the miss branch below reuses persisted history.
+                    self._run_comm_path(tr, ts, dt, processed)
 
                     sig_ok, _ = self.signature.confirmed(tr)
                     score_ok = tr.signature.overall_score >= self.signature_cfg.minimum_score
@@ -461,14 +495,37 @@ class LocalTerminalSystem:
             for tr in list(self.tracks.values()):
                 if tr.observation_id not in seen_ids:
                     self.lifecycle.update_on_miss(tr)
+                    # Validity decays without fresh confirmations (P2) so stale
+                    # links cannot coast forever on an old high count.
+                    try:
+                        tr.valid_frame_count = max(0, int(tr.valid_frame_count) - 1)
+                    except Exception as e:
+                        self._count_error("validity_decay", e)
                     if tr.miss_count > 3:
                         self._confirm_streak[tr.observation_id] = 0
-            # purge expired/rejected beyond grace
+                    # Brief-gap comm continuity (P1): keep decoding from
+                    # persisted history so an AM null costs no re-sync.
+                    # Stamps the last-seen time, not the gap frame.
+                    if 0 < tr.miss_count <= 2 and tr.temporal.intensity_history:
+                        try:
+                            last_ts = float(tr.temporal.timestamps[-1]) if tr.temporal.timestamps else ts
+                        except Exception:
+                            last_ts = ts
+                        self._run_comm_path(tr, ts, dt, processed, stamp_ts=last_ts)
+            # purge expired/rejected beyond grace (with decoder/matcher hygiene)
             for tid in list(self.tracks.keys()):
                 if self.tracks[tid].lifecycle_state in (CandidateState.EXPIRED, CandidateState.REJECTED):
                     if self.tracks[tid].miss_count > 60:
                         del self.tracks[tid]
                         self._confirm_streak.pop(tid, None)
+                        self._frame_decoder.reset_track(tid)
+                        self._id_matcher.reset_track(tid)
+                        self.acquisition.prune_dead(set(self.tracks.keys()))
+            if not self.tracks:
+                try:
+                    self.detector.reset_counter()
+                except Exception as e:
+                    self._count_error("detector_reset", e)
             # Overload cap (§36: too many candidates): hard bound at 96
             # tracks so memory/compute stay flat no matter the clutter.
             # Ranked by SIGNAL VALUE (confidence first, staleness penalized)
@@ -480,9 +537,10 @@ class LocalTerminalSystem:
                 if len(self.tracks) > 96:
                     _rank = {
                         CandidateState.TRACKING: 9, CandidateState.ACQUIRED: 8,
-                        CandidateState.SELECTED: 7, CandidateState.IDENTIFIED: 6,
+                        CandidateState.ACQUIRING: 8, CandidateState.SELECTED: 7,
+                        CandidateState.IDENTIFIED: 6,
                         CandidateState.REACQUIRING: 5, CandidateState.DEGRADED: 4,
-                        CandidateState.VALIDATING: 3, CandidateState.TENTATIVE: 2,
+                        CandidateState.TENTATIVE: 2,
                         CandidateState.SEEN: 1, CandidateState.LOST: 0,
                         CandidateState.REJECTED: -1, CandidateState.EXPIRED: -2,
                     }
@@ -504,10 +562,16 @@ class LocalTerminalSystem:
                             except KeyError:
                                 pass
                             self._confirm_streak.pop(tid, None)
+                            self._frame_decoder.reset_track(tid)
+                            self._id_matcher.reset_track(tid)
                             try:
                                 self.acquisition._confirm_windows.pop(tid, None)
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                self._count_error("acq_cleanup", e)
+                            try:
+                                self.acquisition._prev_centroid.pop(tid, None)
+                            except Exception as e:
+                                self._count_error("acq_cleanup", e)
             except Exception:
                 pass
         except Exception:
@@ -517,6 +581,7 @@ class LocalTerminalSystem:
                  if t.lifecycle_state not in (CandidateState.EXPIRED, CandidateState.REJECTED, CandidateState.LOST)]
         has_candidates = len(alive) > 0
         has_identified = any(t.lifecycle_state in (CandidateState.IDENTIFIED, CandidateState.SELECTED,
+                                                   CandidateState.ACQUIRING,
                                                    CandidateState.ACQUIRED, CandidateState.TRACKING,
                                                    CandidateState.DEGRADED, CandidateState.REACQUIRING)
                              for t in alive)
@@ -550,11 +615,11 @@ class LocalTerminalSystem:
             # A missed frame is not a confirmation: stale scores must not
             # re-confirm. Brief gaps are bridged by latched_acquired below.
             if confirm_target is not None and confirm_target.miss_count == 0:
-                acq_result = self.acquisition.confirm(confirm_target, ts)
+                acq_result = self.acquisition.confirm(confirm_target, ts, update_lifecycle=False)
                 selection = confirm_target
             elif confirm_target is not None:
                 # record the gap so the window drains during outages
-                self.acquisition.confirm(None, ts)
+                self.acquisition.confirm(None, ts, update_lifecycle=False)
                 if confirm_target.observation_id in self.acquisition._confirm_windows:
                     self.acquisition._confirm_windows[confirm_target.observation_id].append(-1.0)
         except Exception:
@@ -595,8 +660,17 @@ class LocalTerminalSystem:
 
         active_track = self.tracks.get(self.active_observation_id) if self.active_observation_id else None
         if active_track is not None and active_track.lifecycle_state in (CandidateState.LOST, CandidateState.EXPIRED):
+            dead_id = self.active_observation_id
             self.active_observation_id = None
             active_track = None
+            # Release stale decode/identity state so a recycled id can never
+            # inherit another track's sequence or frame buffer.
+            try:
+                if dead_id is not None:
+                    self._frame_decoder.reset_track(dead_id)
+                    self._id_matcher.reset_track(dead_id)
+            except Exception as e:
+                self._count_error("track_cleanup", e)
             # Track died before the reacq timer fired: release the timer so
             # the state machine can fall through LOST -> SEARCHING (§28)
             # instead of freezing in REACQUIRING.
@@ -671,12 +745,36 @@ class LocalTerminalSystem:
             conf = selection.signature.overall_score
             if conf < self.tracking_retention_threshold:
                 degraded = True
-                selection.lifecycle_state = CandidateState.DEGRADED
+                transition_track(selection, CandidateState.DEGRADED, "retention")
             else:
-                if selection.lifecycle_state in (CandidateState.ACQUIRED, CandidateState.SELECTED,
-                                                 CandidateState.IDENTIFIED, CandidateState.DEGRADED):
-                    selection.lifecycle_state = CandidateState.TRACKING
-                tracking_ok = True
+                st = selection.lifecycle_state
+                if st == CandidateState.SELECTED:
+                    # When centering toward candidate:
+                    if not self._centered_latched:
+                        transition_track(selection, CandidateState.ACQUIRING, "coarse-centering")
+                    elif acq_result.acquired and selection.miss_count == 0:
+                        transition_track(selection, CandidateState.ACQUIRED, "centered-dual-lock")
+                        tracking_ok = True
+                elif st == CandidateState.ACQUIRING:
+                    # Centering gate: ACQUIRING promotes to ACQUIRED once the servo
+                    # has the spot centered and dual lock holds.
+                    if self._centered_latched and acq_result.acquired and selection.miss_count == 0:
+                        transition_track(selection, CandidateState.ACQUIRED, "centered-dual-lock")
+                        tracking_ok = True
+                    # else: keep centering this frame; not yet stable
+                elif st == CandidateState.ACQUIRED:
+                    # ACQUIRED promotes to TRACKING once spatially stable and lock dwells
+                    if self._centered_latched and self._lock_dwell >= 0.05:
+                        transition_track(selection, CandidateState.TRACKING, "dwell-stable")
+                    tracking_ok = True
+                elif st == CandidateState.IDENTIFIED:
+                    transition_track(selection, CandidateState.SELECTED, "selected")
+                elif st == CandidateState.DEGRADED:
+                    if self._centered_latched and acq_result.acquired:
+                        transition_track(selection, CandidateState.TRACKING, "recovered")
+                    tracking_ok = True
+                else:
+                    tracking_ok = True
 
             # ── Step 7b: Continuous identity verification (Phase-2) ──────────
             # Every frame we check whether the decoded identity is still valid.
@@ -696,7 +794,7 @@ class LocalTerminalSystem:
                         # Identity lost or swapped → force reacquisition
                         degraded = True
                         tracking_ok = False
-                        selection.lifecycle_state = CandidateState.DEGRADED
+                        transition_track(selection, CandidateState.DEGRADED, "identity-fail")
                         ss.state = "LOST"
             except Exception:
                 pass
@@ -713,11 +811,13 @@ class LocalTerminalSystem:
         elif power_on and self.active_observation_id is not None:
 
             # --- loss path: DEGRADED -> REACQUIRING -> LOST (§§25-27) ---
-            # Require 3 consecutive non-acquired frames before declaring
-            # reacquisition so single-frame decoy spikes do not trip it.
-            self._loss_streak = int(getattr(self, "_loss_streak", 0)) + 1
+            # Streak gate before declaring reacquisition so single-frame decoy
+            # spikes do not trip it. TRACKING locks coast on a reliable
+            # prediction (2 frames); less stable locks need 3.
+            self._loss_streak = int(self._loss_streak) + 1
             prev = self.tracks.get(self.active_observation_id)
-            if prev is not None and not self.reacq.active and self._loss_streak >= 3:
+            need = 2 if (prev is not None and prev.lifecycle_state == CandidateState.TRACKING) else 3
+            if prev is not None and not self.reacq.active and self._loss_streak >= need:
                 try:
                     cur_p, cur_t = inp.current_ptz_pose or (0.0, 0.0)
                     self._reacq_anchor_pan = float(cur_p)
@@ -729,7 +829,10 @@ class LocalTerminalSystem:
                     pass
             if self.reacq.active:
                 # Identity-gated merge: reappearing beacon keeps its old lock
-                # instead of spawning a fresh BEACON-N (§27/§30).
+                # instead of spawning a fresh BEACON-N (§27/§30). The merge
+                # additionally passes the re-observation gates (spatial +
+                # signature + confirmation + SNR) so weak lookalikes cannot
+                # steal the lock.
                 try:
                     from local_terminal.acquisition.reacquisition import can_merge_reacquisition as _can_merge
                     if prev is not None:
@@ -739,27 +842,43 @@ class LocalTerminalSystem:
                                     continue
                                 if _can_merge(prev, _cand,
                                               predicted_pos=getattr(self.reacq, "last_known", None)):
+                                    try:
+                                        _perr = math.hypot(float(_cand.meas_x) - float(self.reacq.last_known[0]),
+                                                           float(_cand.meas_y) - float(self.reacq.last_known[1])) \
+                                            if self.reacq.last_known is not None else 0.0
+                                    except (TypeError, ValueError):
+                                        _perr = 0.0
+                                    try:
+                                        _min_snr = float(getattr(getattr(cfg, "detection", None), "minimum_snr", 8.0) or 8.0)
+                                    except (TypeError, ValueError):
+                                        _min_snr = 8.0
+                                    if not self.reacq.validate_reobserved(
+                                            _perr, float(_cand.signature.overall_score),
+                                            int(_cand.hit_count), float(_cand.meas_snr),
+                                            min_snr=_min_snr):
+                                        continue
                                     self.active_observation_id = _cand.observation_id
                                     prev = _cand
                                     self._loss_streak = 0
                                     self.reacq.reset()
                                     break
-                            except Exception:
+                            except Exception as e:
+                                self._count_error("reacq_merge", e)
                                 continue
-                except Exception:
-                    pass
+                except Exception as e:
+                    self._count_error("reacq_merge", e)
                 if self.reacq.active:
                     timed_out = self.reacq.step(dt)
-                    # NOTE: predict() mutates last_known — it is called exactly
-                    # once per frame in the coast branch below (§26). Do not
-                    # predict here or the coast double-steps.
+                    # NOTE: advance() commits the single authorized coast step
+                    # (§26). predict() is non-mutating — do not call it here
+                    # or the coast double-steps.
                 else:
                     timed_out = False
                 if timed_out:
                     reacq_timeout = True
                     self.reacq.reset()
                     if prev is not None:
-                        prev.lifecycle_state = CandidateState.LOST
+                        transition_track(prev, CandidateState.LOST, "reacq-timeout")
                     self.active_observation_id = None
                     self._confirm_streak.clear()
                     try:
@@ -801,14 +920,15 @@ class LocalTerminalSystem:
                     reacquiring = True
                     degraded = True
                     if prev is not None:
-                        prev.lifecycle_state = CandidateState.REACQUIRING
+                        transition_track(prev, CandidateState.REACQUIRING, "coast")
                     # Predictive coast + expanding local spiral (§26):
                     # hold the predicted direction, then dither around it
                     # with a stage radius (±2° → ±5° → ±10°) so a drifting
                     # target is re-swept instead of waiting passively.
                     try:
-                        pred = self.reacq.predict(dt)
-                    except Exception:
+                        pred = self.reacq.advance(dt)
+                    except Exception as e:
+                        self._count_error("reacq_predict", e)
                         pred = None
                     try:
                         sx = float(getattr(getattr(cfg, "angular_model", None), "pixel_to_angle_x", 109.0) or 109.0) * 0.001
@@ -876,18 +996,18 @@ class LocalTerminalSystem:
             # Hold position while unconfirmed candidates are being validated
             # so the scan does not drag a tentative target out of FOV before
             # temporal persistence can build. The hold is BOUNDED: stale
-            # VALIDATING tracks (age>2 s, never promoting — typically
-            # clutter/stars) release the sweep, otherwise one bright star
-            # would freeze the search forever with the true target outside.
+            # never-promoting tracks (typically clutter/stars) release the
+            # sweep, otherwise one bright star would freeze the search
+            # forever with the true target outside.
             if power_on and is_search_mode and not (acq_result.acquired):
                 holdable = [t for t in alive if t.lifecycle_state in (
                     CandidateState.SEEN, CandidateState.TENTATIVE,
                     CandidateState.SIGNAL_DETECTED, CandidateState.DECODING,
                     CandidateState.IDENTITY_UNKNOWN,
                     CandidateState.IDENTIFIED, CandidateState.SELECTED,
+                    CandidateState.ACQUIRING,
                     CandidateState.ACQUIRED, CandidateState.TRACKING,
-                    CandidateState.DEGRADED, CandidateState.REACQUIRING) or (
-                    t.lifecycle_state == CandidateState.VALIDATING and t.age < 2.0)]
+                    CandidateState.DEGRADED, CandidateState.REACQUIRING)]
                 # Anti-pin watchdog: an UNCONFIRMED pool (stars/clutter scoring
                 # ~0.7 but never identifying) must not freeze the sweep forever.
                 # Confirmed candidates hold indefinitely; unconfirmed ones get
@@ -898,6 +1018,7 @@ class LocalTerminalSystem:
                     CandidateState.SIGNAL_DETECTED, CandidateState.DECODING,
                     CandidateState.IDENTITY_UNKNOWN,
                     CandidateState.IDENTIFIED, CandidateState.SELECTED,
+                    CandidateState.ACQUIRING,
                     CandidateState.ACQUIRED, CandidateState.TRACKING,
                     CandidateState.DEGRADED, CandidateState.REACQUIRING)]
                 do_hold = bool(holdable)
@@ -948,6 +1069,7 @@ class LocalTerminalSystem:
                             CandidateState.SIGNAL_DETECTED, CandidateState.DECODING,
                             CandidateState.IDENTITY_UNKNOWN,
                             CandidateState.IDENTIFIED, CandidateState.SELECTED,
+                            CandidateState.ACQUIRING,
                             CandidateState.ACQUIRED, CandidateState.TRACKING,
                             CandidateState.DEGRADED, CandidateState.REACQUIRING)]
                         if _confirmed:
@@ -1072,8 +1194,9 @@ class LocalTerminalSystem:
         try:
             out.telemetry = self.telemetry.build(out, {"frame_id": self.frame_id, "timestamp": ts,
                                                        "reacq_elapsed": self.reacq.elapsed,
-                                                       "lock_dwell": self._lock_dwell})
-        except Exception:
-            pass
+                                                       "lock_dwell": self._lock_dwell,
+                                                       "error_counts": dict(self._error_counts)})
+        except Exception as e:
+            self._count_error("telemetry", e)
         self.last_output = out
         return out
