@@ -134,16 +134,22 @@ class EnvironmentPanel(BaseConfigPanel):
         root.addWidget(self.btn_reset)
         root.addStretch()
 
-        # Wiring — slider -> spin sync
-        self.slider_world_w.valueChanged.connect(lambda v: self._sync_int(v, self.scene_w_spin, self.label_world_w_val))
-        self.slider_world_h.valueChanged.connect(lambda v: self._sync_int(v, self.scene_h_spin, self.label_world_h_val))
-        self.slider_seed.valueChanged.connect(lambda v: self._sync_int(v, self.seed_spin, self.label_seed_val))
-        self.slider_bg_top.valueChanged.connect(lambda v: self._sync_int(v, self.env_bg_top_spin, self.label_bg_top_val))
-        self.slider_bg_bottom.valueChanged.connect(lambda v: self._sync_int(v, self.env_bg_bottom_spin, self.label_bg_bottom_val))
-        self.slider_vignetting.valueChanged.connect(lambda v: self._sync_int(v, self.env_vignetting_spin, self.label_vignetting_val))
-        self.slider_haze.valueChanged.connect(lambda v: self._sync_int(v, self.haze_spin, self.label_haze_val))
-        self.slider_star_count.valueChanged.connect(lambda v: self._sync_int(v, self.env_star_count_spin, self.label_star_count_val))
-        self.slider_star_brightness.valueChanged.connect(lambda v: self._sync_float(v, self.env_star_brightness_spin, self.label_star_brightness_val, self.star_brightness_factor, 1))
+        # Wiring — valueChanged updates the pill label only (cheap); the config
+        # is emitted on sliderReleased or for non-drag changes (keyboard,
+        # programmatic). Heavy scene rebuilds thus fire once per gesture.
+        self.slider_world_w.valueChanged.connect(lambda v: self._sync_int(self.slider_world_w, v, self.scene_w_spin, self.label_world_w_val))
+        self.slider_world_h.valueChanged.connect(lambda v: self._sync_int(self.slider_world_h, v, self.scene_h_spin, self.label_world_h_val))
+        self.slider_seed.valueChanged.connect(lambda v: self._sync_int(self.slider_seed, v, self.seed_spin, self.label_seed_val))
+        self.slider_bg_top.valueChanged.connect(lambda v: self._sync_int(self.slider_bg_top, v, self.env_bg_top_spin, self.label_bg_top_val))
+        self.slider_bg_bottom.valueChanged.connect(lambda v: self._sync_int(self.slider_bg_bottom, v, self.env_bg_bottom_spin, self.label_bg_bottom_val))
+        self.slider_vignetting.valueChanged.connect(lambda v: self._sync_int(self.slider_vignetting, v, self.env_vignetting_spin, self.label_vignetting_val))
+        self.slider_haze.valueChanged.connect(lambda v: self._sync_int(self.slider_haze, v, self.haze_spin, self.label_haze_val))
+        self.slider_star_count.valueChanged.connect(lambda v: self._sync_int(self.slider_star_count, v, self.env_star_count_spin, self.label_star_count_val))
+        self.slider_star_brightness.valueChanged.connect(lambda v: self._sync_float(self.slider_star_brightness, v, self.env_star_brightness_spin, self.label_star_brightness_val, self.star_brightness_factor, 1))
+        for _s in (self.slider_world_w, self.slider_world_h, self.slider_seed,
+                   self.slider_bg_top, self.slider_bg_bottom, self.slider_vignetting,
+                   self.slider_haze, self.slider_star_count, self.slider_star_brightness):
+            _s.sliderReleased.connect(self._emit_config)
 
         self.random_seed_btn.clicked.connect(self._randomize_seed)
         self.btn_reset.clicked.connect(self._on_reset)
@@ -152,21 +158,24 @@ class EnvironmentPanel(BaseConfigPanel):
         """Random seed 0..999999 (widget updates, config emitted)."""
         import random
         self.slider_seed.setValue(random.randint(0, 999999))
+        self._emit_config()
 
-    def _sync_int(self, val: int, spin, label):
+    def _sync_int(self, slider, val: int, spin, label):
         spin.blockSignals(True)
         spin.setValue(int(val))
         spin.blockSignals(False)
         label.setText(str(int(val)))
-        self._emit_config()
+        if not slider.isSliderDown():
+            self._emit_config()
 
-    def _sync_float(self, val: int, spin: QDoubleSpinBox, label: QLabel, factor: int, decimals: int):
+    def _sync_float(self, slider, val: int, spin: QDoubleSpinBox, label: QLabel, factor: int, decimals: int):
         fval = val / factor
         spin.blockSignals(True)
         spin.setValue(float(fval))
         spin.blockSignals(False)
         label.setText(f"{fval:.{decimals}f}")
-        self._emit_config()
+        if not slider.isSliderDown():
+            self._emit_config()
 
     def _label(self, text: str) -> QLabel:
         lbl = QLabel(text)
@@ -222,5 +231,6 @@ class EnvironmentPanel(BaseConfigPanel):
         try:
             cfg = self.collect_config()
             self.configChanged.emit(cfg)
-        except Exception:
-            pass
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning("environment config invalid, not applied: %s", e)

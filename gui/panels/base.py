@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
-from typing import Any, Generator
+from typing import Any
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QGridLayout, QGroupBox, QLabel, QPushButton, QSizePolicy, QSlider, QWidget
@@ -142,19 +141,3 @@ class BaseConfigPanel(QWidget):
         btn.setMinimumHeight(28)
         btn.setToolTip(f"Reset {text.lower()} to defaults")
         return btn
-
-    @contextmanager
-    def _blocked(self, widgets: list[Any]) -> Generator[None, None, None]:
-        for w in widgets:
-            try:
-                w.blockSignals(True)
-            except Exception:
-                pass
-        try:
-            yield
-        finally:
-            for w in widgets:
-                try:
-                    w.blockSignals(False)
-                except Exception:
-                    pass

@@ -14,6 +14,8 @@
 
 from PyQt5.QtCore import Qt, pyqtSignal
 
+import logging
+
 from gui.panels.base import BaseConfigPanel
 from PyQt5.QtWidgets import (
     QCheckBox,
@@ -34,6 +36,8 @@ from disturbance.core.constants import (
     ATMOSPHERIC_PRESETS,
     PLATFORM_PROFILES,
 )
+
+log = logging.getLogger(__name__)
 
 class DisturbancesPanel(BaseConfigPanel):
     """
@@ -582,6 +586,21 @@ class DisturbancesPanel(BaseConfigPanel):
         self.chk_air_details.toggled.connect(lambda on: self.air_details.setVisible(bool(on)))
         self.chk_cam_details.toggled.connect(lambda on: self.cam_details.setVisible(bool(on)))
         self.chk_sensor_details.toggled.connect(lambda on: self._sync_sensor_details(bool(on)))
+        # Release-only heavy emits: valueChanged updates the pill label (cheap,
+        # wired above); the config itself fires on sliderReleased or for
+        # non-drag changes (keyboard, programmatic). _emit_config() gates
+        # in-flight drags via sender().isSliderDown().
+        for _s in (
+            self.slider_channel_severity, self.slider_channel_attenuation,
+            self.slider_turbulence, self.slider_beam_wander, self.slider_beam_spread,
+            self.slider_intensity_fluct, self.slider_salt_density, self.slider_salt_ratio,
+            self.slider_gaussian_sigma, self.slider_gaussian_max,
+            self.slider_poisson_scale, self.slider_poisson_peak, self.slider_jitter,
+            self.slider_atmo_contrast, self.slider_atmo_brightness,
+            self.slider_platform_speed, self.slider_platform_amp_x,
+            self.slider_platform_amp_y, self.slider_platform_direction,
+        ):
+            _s.sliderReleased.connect(self._emit_config)
 
     def _sync_sensor_details(self, show: bool) -> None:
         """Fine-tuning rows are hidden until the user asks for them."""
@@ -892,6 +911,16 @@ class DisturbancesPanel(BaseConfigPanel):
     def _emit_config(self) -> None:
         if getattr(self, "_building", False):
             return
+        # Release-only: skip while a slider drag is in flight (the matching
+        # sliderReleased re-emits once). Keyboard/programmatic changes and
+        # checkbox/combo senders fall through immediately.
+        try:
+            from PyQt5.QtWidgets import QSlider as _QSlider
+            _sender = self.sender()
+            if isinstance(_sender, _QSlider) and _sender.isSliderDown():
+                return
+        except Exception:
+            pass
         # Any manual tweak means the setup no longer matches a named preset.
         if not getattr(self, "_applying_preset", False):
             try:
@@ -908,8 +937,8 @@ class DisturbancesPanel(BaseConfigPanel):
             cfg = self.collect_config()
             try:
                 self._refresh_summary()
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("disturbances summary refresh skipped: %s", e)
             self.configChanged.emit(cfg)
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("disturbances config invalid, not applied: %s", e)

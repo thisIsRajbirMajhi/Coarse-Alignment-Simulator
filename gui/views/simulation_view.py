@@ -41,21 +41,57 @@ class SimulationView(QWidget):
         layout.addWidget(splitter)
         self._world_thumb = None
         self._world_thumb_key = None
+        self._world_pixmap = None
+        self._world_pixmap_key = None
+        self._fov_size = None
+        self._world_size = None
+
+    @staticmethod
+    def _scale_for_label(pm, label, last_size):
+        """Fit pixmap into label: Smooth only on resize, Fast every tick.
+
+        SmoothTransformation each tick is a full-frame resample; live video is
+        visually identical with FastTransformation once the size is stable.
+        Returns (pixmap, size).
+        """
+        size = label.size()
+        key = (size.width(), size.height())
+        if key != last_size:
+            return pm.scaled(size, Qt.KeepAspectRatio, Qt.SmoothTransformation), key
+        return pm.scaled(size, Qt.KeepAspectRatio, Qt.FastTransformation), key
+
+    @staticmethod
+    def _minimap_key(camera, label_size, terminals) -> tuple:
+        """Cheap cache key for minimap overlays (pose + size + beacon spots)."""
+        try:
+            rect = tuple(int(v) for v in camera.get_fov_rect())
+        except Exception:
+            rect = (0, 0, 0, 0)
+        spots: list[tuple] = []
+        try:
+            term_list = (terminals or {}).get("terminals", []) if isinstance(terminals, dict) else []
+            for t in term_list:
+                pos = t.get("position", (0, 0, 0))
+                spots.append((str(t.get("id", "RT")), int(pos[0]), int(pos[1]), bool(t.get("is_emitting", False))))
+        except Exception:
+            pass
+        return (rect, tuple(label_size), tuple(spots))
 
     def render_snapshot(self, snapshot, session) -> None:
         if snapshot is None or session is None:
             return
-        # FOV overlay via stateless Renderer.
+        # FOV overlay via stateless Renderer. No outer .copy() — the renderer
+        # copies internally (headless shares that path and needs it).
         try:
-            fov = snapshot.fov_frame.copy() if snapshot.fov_frame is not None else None
+            fov = snapshot.fov_frame
             if fov is not None:
                 overlay = Renderer.render_viewport(
                     fov, session.camera,
                     telemetry=getattr(snapshot, "local_terminal", None))
                 pm = frame_to_pixmap(overlay)
                 if pm is not None:
-                    self.fov_label.setPixmap(pm.scaled(
-                        self.fov_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                    pm, self._fov_size = self._scale_for_label(pm, self.fov_label, self._fov_size)
+                    self.fov_label.setPixmap(pm)
         except Exception as e:
             log.warning("FOV render failed: %s", e)
 
@@ -66,11 +102,10 @@ class SimulationView(QWidget):
             except Exception:
                 bg = None
             if bg is None:
-                try:
-                    bg = session.scene.get_frame()
-                except Exception as e:
-                    log.debug("world background unavailable: %s", e)
-                    bg = None
+                # Never build a full scene in the hot loop — reuse last thumb.
+                if self._world_thumb is None:
+                    log.debug("world background unavailable, no cached thumb")
+                bg = None
             if bg is not None:
                 lw = self.world_label.width() if self.world_label.width() > 10 else 400
                 lh = self.world_label.height() if self.world_label.height() > 10 else 300
@@ -79,19 +114,32 @@ class SimulationView(QWidget):
                 if self._world_thumb is None or self._world_thumb_key != key:
                     self._world_thumb = cv2.resize(bg, (max(50, lw), max(50, lh)), interpolation=cv2.INTER_AREA)
                     self._world_thumb_key = key
-                mini = Renderer.render_minimap_cached(
-                    self._world_thumb, session.camera,
-                    label_size=(max(50, lw), max(50, lh)),
-                    scene_size=world_size,
-                    terminals=getattr(snapshot, "terminals", None),
-                )
-                pm2 = frame_to_pixmap(mini)
-                if pm2 is not None:
-                    self.world_label.setPixmap(pm2.scaled(
-                        self.world_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                    self._world_pixmap_key = None  # thumb changed → overlays stale
+            if self._world_thumb is not None:
+                lw = self.world_label.width() if self.world_label.width() > 10 else 400
+                lh = self.world_label.height() if self.world_label.height() > 10 else 300
+                world_size = (int(session.env_config.world_width), int(session.env_config.world_height))
+                terminals = getattr(snapshot, "terminals", None)
+                mkey = self._minimap_key(session.camera, (max(50, lw), max(50, lh)), terminals)
+                if self._world_pixmap is None or self._world_pixmap_key != mkey:
+                    mini = Renderer.render_minimap_cached(
+                        self._world_thumb, session.camera,
+                        label_size=(max(50, lw), max(50, lh)),
+                        scene_size=world_size,
+                        terminals=terminals,
+                    )
+                    pm2 = frame_to_pixmap(mini)
+                    if pm2 is not None:
+                        pm2, self._world_size = self._scale_for_label(pm2, self.world_label, self._world_size)
+                        self._world_pixmap = pm2
+                        self._world_pixmap_key = mkey
+                if self._world_pixmap is not None:
+                    self.world_label.setPixmap(self._world_pixmap)
         except Exception as e:
             log.warning("world render failed: %s", e)
 
     def invalidate_world_cache(self) -> None:
         self._world_thumb = None
         self._world_thumb_key = None
+        self._world_pixmap = None
+        self._world_pixmap_key = None

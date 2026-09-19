@@ -718,7 +718,8 @@ class LocalTerminalPanel(BaseConfigPanel):
             self.trk_kp_slider, self.trk_ki_slider, self.trk_kd_slider, self.trk_dz_slider,
         ]
         for s in sliders:
-            s.valueChanged.connect(self._on_change)
+            s.valueChanged.connect(self._on_slider_moved)
+            s.sliderReleased.connect(self._on_change)
 
         combos = [
             self.combo_acq_mode, self.combo_acq_pattern,
@@ -730,13 +731,33 @@ class LocalTerminalPanel(BaseConfigPanel):
         for chk in (self.chk_cap_rx, self.chk_cap_tx, self.chk_cap_trk):
             chk.toggled.connect(self._on_change)
 
-        self.txt_comm_proto.textChanged.connect(self._on_change)
+        self.txt_comm_proto.editingFinished.connect(self._on_change)
+
+    def _on_slider_moved(self) -> None:
+        """Label-only update during drags; emit on release (or immediately for
+        keyboard/programmatic steps where the slider is not held down)."""
+        if self._updating:
+            return
+        self._update_derived_angular_labels()
+        try:
+            sender = self.sender()
+            if isinstance(sender, QSlider) and sender.isSliderDown():
+                return
+        except Exception:
+            pass
+        try:
+            self.configChanged.emit(self.collect_config())
+        except Exception as e:
+            log.warning("local terminal config invalid, not applied: %s", e)
 
     def _on_change(self) -> None:
         if self._updating:
             return
         self._update_derived_angular_labels()
-        self.configChanged.emit(self.collect_config())
+        try:
+            self.configChanged.emit(self.collect_config())
+        except Exception as e:
+            log.warning("local terminal config invalid, not applied: %s", e)
 
     def _update_derived_angular_labels(self) -> None:
         """Dynamically compute and display angular model values per LocalTerminal.md."""

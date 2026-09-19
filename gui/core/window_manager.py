@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import logging
 
+from PyQt5.QtCore import Qt
+
 log = logging.getLogger(__name__)
 
 
@@ -20,7 +22,15 @@ class WindowManager:
         from gui.windows.dashboard_window import DashboardWindow
         if self._dashboard_window is None:
             self._dashboard_window = DashboardWindow(None)  # top-level, not child
+            try:
+                self._dashboard_window.setAttribute(Qt.WA_DeleteOnClose)
+                self._dashboard_window.destroyed.connect(self._on_dashboard_destroyed)
+            except Exception as e:
+                log.debug("dashboard delete-on-close skipped: %s", e)
         return self._dashboard_window
+
+    def _on_dashboard_destroyed(self) -> None:
+        self._dashboard_window = None
 
     def show_dashboard(self, maximized: bool = True) -> object:
         w = self.ensure_dashboard()
@@ -68,6 +78,7 @@ class WindowManager:
         try:
             if self._settings is not None:
                 self._settings.close()
+                self._settings.deleteLater()
         except Exception as e:
             log.debug("drop settings skipped: %s", e)
         self._settings = None
@@ -87,5 +98,8 @@ class WindowManager:
                 w = getattr(self, attr, None)
                 if w is not None:
                     w.close()
+                    w.deleteLater()
             except Exception as e:
                 log.debug("close window skipped: %s", e)
+        self._settings = None
+        self._dashboard_window = None

@@ -66,6 +66,10 @@ class DashboardView(QWidget):
                 
                 grid.addLayout(cell_layout, row_idx, col_idx, Qt.AlignTop)
                 self._pills[name] = pill
+        # Change-detection caches: text/color writes only on actual change
+        # (was 15× setText + 8× setStyleSheet+repolish every render).
+        self._last_text: dict[str, str] = {}
+        self._last_color: dict[str, tuple[str, str] | None] = {}
 
         for i in range(5):
             grid.setColumnStretch(i, 1)
@@ -95,8 +99,9 @@ class DashboardView(QWidget):
             "Average Loss rate (/min)": f"{state.target_loss_rate_pct:.2f}" if state.target_loss_rate_pct is not None else "—",
         }
         for k, v in s.items():
-            if k in self._pills:
+            if k in self._pills and self._last_text.get(k) != v:
                 self._pills[k].setText(v)
+                self._last_text[k] = v
 
         def _rate_color(v: float | None, good_high: bool = True):
             if v is None:
@@ -125,13 +130,14 @@ class DashboardView(QWidget):
                 "Retention Rate (%)": _rate_color(state.retention_rate_pct, True),
                 "Detection Rate (%)": _rate_color(state.detection_rate_pct, True),
                 "Center Hit rate (%)": _rate_color(state.center_hit_rate_pct, True),
-                "Average Loss rate (%)": _rate_color(state.target_loss_rate_pct, False),
+                "Average Loss rate (/min)": _rate_color(state.target_loss_rate_pct, False),
                 "Average Tracking Error (px | mrad)": _err_color(state.avg_track_err_px),
                 "RMS (px)": _err_color(state.rms_px),
                 "RMSE (mrad)": _err_color(state.rms_mrad),
             }
             for k, c in colors.items():
-                if k in self._pills:
+                if k in self._pills and self._last_color.get(k) != c:
                     self._pills[k].setStyleSheet(_pill_style(c))
+                    self._last_color[k] = c
         except Exception as e:
             log.debug("pill colour update skipped: %s", e)

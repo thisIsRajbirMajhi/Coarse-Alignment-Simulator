@@ -1,10 +1,10 @@
 # gui/core/renderer.py - Viewport and God-view rendering with standard crosshair
 from __future__ import annotations
 
+import math
+
 import cv2
 import numpy as np
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QImage, QPixmap
 
 
 class CrosshairStyle:
@@ -153,9 +153,8 @@ class Renderer:
         # Error vector from FOV center, stopping at the ring rim so it never
         # crosses the object.
         try:
-            import math as _math
             dx, dy = float(sx - cx), float(sy - cy)
-            dist = _math.hypot(dx, dy)
+            dist = math.hypot(dx, dy)
             dim = tuple(max(0, min(255, int(c * 0.55))) for c in color)
             if dist > r + 2:
                 ex = int(round(sx - dx / dist * r))
@@ -264,30 +263,3 @@ class Renderer:
 
         cv2.putText(display, f"{sw}x{sh}", (4, 10), cv2.FONT_HERSHEY_SIMPLEX, 0.28, (180, 180, 180), 1, cv2.LINE_AA)
         return display
-
-    @staticmethod
-    def render_minimap(scene_frame: np.ndarray, camera, *args,
-                       label_size: tuple[int, int] = (400, 300),
-                       scene_size: tuple[int, int] = (2000, 2000), **kwargs) -> np.ndarray:
-        lw, lh = label_size
-        sw, sh = scene_size
-        display = cv2.resize(scene_frame, (max(50, lw), max(50, lh)), interpolation=cv2.INTER_LINEAR)
-        return Renderer.render_minimap_cached(display, camera, label_size=label_size, scene_size=scene_size, **kwargs)
-
-    @staticmethod
-    def set_pixmap(label, bgr_frame: np.ndarray, spec=None) -> np.ndarray:
-        rgb = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
-        h, w, ch = rgb.shape
-        qimg = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888)
-        qimg = qimg.copy()
-        lw, lh = int(label.width()), int(label.height())
-        if lw < 10 or lh < 10:
-            lw, lh = w, h
-        pixmap = QPixmap.fromImage(qimg).scaled(lw, lh, Qt.KeepAspectRatio, Qt.FastTransformation)
-        label.setPixmap(pixmap)
-        return rgb
-
-    @staticmethod
-    def apply_screen_sizes(viewport_label, minimap_label, spec) -> None:
-        viewport_label.setMinimumSize(max(200, min(spec.viewport_w, 900)), max(140, min(spec.viewport_h, 700)))
-        minimap_label.setMinimumSize(max(200, min(spec.god_w, 900)), max(140, min(spec.god_h, 700)))

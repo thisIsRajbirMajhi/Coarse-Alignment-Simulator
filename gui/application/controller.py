@@ -6,7 +6,7 @@ import time
 
 from PyQt5.QtCore import QObject, pyqtSignal
 
-from gui.application.commands import ApplyConfigCommand
+from gui.application.commands import ApplyConfigCommand, PauseCommand, ResetCommand, ResumeCommand, StartCommand, StopCommand
 from gui.application.session import FrameSnapshot, SimulationSession
 from gui.application.state import LifecycleState
 
@@ -92,6 +92,23 @@ class ApplicationController(QObject):
         self.stateChanged.emit(self.lifecycle.value)
 
     # -- commands ----------------------------------------------------
+    def dispatch(self, cmd) -> None:
+        """Dispatch an intent command (single entry for all GUI intents)."""
+        if isinstance(cmd, StartCommand):
+            self.start()
+        elif isinstance(cmd, StopCommand):
+            self.stop()
+        elif isinstance(cmd, PauseCommand):
+            self.pause()
+        elif isinstance(cmd, ResumeCommand):
+            self.resume()
+        elif isinstance(cmd, ResetCommand):
+            self.reset(seed=cmd.seed)
+        elif isinstance(cmd, ApplyConfigCommand):
+            self.apply_config(cmd)
+        else:
+            raise ValueError(f"unknown command: {type(cmd).__name__}")
+
     def apply_config(self, cmd: ApplyConfigCommand) -> None:
         try:
             if cmd.section in ("camera", "local_terminal"):

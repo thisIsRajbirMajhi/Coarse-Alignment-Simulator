@@ -274,6 +274,3 @@ class SettingsDialog(QDialog):
             self.dist_panel.set_config(session.disturbance_config, emit=False)
         except Exception as e:
             log.debug("disturbances sync skipped: %s", e)
-
-
-ControlDeckDialog = SettingsDialog

@@ -12,6 +12,7 @@ from gui.application.commands import ApplyConfigCommand
 from gui.application.controller import ApplicationController
 from gui.application.session import SimulationSession
 from gui.application.state import LifecycleState
+from gui.application.worker import SimWorker
 from gui.core.window_manager import WindowManager
 from gui.presentation.simulation_presenter import SimulationPresenter
 from gui.styles import APP_STYLE, TICK_MS
@@ -38,6 +39,10 @@ class MainWindow(QMainWindow):
         self.controller = ApplicationController(self.session, self)
         self.presenter = SimulationPresenter()
         self.windows = WindowManager(self)
+        # Sim worker: steps run off the GUI thread; snapshots return via
+        # controller.snapshotReady (auto-queued). At most one step in flight.
+        self.worker = SimWorker(self.controller, self)
+        self._step_pending = False
 
         # --- layout: header + fullscreen-capable simulation view ---
         central = QWidget(self)
@@ -73,8 +78,13 @@ class MainWindow(QMainWindow):
         self.controls.btn_dashboard.clicked.connect(lambda: self.windows.show_dashboard())
         self.controls.btn_fullscreen.clicked.connect(self.toggle_fullscreen)
         self.controls.btn_settings.clicked.connect(lambda: self.windows.show_settings(self.session))
-        self.controller.stateChanged.connect(self._on_lifecycle)
-        self.controller.errorRaised.connect(self._on_error)
+        # Queued: controller.step() executes in the worker thread, so its
+        # signals must hop back to the GUI thread (AutoConnection would
+        # deliver directly in the worker thread since the controller object
+        # itself lives here — painting off-thread would crash).
+        self.controller.stateChanged.connect(self._on_lifecycle, Qt.QueuedConnection)
+        self.controller.errorRaised.connect(self._on_error, Qt.QueuedConnection)
+        self.controller.snapshotReady.connect(self._on_snapshot, Qt.QueuedConnection)
 
         # Thin timer: sim high-freq, dashboard throttled.
         self.timer = QTimer(self)
@@ -109,8 +119,22 @@ class MainWindow(QMainWindow):
 
     # -- thin timer -------------------------------------------------
     def on_timer(self) -> None:
-        self.controller.step()
-        snap = self.controller._last_snapshot
+        # Repaint timer only: request one worker step when running. The step
+        # itself runs off-thread; painting happens in _on_snapshot. If the
+        # previous step hasn't returned, skip (coalesce to lower FPS).
+        try:
+            if self.controller.lifecycle == LifecycleState.RUNNING and not self._step_pending:
+                self._step_pending = True
+                self.worker.request_step()
+        except Exception as e:
+            log.debug("step request skipped: %s", e)
+
+    def _on_snapshot(self, snap) -> None:
+        self._step_pending = False
+        if snap is None:
+            return
+        if self.controller.lifecycle != LifecycleState.RUNNING:
+            return
         # Overload guard: sim + OpenCV share the 30 ms budget. If the last
         # step nearly filled it, skip viewport paint this tick (keep sim +
         # throttled dashboard running) so the UI degrades to lower FPS
@@ -120,25 +144,26 @@ class MainWindow(QMainWindow):
         except Exception:
             _proc = 0.0
         _overloaded = bool(_proc > 25.0)
-        if snap is not None and self.controller.lifecycle == LifecycleState.RUNNING and not _overloaded:
+        if not _overloaded:
             self.sim_view.render_snapshot(snap, self.session)
         self._tick_count += 1
-        if self._tick_count % 3 == 0 or snap is None:
+        if self._tick_count % 3 == 0:
             state = self.presenter.update(snap, self.session, self.controller)
             try:
                 self.dashboard.render(state)
             except Exception as e:
                 log.debug("dashboard render skipped: %s", e)
-            if getattr(self.windows, "_settings", None) is not None and snap is not None:
-                try:
-                    telemetry_packet = {}
-                    if getattr(snap, "terminals", None) is not None:
-                        telemetry_packet["terminals"] = snap.terminals
-                    if getattr(snap, "local_terminal", None) is not None:
-                        telemetry_packet["local_terminal"] = snap.local_terminal
-                    self.windows._settings.update_telemetry(telemetry_packet)
-                except Exception as e:
-                    log.debug("dialog telemetry update skipped: %s", e)
+            if getattr(self.windows, "_settings", None) is not None:
+                if self.windows._settings.isVisible():
+                    try:
+                        telemetry_packet = {}
+                        if getattr(snap, "terminals", None) is not None:
+                            telemetry_packet["terminals"] = snap.terminals
+                        if getattr(snap, "local_terminal", None) is not None:
+                            telemetry_packet["local_terminal"] = snap.local_terminal
+                        self.windows._settings.update_telemetry(telemetry_packet)
+                    except Exception as e:
+                        log.debug("dialog telemetry update skipped: %s", e)
 
     # -- slots --------------------------------------------------------
     def _on_pause_button(self) -> None:
@@ -150,9 +175,10 @@ class MainWindow(QMainWindow):
     def _on_reset(self) -> None:
         """Reset EVERYTHING: default configs, fresh session, fresh presentation."""
         try:
-            self.session = SimulationSession()
-            self.session.ensure_built()
-            self.controller.session = self.session
+            with self.worker.guard():
+                self.session = SimulationSession()
+                self.session.ensure_built()
+                self.controller.session = self.session
         except Exception as e:
             self.controller.errorRaised.emit(f"Reset failed: {e}")
             log.exception("full reset failed")
@@ -176,6 +202,8 @@ class MainWindow(QMainWindow):
 
     def _on_lifecycle(self, value: str) -> None:
         self._apply_button_states()
+        if value != LifecycleState.RUNNING.value:
+            self._step_pending = False
         try:
             if value == LifecycleState.RUNNING.value:
                 self._statusbar.showMessage(f"Running — {self.session.camera_config.fov_width}x{self.session.camera_config.fov_height} FOV")
@@ -222,9 +250,16 @@ class MainWindow(QMainWindow):
         if apply is None:
             return
         try:
-            apply()
+            # Serialized against worker steps (bounded by a single step).
+            with self.worker.guard():
+                apply()
         except Exception as e:
-            log.debug("deferred %s apply skipped: %s", section, e)
+            # Never a silent no-op: the user just moved a control.
+            try:
+                self._statusbar.showMessage(f"{section} config not applied: {e}")
+            except Exception:
+                pass
+            log.warning("deferred %s apply failed: %s", section, e)
 
     def _on_local_terminal_config(self, cfg) -> None:
         self._schedule_config("local_terminal", lambda: self.controller.apply_config(
@@ -269,4 +304,8 @@ class MainWindow(QMainWindow):
             self.windows.close_all()
         except Exception:
             pass
+        try:
+            self.worker.shutdown()
+        except Exception as e:
+            log.debug("worker shutdown skipped: %s", e)
         super().closeEvent(event)

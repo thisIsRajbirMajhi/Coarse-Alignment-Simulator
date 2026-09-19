@@ -393,7 +393,9 @@ class RemoteTerminalPanel(BaseConfigPanel):
     # --- SIGNAL HOOKUPS ----------------------------------------------
 
     def _connect_signals(self) -> None:
-        # Scenario signals (2D subset)
+        # Scenario signals (2D subset). Sliders: labels update live via
+        # valueChanged internals; the config emits on release (or immediately
+        # for keyboard/programmatic steps) — see _on_any_change gate.
         self.count_slider.valueChanged.connect(self._on_count_changed)
         self.formation_shape.currentIndexChanged.connect(self._on_any_change)
         self.spacing_slider.valueChanged.connect(self._on_any_change)
@@ -420,13 +422,19 @@ class RemoteTerminalPanel(BaseConfigPanel):
         self.mod_type_combo.currentIndexChanged.connect(self._on_mod_type_changed)
         self.mod_freq_slider.valueChanged.connect(self._on_any_change)
 
-        # Identity + protocol
-        self.sig_code_edit.textChanged.connect(self._on_any_change)
-        self.protocol_edit.textChanged.connect(self._on_any_change)
+        # Identity + protocol (validated on focus-out/Enter, not per keystroke)
+        self.sig_code_edit.editingFinished.connect(self._on_any_change)
+        self.protocol_edit.editingFinished.connect(self._on_any_change)
         self.cap_tx.toggled.connect(self._on_any_change)
         self.cap_rx.toggled.connect(self._on_any_change)
         self.cap_beacon.toggled.connect(self._on_any_change)
         self.cap_track.toggled.connect(self._on_any_change)
+        # Release-only heavy emits for all sliders (labels stay live).
+        for _s in (self.count_slider, self.spacing_slider, self.speed_slider,
+                   self.dir_slider, self.accel_slider, self.power_slider,
+                   self.wl_slider, self.div_slider, self.net_slider,
+                   self.chip_rate_slider, self.mod_freq_slider):
+            _s.sliderReleased.connect(self._on_release_emit)
 
     def _set_power(self, on: bool) -> None:
         self.btn_power_on.setChecked(on)
@@ -458,17 +466,42 @@ class RemoteTerminalPanel(BaseConfigPanel):
             return
         self._scenario_config.terminal_count = int(val)
         self._scenario_config.validate()
+        if self.count_slider.isSliderDown():
+            return  # structural refresh + emit on release
         if self._selected_idx >= len(self._scenario_config.terminals):
             self._selected_idx = max(0, len(self._scenario_config.terminals) - 1)
         self._refresh_terminal_buttons()
         self._load_selected_terminal()
-        self.configChanged.emit(self.collect_config())
+        try:
+            self.configChanged.emit(self.collect_config())
+        except Exception as e:
+            log.warning("remote terminal config invalid, not applied: %s", e)
+
+    def _on_release_emit(self) -> None:
+        """sliderReleased handler: finish the deferred drag emit."""
+        if self._updating:
+            return
+        sender = self.sender()
+        if sender is self.count_slider:
+            self._on_count_changed(self.count_slider.value())
+            return
+        self._on_any_change()
 
     def _on_any_change(self, *args) -> None:
         if self._updating:
             return
         self._save_selected_terminal()
-        self.configChanged.emit(self.collect_config())
+        # Release-only: skip while a slider drag is in flight.
+        try:
+            sender = self.sender()
+            if isinstance(sender, QSlider) and sender.isSliderDown():
+                return
+        except Exception:
+            pass
+        try:
+            self.configChanged.emit(self.collect_config())
+        except Exception as e:
+            log.warning("remote terminal config invalid, not applied: %s", e)
 
     # --- RANDOMIZE FEATURE -------------------------------------------
 

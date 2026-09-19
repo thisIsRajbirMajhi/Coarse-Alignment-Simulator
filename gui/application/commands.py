@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Union
 
 
 @dataclass(frozen=True)
@@ -27,10 +27,14 @@ class ResumeCommand:
 
 @dataclass(frozen=True)
 class ResetCommand:
-    pass
+    seed: int | None = None
 
 
 @dataclass(frozen=True)
 class ApplyConfigCommand:
     section: str  # camera|control|environment|disturbances
     config: Any
+
+
+# Union of all dispatchable intents (see ApplicationController.dispatch).
+Command = Union[StartCommand, StopCommand, PauseCommand, ResumeCommand, ResetCommand, ApplyConfigCommand]

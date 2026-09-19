@@ -211,10 +211,27 @@ def test_simulator_fullscreen_toggle(window):
     assert window.controls.btn_fullscreen is not None
 
 
+def _pump_until(window, predicate, timeout_s: float = 10.0):
+    """Run the Qt event loop until predicate() is true (worker snapshots are
+    async since sim steps run off-thread). Raises on timeout."""
+    import time
+    from PyQt5.QtWidgets import QApplication
+    app = QApplication.instance()
+    t0 = time.time()
+    while time.time() - t0 < timeout_s:
+        window.on_timer()
+        for _ in range(20):
+            app.processEvents()
+            if predicate():
+                return True
+            time.sleep(0.005)
+    return bool(predicate())
+
+
 def test_world_and_fov_views_render(window):
     window.controller.start()
-    for _ in range(10):
-        window.on_timer()
+    assert _pump_until(window, lambda: window.sim_view.fov_label.pixmap() is not None)
+    assert _pump_until(window, lambda: window.sim_view.world_label.pixmap() is not None)
     fov = window.sim_view.fov_label.pixmap()
     world = window.sim_view.world_label.pixmap()
     assert fov is not None and not fov.isNull()
@@ -223,9 +240,7 @@ def test_world_and_fov_views_render(window):
 
 def test_reset_clears_session_and_presentation(window):
     window.controller.start()
-    for _ in range(10):
-        window.on_timer()
-    assert window.session._frame_id > 0
+    assert _pump_until(window, lambda: window.session._frame_id > 0)
     window._on_reset()
     assert window.session._frame_id == 0
 
