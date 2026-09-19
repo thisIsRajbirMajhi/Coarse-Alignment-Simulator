@@ -29,9 +29,9 @@ def clip_field(value: Any, lo: float, hi: float) -> Any:
         # fallback: try to preserve original type, but avoid bool truncation
         try:
             return type(value)(clipped)  # type: ignore
-        except Exception:
+        except (TypeError, ValueError):
             return int(clipped) if is_int else float(clipped)
-    except Exception:
+    except (TypeError, ValueError):
         return value
 
 class BaseValidatedConfig:

@@ -5,10 +5,7 @@ import logging
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QFrame, QGridLayout, QLabel, QVBoxLayout, QWidget
 
-from gui.presentation.view_state import (
-    DashboardState, fmt_count, fmt_dim, fmt_ms, fmt_pct, fmt_per_min,
-    fmt_px, fmt_px_mrad, fmt_time_s,
-)
+from gui.presentation.view_state import DashboardState, fmt_px_mrad
 
 log = logging.getLogger(__name__)
 
@@ -21,7 +18,7 @@ _BLUE = ("#0969da", "white")
 
 def _pill_style(color: tuple[str, str] | None) -> str:
     if color is None:
-        return ""
+        return "background:#c6c6c6; color:#111827; border-radius:10px; padding:4px 12px; font-weight:700;"
     bg, fg = color
     return f"background:{bg}; color:{fg}; border-radius:10px; padding:4px 12px; font-weight:700;"
 
@@ -34,7 +31,7 @@ class DashboardView(QWidget):
         ["Duration (S)", "FPS", "Jitter (ms)", "RMS (px)", "RMSE (mrad)"],
         ["Searching (s)", "Acquisition Time (s)", "Re-Acquisition Time (S)"],
         ["Detection Rate (%)", "Retention Rate (%)", "Center Hit rate (%)"],
-        ["Average Tracking Error (px | mrad)", "Average Loss rate (%)"],
+        ["Average Tracking Error (px | mrad)", "Average Loss rate (/min)"],
     ]
 
     def __init__(self, parent=None):
@@ -79,6 +76,8 @@ class DashboardView(QWidget):
         root.addWidget(frame)
 
     def render(self, state: DashboardState) -> None:
+        if state is None or not isinstance(state, DashboardState):
+            return
         s = {
             "Status": state.status,
             "Duration (S)": f"{state.duration_s:.0f}",
@@ -93,7 +92,7 @@ class DashboardView(QWidget):
             "Retention Rate (%)": f"{state.retention_rate_pct:.0f}" if state.retention_rate_pct is not None else "—",
             "Center Hit rate (%)": f"{state.center_hit_rate_pct:.0f}" if state.center_hit_rate_pct is not None else "—",
             "Average Tracking Error (px | mrad)": fmt_px_mrad(state.avg_track_err_px, state.avg_track_err_mrad),
-            "Average Loss rate (%)": f"{state.target_loss_rate_pct:.2f}" if state.target_loss_rate_pct is not None else "—",
+            "Average Loss rate (/min)": f"{state.target_loss_rate_pct:.2f}" if state.target_loss_rate_pct is not None else "—",
         }
         for k, v in s.items():
             if k in self._pills:
@@ -129,7 +128,7 @@ class DashboardView(QWidget):
                 "Average Loss rate (%)": _rate_color(state.target_loss_rate_pct, False),
                 "Average Tracking Error (px | mrad)": _err_color(state.avg_track_err_px),
                 "RMS (px)": _err_color(state.rms_px),
-                "RMSE (mrad)": _err_color(state.rms_px),
+                "RMSE (mrad)": _err_color(state.rms_mrad),
             }
             for k, c in colors.items():
                 if k in self._pills:

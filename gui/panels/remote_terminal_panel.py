@@ -561,6 +561,8 @@ class RemoteTerminalPanel(BaseConfigPanel):
         self._selected_idx = idx
         self._refresh_terminal_buttons()
         self._load_selected_terminal()
+        if not self._updating:
+            self.configChanged.emit(self.collect_config())
 
     @staticmethod
     def _map_mod_to_2d(mod: str) -> str:
@@ -696,12 +698,18 @@ class RemoteTerminalPanel(BaseConfigPanel):
         self.live_status_badge.setText(f"SCENARIO: {emitting}/{total} EMITTING | LINK: {best}")
 
         term_list = telemetry.get("terminals", [])
-        if self._selected_idx < len(term_list):
-            td = term_list[self._selected_idx]
+        if not isinstance(term_list, list) or self._selected_idx >= len(term_list):
+            return
+        td = term_list[self._selected_idx]
+        if not isinstance(td, dict):
+            return
+        try:
             cstate = td.get("communication_state", "NO_LINK")
             bstate = td.get("beacon_state", "OFF")
-            self.telemetry_link_lbl.setText(cstate)
-            self.telemetry_beacon_lbl.setText(bstate)
+            self.telemetry_link_lbl.setText(str(cstate))
+            self.telemetry_beacon_lbl.setText(str(bstate))
             pos = td.get("position", (0, 0))
-            self.pos_x_lbl.setText(f"X: {pos[0]:.1f}")
-            self.pos_y_lbl.setText(f"Y: {pos[1]:.1f}")
+            self.pos_x_lbl.setText(f"X: {float(pos[0]):.1f}")
+            self.pos_y_lbl.setText(f"Y: {float(pos[1]):.1f}")
+        except (TypeError, ValueError, IndexError):
+            pass

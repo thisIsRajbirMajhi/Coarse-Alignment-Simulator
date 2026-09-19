@@ -58,7 +58,9 @@ def _get_persistent_hot_pixels(h: int, w: int, density: float, salt_vs_pepper: f
         # Use 0.8 * density as persistent pool (slightly fewer than transient total)
         persist_density = float(density) * _HOT_PIXEL_PERSISTENT_RATIO * 0.5
         n = int(h * w * persist_density)
-        n = int(np.clip(n, 4, 800))
+        # Zero density must mean zero pixels; tiny densities scale naturally,
+        # large frames are capped to bound the defect map.
+        n = int(np.clip(n, 0, 800))
         ys = _rng.integers(0, h, size=n)
         xs = _rng.integers(0, w, size=n)
         is_salt = _rng.random(n) < float(salt_vs_pepper)

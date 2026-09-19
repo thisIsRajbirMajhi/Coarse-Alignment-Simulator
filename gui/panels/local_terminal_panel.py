@@ -9,7 +9,6 @@ from typing import Any
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
-    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -20,11 +19,9 @@ from PyQt5.QtWidgets import (
     QLineEdit,
     QProgressBar,
     QPushButton,
-    QScrollArea,
     QSizePolicy,
     QSlider,
     QSpinBox,
-    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -784,6 +781,36 @@ class LocalTerminalPanel(BaseConfigPanel):
         cfg.ptz.home_tilt = float(self.home_tilt_slider.value())
         cfg.ptz.pan_speed = float(self.pan_speed_slider.value() / self.pan_speed_factor)
         cfg.ptz.tilt_speed = float(self.tilt_speed_slider.value() / self.tilt_speed_factor)
+        cfg.ptz.resolution = float(self.res_slider.value() / self.res_factor)
+        cfg.ptz.latency = int(self.latency_slider.value())
+        cfg.ptz.update_rate = int(self.update_rate_slider.value())
+
+        # C: Display viewports
+        cfg.display.camera_screen_width = int(self.viewport_w_slider.value())
+        cfg.display.camera_screen_height = int(self.viewport_h_slider.value())
+
+        # E: Actuator realism
+        cfg.realism.max_acceleration = float(self.accel_slider.value() / self.accel_factor)
+        cfg.realism.backlash = float(self.backlash_slider.value() / self.backlash_factor)
+        cfg.realism.encoder_sigma = float(self.encoder_slider.value() / self.encoder_factor)
+        cfg.realism.latency_jitter = float(self.jitter_slider.value() / self.jitter_factor)
+
+        # I: Comm capabilities + protocol (persisted into receiving payload)
+        caps = 0
+        if self.chk_cap_rx.isChecked():
+            caps |= 0x02
+        if self.chk_cap_tx.isChecked():
+            caps |= 0x01
+        if self.chk_cap_trk.isChecked():
+            caps |= 0x08
+        cfg.receiving_payload.required_capabilities = int(caps)
+        try:
+            import re as _re
+            _m = _re.search(r"(\d+)", self.txt_comm_proto.text() or "")
+            if _m:
+                cfg.receiving_payload.expected_protocol_version = int(_m.group(1))
+        except (TypeError, ValueError):
+            pass
 
         # F: Acquisition
         cfg.acquisition.mode = self.combo_acq_mode.currentText()
@@ -851,6 +878,22 @@ class LocalTerminalPanel(BaseConfigPanel):
             self.home_tilt_slider.setValue(int(cfg.ptz.home_tilt))
             self.pan_speed_slider.setValue(int(round(cfg.ptz.pan_speed * self.pan_speed_factor)))
             self.tilt_speed_slider.setValue(int(round(cfg.ptz.tilt_speed * self.tilt_speed_factor)))
+            self.res_slider.setValue(int(round(float(getattr(cfg.ptz_camera, "resolution", 0.10)) * self.res_factor)))
+            self.latency_slider.setValue(int(getattr(cfg.ptz_camera, "latency", 12)))
+            self.update_rate_slider.setValue(int(getattr(cfg.ptz_camera, "update_rate", 30)))
+            self.viewport_w_slider.setValue(int(cfg.display.camera_screen_width))
+            self.viewport_h_slider.setValue(int(cfg.display.camera_screen_height))
+            self.accel_slider.setValue(int(round(cfg.realism.max_acceleration * self.accel_factor)))
+            self.backlash_slider.setValue(int(round(cfg.realism.backlash * self.backlash_factor)))
+            self.encoder_slider.setValue(int(round(cfg.realism.encoder_sigma * self.encoder_factor)))
+            self.jitter_slider.setValue(int(round(cfg.realism.latency_jitter * self.jitter_factor)))
+            try:
+                _caps = int(getattr(cfg.receiving_payload, "required_capabilities", 0) or 0)
+            except (TypeError, ValueError):
+                _caps = 0
+            self.chk_cap_rx.setChecked(bool(_caps & 0x02))
+            self.chk_cap_tx.setChecked(bool(_caps & 0x01))
+            self.chk_cap_trk.setChecked(bool(_caps & 0x08))
 
             # F: Acquisition
             idx = self.combo_acq_mode.findText(cfg.acquisition.mode)
@@ -969,8 +1012,13 @@ class LocalTerminalPanel(BaseConfigPanel):
             if d_st == "DETECTED" else
             "color:#4b5563; background:#f9fafb; border:1px solid #e5e7eb; border-radius:4px; font-weight:700; font-size:11px; padding:3px 8px;"
         )
-        conf = float(det.get("confidence", 0.0))
-        self.prog_confidence.setValue(int(round(conf * 100.0)))
+        try:
+            conf = float(det.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            conf = 0.0
+        if conf != conf:  # NaN guard
+            conf = 0.0
+        self.prog_confidence.setValue(int(max(0, min(100, round(conf * 100.0)))))
 
         # Tracking
         t_st = st.get("tracking_state", "OFF")
@@ -982,8 +1030,13 @@ class LocalTerminalPanel(BaseConfigPanel):
             if t_st == "REACQUIRING" else
             "color:#6b7280; background:#f3f4f6; border:1px solid #e5e7eb; border-radius:4px; font-weight:700; font-size:11px; padding:3px 8px;"
         )
-        err_px = trk.get("error_px", (0.0, 0.0))
-        err_urad = trk.get("error_urad", (0.0, 0.0))
+        def _pair(v):
+            try:
+                return (float(v[0]), float(v[1]))
+            except (TypeError, ValueError, IndexError, KeyError):
+                return (0.0, 0.0)
+        err_px = _pair(trk.get("error_px", (0.0, 0.0)))
+        err_urad = _pair(trk.get("error_urad", (0.0, 0.0)))
         self.lbl_trk_offsets.setText(
             f"Tracking Error: Δx = {err_px[0]:+.1f} px ({err_urad[0]:+.1f} µrad) • Δy = {err_px[1]:+.1f} px ({err_urad[1]:+.1f} µrad)"
         )

@@ -255,18 +255,6 @@ class MainWindow(QMainWindow):
             ApplyConfigCommand(section="terminal", config=cfg)))
 
     # -- compat adapters --------------------------------------------
-    def _start(self) -> None:
-        self.controller.start()
-
-    def _pause(self) -> None:
-        self._on_pause_button()
-
-    def _reset(self) -> None:
-        self._on_reset()
-
-    def _tick(self) -> None:
-        self.on_timer()
-
     def closeEvent(self, event) -> None:  # noqa: N802
         try:
             self.timer.stop()

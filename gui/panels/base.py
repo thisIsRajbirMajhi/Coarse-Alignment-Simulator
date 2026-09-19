@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from typing import Any, Generator
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QSlider, QWidget
+from PyQt5.QtWidgets import QGridLayout, QGroupBox, QLabel, QPushButton, QSizePolicy, QSlider, QWidget
 
 class BaseConfigPanel(QWidget):
     """

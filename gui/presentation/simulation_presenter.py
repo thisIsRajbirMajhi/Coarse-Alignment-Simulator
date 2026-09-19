@@ -12,12 +12,10 @@ class SimulationPresenter:
     """Builds DashboardState from session/controller telemetry. No Qt."""
 
     def __init__(self):
-        self._err_window: list[float] = []
         from local_terminal.telemetry.metrics import TrackingMetrics
         self.metrics = TrackingMetrics()
 
     def reset(self) -> None:
-        self._err_window.clear()
         try:
             self.metrics.reset()
         except Exception:
@@ -71,7 +69,18 @@ class SimulationPresenter:
             lt_tele = getattr(snapshot, "local_terminal", None) if snapshot else None
             dt = float(getattr(snapshot, "dt", 1 / 30)) if snapshot else 1 / 30
             scale = float(getattr(snapshot, "pixel_scale_mrad", 0.109083)) if snapshot else 0.109083
-            if snapshot is not None:
+            # Freeze accumulation unless actually RUNNING — step() returns the
+            # stale snapshot while PAUSED, which must not advance metrics.
+            # controller=None (tests/headless) means "unknown" → keep updating.
+            try:
+                from gui.application.state import LifecycleState as _LS
+                if controller is None:
+                    _running = True
+                else:
+                    _running = getattr(controller, "lifecycle", None) == _LS.RUNNING
+            except Exception:
+                _running = True
+            if snapshot is not None and _running:
                 self.metrics.update(dt, lt_tele if isinstance(lt_tele, dict) else None, scale)
             snap_metrics = self.metrics.snapshot(scale)
         except Exception:

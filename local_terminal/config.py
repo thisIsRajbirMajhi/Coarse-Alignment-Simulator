@@ -128,6 +128,9 @@ class PTZCameraConfig:
     tilt_max: float = 0.0
     home_pan: float = 1000.0 # px
     home_tilt: float = 1000.0 # px
+    resolution: float = 0.10  # actuator quantization step (px)
+    latency: int = 12         # command queue delay (ms)
+    update_rate: int = 30     # actuator refresh frequency (Hz)
 
     def validate(self, scene_bounds: tuple[int, int] = (2000, 2000)) -> PTZCameraConfig:
         sw, sh = scene_bounds
@@ -148,6 +151,9 @@ class PTZCameraConfig:
 
         self.pan_speed = float(max(1.0, min(self.pan_speed if self.pan_speed is not None else 8.0, 60.0)))
         self.tilt_speed = float(max(1.0, min(self.tilt_speed if self.tilt_speed is not None else 8.0, 60.0)))
+        self.resolution = float(max(0.0, min(self.resolution if self.resolution is not None else 0.10, 10.0)))
+        self.latency = int(max(0, min(self.latency if self.latency is not None else 12, 2000)))
+        self.update_rate = int(max(1, min(self.update_rate if self.update_rate is not None else 30, 1000)))
         return self
 
     @classmethod
@@ -566,6 +572,19 @@ class LocalTerminalConfig:
         elif "target_profile" in root or "targetProfile" in root:
             cfg.receiving_payload = ReceivingPayloadConfig.from_dict(root.get("target_profile") or root.get("targetProfile"))
 
+        # Also support legacy flat properties if supplied
+        for k in ("fov_width", "fov_height", "pan_min", "pan_max", "tilt_min", "tilt_max",
+                  "home_pan", "home_tilt", "max_pan_speed_deg", "max_tilt_speed_deg",
+                  "max_slew_rate", "resolution", "latency_ms", "update_rate_hz",
+                  "viewport_width", "viewport_height", "god_width", "god_height",
+                  "pixel_scale_mrad", "max_accel_deg", "backlash_px", "encoder_sigma_px",
+                  "latency_jitter_ms", "vignetting"):
+            if k in root:
+                try:
+                    setattr(cfg, k, root[k])
+                except (AttributeError, TypeError, ValueError):
+                    pass
+
         return cfg.validate()
 
     @property
@@ -784,57 +803,6 @@ class LocalTerminalConfig:
     def controller_config(self) -> TrackingConfig:
         """Compatibility property forwarding to tracking configuration."""
         return self.tracking
-
-
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> LocalTerminalConfig:
-        if not isinstance(data, dict):
-            return cls().validate()
-
-        root = data.get("localTerminal") or data.get("local_terminal") or data
-
-        cfg = cls()
-        if "identity" in root:
-            cfg.identity = IdentityConfig.from_dict(root["identity"])
-        if "state" in root:
-            cfg.state = LocalStateConfig.from_dict(root["state"])
-        if "position" in root:
-            cfg.position = PositionConfig.from_dict(root["position"])
-        if "camera" in root:
-            cfg.camera = LocalCameraConfig.from_dict(root["camera"])
-        if "ptz" in root:
-            cfg.ptz = PTZConfig.from_dict(root["ptz"])
-        if "display" in root:
-            cfg.display = DisplayConfig.from_dict(root["display"])
-        if "angularModel" in root or "angular_model" in root:
-            cfg.angular_model = AngularModelConfig.from_dict(root.get("angularModel") or root.get("angular_model"))
-        if "realism" in root:
-            cfg.realism = RealismConfig.from_dict(root["realism"])
-        if "acquisition" in root:
-            cfg.acquisition = AcquisitionConfig.from_dict(root["acquisition"])
-        if "detection" in root:
-            cfg.detection = DetectionConfig.from_dict(root["detection"])
-        if "tracking" in root:
-            cfg.tracking = TrackingConfig.from_dict(root["tracking"])
-        if "communication" in root:
-            cfg.communication = LocalCommunicationConfig.from_dict(root["communication"])
-        if "target_payload" in root or "targetPayload" in root:
-            cfg.target_payload = TargetPayloadConfig.from_dict(root.get("target_payload") or root.get("targetPayload"))
-        elif "target_profile" in root or "targetProfile" in root:
-            cfg.target_payload = TargetPayloadConfig.from_dict(root.get("target_profile") or root.get("targetProfile"))
-
-        # Also support legacy flat properties if supplied
-        for k in ("fov_width", "fov_height", "pan_min", "pan_max", "tilt_min", "tilt_max",
-                  "home_pan", "home_tilt", "max_pan_speed_deg", "max_tilt_speed_deg",
-                  "max_slew_rate", "resolution", "latency_ms", "update_rate_hz",
-                  "viewport_width", "viewport_height", "god_width", "god_height",
-                  "pixel_scale_mrad", "max_accel_deg", "backlash_px", "encoder_sigma_px",
-                  "latency_jitter_ms", "vignetting"):
-            if k in root:
-                setattr(cfg, k, root[k])
-
-        return cfg.validate()
 
     @classmethod
     def from_camera_config(cls, cam: Any) -> LocalTerminalConfig:

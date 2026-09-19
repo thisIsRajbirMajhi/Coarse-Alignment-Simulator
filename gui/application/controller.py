@@ -6,11 +6,9 @@ import time
 
 from PyQt5.QtCore import QObject, pyqtSignal
 
-from gui.application.commands import (
-    ApplyConfigCommand, ResetCommand,
-)
+from gui.application.commands import ApplyConfigCommand
 from gui.application.session import FrameSnapshot, SimulationSession
-from gui.application.state import LifecycleState, UIState
+from gui.application.state import LifecycleState
 
 log = logging.getLogger(__name__)
 
@@ -24,7 +22,6 @@ class ApplicationController(QObject):
         super().__init__(parent)
         self.session = session
         self.lifecycle: LifecycleState = LifecycleState.STOPPED
-        self.ui = UIState()
         self._frames = 0
         self._sim_time = 0.0
         self._proc_ms: list[float] = []

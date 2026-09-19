@@ -23,12 +23,17 @@ LOCK_STATUS_COLORS_BGR: dict[str, tuple[int, int, int]] = {
     key: _hex_to_bgr(value) for key, value in LOCK_STATUS_COLORS_HEX.items()
 }
 
-def lock_color_hex(status: str, default: str = "#64748b") -> str:
+def lock_color_hex(status: str | None, default: str = "#64748b") -> str:
     """Return hex color for status (case-insensitive), e.g., 'tracking' → '#22c55e'."""
+    if not isinstance(status, str) or not status:
+        return default
     return LOCK_STATUS_COLORS_HEX.get(status.lower(), default)
 
-def lock_color_bgr(status: str, default: tuple[int, int, int] = (170, 170, 170)) -> tuple[int, int, int]:
+
+def lock_color_bgr(status: str | None, default: tuple[int, int, int] = (170, 170, 170)) -> tuple[int, int, int]:
     """Return BGR tuple for status (for cv2), e.g., 'tracking' → (90,220,90)."""
+    if not isinstance(status, str) or not status:
+        return default
     return LOCK_STATUS_COLORS_BGR.get(status.lower(), default)  # type: ignore
 
 # Re-export for convenience

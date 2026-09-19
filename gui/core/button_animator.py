@@ -40,9 +40,13 @@ class ButtonClickAnimator(QObject):
             return
         # Guard against re-entrancy: if already animating, restart
         try:
-            # Remember original stylesheet once
+            # Remember original stylesheet once + purge when button dies (no leak)
             if btn not in self._orig_style:
                 self._orig_style[btn] = btn.styleSheet()
+                try:
+                    btn.destroyed.connect(lambda _=None, b=btn: self._drop_button(b))
+                except Exception:
+                    pass
 
             # 1) Geometry bounce (shrink then expand) — safe for layout-managed widgets
             # Use fixed size trick to allow geometry animation without layout fighting
@@ -101,19 +105,17 @@ class ButtonClickAnimator(QObject):
 
     def _release_fixed(self, btn: QPushButton):
         try:
-            # Release fixed size constraint so layout can manage again
-            # Use QWIDGETSIZE_MAX equivalent: 16777215
+            # Fully release fixed-size constraint so layouts manage again.
+            # (Previously setFixedSize(sizeHint()) left a lingering constraint.)
             btn.setMinimumSize(0, 0)
             btn.setMaximumSize(16777215, 16777215)
-            btn.setFixedSize(btn.sizeHint())
-            # Force layout update
             btn.updateGeometry()
-            # After next layout pass, ensure layout flexible (no fixed constraint retained)
-            try:
-                btn.setMinimumSize(0, 0)
-                btn.setMaximumSize(16777215, 16777215)
-            except Exception:
-                pass
+        except Exception:
+            pass
+
+    def _drop_button(self, btn: QPushButton) -> None:
+        try:
+            self._orig_style.pop(btn, None)
         except Exception:
             pass
 
@@ -209,17 +211,8 @@ def install_global_button_animation(app_or_widget=None):
     if _animator_instance is None:
         _animator_instance = ButtonClickAnimator(target)
         target.installEventFilter(_animator_instance)
-        # Also install on app if not already
-        if app is not None and app is not target:
-            app.installEventFilter(_animator_instance)
-    # For widget case, ensure all existing buttons get filter via app-level already covers,
-    # but also install per-button for direct press handling (some styles swallow)
-    try:
-        if hasattr(target, "findChildren"):
-            for btn in target.findChildren(QPushButton):
-                btn.installEventFilter(_animator_instance)
-    except Exception:
-        pass
+    # NOTE: no per-button install here — the app-level filter already covers
+    # all buttons. Per-button filters caused double animate() per click.
     return _animator_instance
 
 

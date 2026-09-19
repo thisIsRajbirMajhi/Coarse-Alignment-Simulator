@@ -601,6 +601,12 @@ class DisturbanceConfig(BaseValidatedConfig):
             self.channel_beam_spread = 0.0
             self.channel_intensity_fluctuation = 0.0
             self.turbulence = 0
+            # Clear must actually clear sensor/camera stages (was leaking prior noise)
+            self.enable_gaussian = False
+            self.enable_salt_pepper = False
+            self.enable_poisson = False
+            self.camera_jitter = 0.0
+            self.platform_speed = 0.0
         elif p == "haze":
             self.atmospheric_preset = "Haze"
             self.channel_severity = 0.6

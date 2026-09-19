@@ -109,7 +109,7 @@ def test_dashboard_renders_tracking_metrics(window):
     assert pills["Retention Rate (%)"] == "92"
     assert pills["Detection Rate (%)"] == "75"
     assert pills["Center Hit rate (%)"] == "88"
-    assert pills["Average Loss rate (%)"] == "0.50"
+    assert pills["Average Loss rate (/min)"] == "0.50"
     assert pills["Average Tracking Error (px | mrad)"] == "3 PX | 0.33 MRAD"
     assert pills["RMS (px)"] == "4.0"
     assert pills["RMSE (mrad)"] == "0.44"
