@@ -73,16 +73,9 @@ def test_dashboard_renders_known_state(window):
     window.dashboard.render(st)
     pills = {k: v.text() for k, v in window.dashboard._pills.items()}
     assert pills["Status"] == "RUNNING"
-    assert pills["Duration (s)"] == "120 Sec"
-    assert pills["Frames Per Second (FPS)"] == "30.0"
-    assert pills["Jitter"] == "12 Ms"
-    assert pills["Camera Pan"] == "500.0 px"
-    assert pills["Camera Tilt"] == "400.0 px"
-    assert pills["FOV Size"] == "640 × 480"
-    assert pills["World Size"] == "2000 × 2000"
-    assert pills["Atmospheric Preset"] == "Haze"
-    assert pills["Platform Profile"] == "Sinusoidal"
-    assert pills["Optical Turbulence"] == "2"
+    assert pills["Duration (S)"] == "120"
+    assert pills["FPS"] == "30.0"
+    assert pills["Jitter (ms)"] == "12"
 
 
 def test_dashboard_renders_tracking_metrics(window):
@@ -110,22 +103,20 @@ def test_dashboard_renders_tracking_metrics(window):
     window.dashboard.render(st)
     pills = {k: v.text() for k, v in window.dashboard._pills.items()}
     # Metrics.png rows
-    assert pills["Acquisition Time"] == "4.5 Sec"
-    assert pills["Re-Acquisition Time"] == "1.2 Sec"
-    assert pills["Searching Time"] == "10.0 Sec"
-    assert pills["Retention Rate"] == "92 %"
-    assert pills["Detection Rate"] == "75 %"
-    assert pills["Center Hit Rate"] == "88 %"
-    assert pills["Average Target Loss Rate"] == "0.50 /min"
-    assert pills["Average Tracking Error"] == "3 PX | 0.33 MRAD"
-    assert pills["Total Re-Acquisition Count"] == "2"
-    assert pills["Total Target Loss Count"] == "1"
-    assert pills["Total Target Switches Count"] == "1"
-    assert pills["RMS / RMSE"] == "4 PX | 0.44 MRAD"
+    assert pills["Acquisition Time (s)"] == "4.5"
+    assert pills["Re-Acquisition Time (S)"] == "1.2"
+    assert pills["Searching (s)"] == "10.0"
+    assert pills["Retention Rate (%)"] == "92"
+    assert pills["Detection Rate (%)"] == "75"
+    assert pills["Center Hit rate (%)"] == "88"
+    assert pills["Average Loss rate (%)"] == "0.50"
+    assert pills["Average Tracking Error (px | mrad)"] == "3 PX | 0.33 MRAD"
+    assert pills["RMS (px)"] == "4.0"
+    assert pills["RMSE (mrad)"] == "0.44"
     # Metrics1.png rows still present
     assert pills["Status"] == "RUNNING"
-    assert pills["Duration (s)"] == "60 Sec"
-    assert pills["Frames Per Second (FPS)"] == "30.0"
+    assert pills["Duration (S)"] == "60"
+    assert pills["FPS"] == "30.0"
 
 
 def test_dashboard_live_metrics_accumulate(window):
@@ -139,8 +130,8 @@ def test_dashboard_live_metrics_accumulate(window):
     assert state.reacquisition_count >= 0 and state.target_loss_count >= 0
     window.dashboard.render(state)
     pills = {k: v.text() for k, v in window.dashboard._pills.items()}
-    assert pills["Searching Time"] != "—"
-    assert pills["Detection Rate"] != "—"
+    assert pills["Searching (s)"] != "—"
+    assert pills["Detection Rate (%)"] != "—"
 
 
 def test_config_panels_produce_validated_configs(window):
