@@ -63,9 +63,10 @@ def test_control_deck_fullscreen_toggle(qapp):
     dlg = SettingsDialog(session)
 
     # Check tabs: Remote Terminal is first tab
-    assert dlg.tabs.count() == 4
+    assert dlg.tabs.count() == 3
     assert dlg.tabs.tabText(0) == "Remote Terminal"
-    assert dlg.tabs.tabText(1) in ("Local Terminal", "Camera")
+    assert dlg.tabs.tabText(1) == "Environment"
+    assert dlg.tabs.tabText(2) == "Disturbances"
 
     # Test fullscreen toggle
     assert dlg.btn_fullscreen.text() == "Full Screen"
@@ -146,20 +147,13 @@ def test_control_deck_randomize_all(qapp):
     dlg = SettingsDialog(session)
 
     rt_signals = []
-    lt_signals = []
     dlg.terminalChanged.connect(lambda cfg: rt_signals.append(cfg))
-    dlg.localTerminalChanged.connect(lambda cfg: lt_signals.append(cfg))
 
     # Click Randomize All
     dlg.btn_randomize.click()
 
     assert len(rt_signals) == 1
-    assert len(lt_signals) == 1
     rt_cfg = rt_signals[0]
-    lt_cfg = lt_signals[0]
-
-    # Verify optical wavelength was synchronized across both terminals
-    assert rt_cfg.terminals[0].beacon.wavelength_nm == lt_cfg.detection.wavelength
-    assert rt_cfg.terminals[0].beacon.mod_type == lt_cfg.detection.modulation_type
+    assert 1 <= rt_cfg.terminal_count <= 8
     dlg.close()
 

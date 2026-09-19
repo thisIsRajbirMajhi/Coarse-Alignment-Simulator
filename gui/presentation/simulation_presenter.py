@@ -12,14 +12,10 @@ class SimulationPresenter:
     """Builds DashboardState from session/controller telemetry. No Qt."""
 
     def __init__(self):
-        from local_terminal.telemetry.metrics import TrackingMetrics
-        self.metrics = TrackingMetrics()
+        pass
 
     def reset(self) -> None:
-        try:
-            self.metrics.reset()
-        except Exception:
-            pass
+        pass
 
     def update(self, snapshot, session, controller) -> DashboardState:
         # Lifecycle status
@@ -62,28 +58,16 @@ class SimulationPresenter:
             prof = str(getattr(dc, "platform_profile", "Linear"))
             spd = float(getattr(dc, "platform_speed", 0.0))
 
-        # Tracking-performance metrics from the Local Terminal pipeline.
-        # Snapshot carries the get_telemetry() dict; accumulator is
-        # episode-persistent and resets via presenter.reset().
-        try:
-            lt_tele = getattr(snapshot, "local_terminal", None) if snapshot else None
-            dt = float(getattr(snapshot, "dt", 1 / 30)) if snapshot else 1 / 30
-            scale = float(getattr(snapshot, "pixel_scale_mrad", 0.109083)) if snapshot else 0.109083
-            # Freeze accumulation unless actually RUNNING — step() returns the
-            # stale snapshot while PAUSED, which must not advance metrics.
-            # controller=None (tests/headless) means "unknown" → keep updating.
-            try:
-                from gui.application.state import LifecycleState as _LS
-                if controller is None:
-                    _running = True
-                else:
-                    _running = getattr(controller, "lifecycle", None) == _LS.RUNNING
-            except Exception:
-                _running = True
-            if snapshot is not None and _running:
-                self.metrics.update(dt, lt_tele if isinstance(lt_tele, dict) else None, scale)
-            snap_metrics = self.metrics.snapshot(scale)
-        except Exception:
+        if status == "RUNNING":
+            dur = float(controller.duration_s) if controller else 0.0
+            snap_metrics = {
+                "searching_time_s": dur,
+                "detection_rate_pct": 0.0,
+                "reacquisition_count": 0,
+                "target_loss_count": 0,
+                "target_switch_count": 0,
+            }
+        else:
             snap_metrics = {}
 
         # Diagnostics strip fields (best-effort; stay "—" when unknown).
@@ -106,14 +90,9 @@ class SimulationPresenter:
                         target_id = str(term_list[0].get("id", "—"))
                 except (TypeError, ValueError, AttributeError, IndexError):
                     pass
-            lt = getattr(snapshot, "local_terminal", None) if snapshot else None
-            if isinstance(lt, dict):
-                for key in ("terminal_id", "id", "source_id"):
-                    if lt.get(key):
-                        source_id = str(lt.get(key))
-                        break
         except Exception:
             pass
+
 
         return DashboardState(
             status=status,

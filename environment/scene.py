@@ -8,7 +8,7 @@
 # Vignetting policy: REAL lens vignetting is sensor/image-space (centered on camera FOV),
 #   NOT world-space (centered on world 2500,2500). Previous Scene._build_background baked
 #   vignetting into the 5000×5000 world buffer (dark corners at world centre). Now vignetting
-#   is NOT applied in Scene; it is applied at camera-capture stage (LocalTerminal.capture or
+#   is NOT applied in Scene; it is applied at camera-capture stage (Camera.get_fov_rect or
 #   MainWindow post-capture) so it follows the camera FOV.
 
 import numpy as np
@@ -26,34 +26,6 @@ except Exception:
     EnvironmentConfig = None  # type: ignore
 
 class Scene:
-    """
-    2D scene composer — owns world size, RNG, and layered background.
-
-    Per PDF Sr.1 — world configurable 2000..5000 (min 2000, default 2000 for FPS).
-    Generic engine supports 50..5000 for tests.
-
-    10 configurable parameters (grouped per EnvironmentPanel):
-      1) World Width/Height (px)     — configurable 2000..5000 in production (default 2000);
-                                       generic engine 50..5000 for tests
-      2) Seed (reproducible RNG)    — 0..999999
-      3) Randomize button            — rerolls seed (GUI)
-      4) BG Top/Bottom colors        — 0..60 / 0..80
-      5) Vignetting (%)              — 0..92  (STORED here for config round-trip,
-                                      but APPLIED at camera image stage, not world)
-      6) Haze (%)                    — 0..100 (static field + scalar shimmer; see haze.py)
-      7) Star/clutter count          — 0..4000
-      8) Star brightness scale       — 0.5..1.8
-      9) Dynamic toggle              — bool
-      10) Dynamic speed               — 0.1..5.0 x
-
-    Lifecycle:
-      Scene(...) -> _build_background() -> get_frame() [static copy or dynamic twinkle]
-                                            update(dt) advances _time
-                                            regenerate() / regenerate_from_config() rebuilds
-      Optimized path: get_region(x0,y0,x1,y1) returns 640×640 FOV crop without
-      rebuilding full 5000×5000 float32 buffer each tick (60× cheaper).
-    """
-
     # Constructor — supports legacy kwargs and new config object
 
     def __init__(
@@ -192,16 +164,6 @@ class Scene:
             self._build_background()
 
     def _build_background(self) -> None:
-        """
-        Compose the full background in layered order:
-          1) Gradient (zenith→horizon)  [gradient.py]
-          2) Haze field                  [haze.py]
-          3) Starfield metadata + static composite [stars.py]
-        NOTE: Vignetting is NOT applied here — it is a camera/image-space effect
-        (radial falloff centered on FOV, not world). Applied at capture stage via
-        environment.vignetting.apply_vignetting on the 640×640 FOV frame.
-        Caches _base_no_stars (without stars) and _static_background (with stars).
-        """
         rng = self._rng
         w, h = self.width, self.height
 
@@ -240,13 +202,6 @@ class Scene:
         self._time = 0.0
 
     def update(self, dt: float) -> None:
-        """Advance internal time for dynamic sky (twinkle + haze shimmer).
-
-        Static-first: ``_time`` only advances when ``dynamic=True`` so
-        static scenes stay bit-identical across ticks and
-        ``get_region vs get_frame`` equality holds. Dynamic mode keeps a
-        cheap scalar shimmer only (no per-star loop on tick).
-        """
         if not bool(getattr(self, "dynamic", False)):
             return
         try:
@@ -259,35 +214,11 @@ class Scene:
             pass
 
     def get_frame(self) -> np.ndarray:
-        """
-        Return current full-scene image as uint8 (H, W, 3).
-        Static when ``dynamic=False`` (cached copy); dynamic twinkle +
-        haze shimmer when ``dynamic=True``.
-        Returns a copy so callers can safely draw beacons without mutating cache.
-        """
         if not bool(getattr(self, "dynamic", False)):
             return self._static_background.copy()
         return self._render_dynamic_full()
 
     def get_region(self, x0: int, y0: int, x1: int, y1: int) -> np.ndarray:
-        """
-        Optimized cropped rendering — returns (y1-y0, x1-x0, 3) uint8 region.
-
-        This is the PERFORMANCE FIX for dynamic 5000×5000 rendering: instead of
-        rebuilding a full 5000×5000 RGB buffer every tick and then cropping to
-        640×640, we crop first (640×640 ≈ 1.2M pixels vs 75M) and apply haze
-        shimmer + twinkle only to the visible FOV stars. ~60× fewer pixels,
-        no 300 MB float32 temp.
-
-        Handles out-of-bounds FOV (clamped pan at edges) by zero-padding.
-        Vignetting is NOT applied here — caller applies vignetting at camera
-        image stage (image-space).
-
-        Args:
-          x0,y0,x1,y1 : world coords (from LocalTerminal.get_fov_rect())
-        Returns:
-          uint8 (h,w,3) crop.
-        """
         w = int(x1 - x0)
         h = int(y1 - y0)
         if w <= 0 or h <= 0:
@@ -353,12 +284,6 @@ class Scene:
         star_brightness_scale: float | None = None,
         config=None,  # EnvironmentConfig support for immediate migration
     ) -> None:
-        """
-        Regenerate background with new parameters (all optional, back-compat).
-
-        Preferred new call: scene.regenerate_from_config(env_config)
-        Legacy call: scene.regenerate(width=..., seed=..., ...)
-        """
         # Config path takes precedence if supplied
         if config is not None:
             self._apply_config(config, rebuild=False)
@@ -389,13 +314,7 @@ class Scene:
         self._build_background()
 
     def regenerate_from_config(self, config) -> None:
-        """
-        Regenerate from a validated EnvironmentConfig (preferred API).
 
-        Example:
-            cfg = EnvironmentConfig(world_width=1200, haze_pct=50, ...).validate()
-            scene.regenerate_from_config(cfg)
-        """
         self._apply_config(config, rebuild=False)
         self._rng = np.random.default_rng(self.seed)
         self._build_background()
@@ -405,12 +324,6 @@ class Scene:
         self.regenerate(width=width, height=height)
 
     def _render_dynamic_full(self) -> np.ndarray:
-        """Deprecated full-frame dynamic render (kept for back-compat).
-
-        Static-first: returns the cached static composite plus scalar shimmer.
-        Per-star full-frame twinkle removed (300MB int16 temp + 4000-iteration
-        Python loop). Use draw_twinkling_stars() offline if needed.
-        """
         try:
             shimmer = float(haze_modulation(float(self._time))) * float(
                 getattr(self, "haze_strength", 0.0) or 0.0)

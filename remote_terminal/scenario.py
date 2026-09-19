@@ -109,19 +109,27 @@ class RemoteTerminalScenario:
             tid = t.config.identity.id
             dwell = self._lock_timers.get(tid, 0.0)
 
-            if not t.is_emitting or camera is None:
+            if camera is None:
+                if t.is_emitting:
+                    dwell += dt
+                    self._lock_timers[tid] = dwell
+                    t.config.state.communication_state = "EMITTING"
+                else:
+                    dwell = max(0.0, dwell - dt * 2.0)
+                    self._lock_timers[tid] = dwell
+                    t.config.state.communication_state = "NO_LINK"
+                continue
+
+            if not t.is_emitting:
                 # No emission -> link decays to NO_LINK
                 dwell = max(0.0, dwell - dt * 2.0)
                 self._lock_timers[tid] = dwell
                 t.config.state.communication_state = "NO_LINK"
                 continue
 
-            # 2D link: presence + dwell only. Wavelength/mod identity is
-            # validated image-side by the local terminal; duplicating it here
-            # only desyncs the two FSMs.
+            # 2D link: presence + dwell only.
             in_fov = (fov_x0 <= t.x <= fov_x1) and (fov_y0 <= t.y <= fov_y1)
             dist_to_center = math.hypot(t.x - cam_cx, t.y - cam_cy)
-            # Unified with LocalTerminal link FSM: central 15% of FOV
             lock_radius = min(fov_w, fov_h) * 0.15
 
             if in_fov:
@@ -129,7 +137,7 @@ class RemoteTerminalScenario:
                 self._lock_timers[tid] = dwell
 
                 if dist_to_center <= lock_radius:
-                    # Unified with LocalTerminal: 0.2s LOCK / 0.5s HANDSHAKE / 1.2s CONNECTED
+                    # Link timing: 0.2s LOCK / 0.5s HANDSHAKE / 1.2s CONNECTED
                     if dwell >= 1.2:
                         t.config.state.communication_state = "CONNECTED"
                     elif dwell >= 0.5:
@@ -148,36 +156,26 @@ class RemoteTerminalScenario:
                 else:
                     t.config.state.communication_state = "NO_LINK"
 
-    def render_fov_beacons(self, fov_frame: np.ndarray, camera, channel=None,
-                           pipeline=None, rng=None, dt: float = 1.0 / 30.0,
-                           distance_m: float | None = None) -> np.ndarray:
-        """
-        Blends terminal optical spots into the given FOV frame.
+    def render_beacons(self, frame: np.ndarray, camera=None, channel=None,
+                       pipeline=None, rng=None, dt: float = 1.0 / 30.0,
+                       distance_m: float | None = None,
+                       target_rect: tuple[int, int, int, int] | None = None) -> np.ndarray:
+        """Blends terminal optical spots into the given frame (world or FOV)."""
+        if frame is None:
+            return frame
 
-        Authoritative order (§13/§17): ideal beam (Remote Terminal) →
-        Propagation Channel → received signal → camera image formation.
-        When ``pipeline`` (or ``channel``) is supplied, each beacon is routed
-        through ``propagate_beam`` so wander/attenuation/spread modify the
-        received spot — not the tracker output. Without it, legacy direct
-        blending is used (back-compat for tests/GUI).
+        display = frame.copy()
+        if target_rect is not None:
+            fov_rect = target_rect
+            pixel_scale = 0.035
+        elif camera is not None:
+            fov_rect = camera.get_fov_rect()
+            pixel_scale = getattr(getattr(camera, "config", None), "pixel_scale_mrad", 0.035)
+        else:
+            fh, fw = display.shape[:2]
+            fov_rect = (0, 0, fw, fh)
+            pixel_scale = 0.035
 
-        Args:
-          distance_m: optical link range in metres. None (default) preserves
-            legacy table behavior exactly; pass an explicit range for
-            Beer-Lambert range correction in the channel.
-        """
-        if fov_frame is None or camera is None:
-            return fov_frame
-
-        display = fov_frame.copy()
-        fov_rect = camera.get_fov_rect()
-        pixel_scale = getattr(getattr(camera, "config", None), "pixel_scale_mrad", None)
-        if pixel_scale is None:
-            try:
-                am = getattr(getattr(camera, "config", None), "angular_model", None)
-                pixel_scale = float(am.pixel_to_angle_x) * 0.001 if am is not None else 0.109083
-            except Exception:
-                pixel_scale = 0.109083
         fh, fw = display.shape[:2]
 
         for t in self.terminals:
@@ -231,6 +229,8 @@ class RemoteTerminalScenario:
                 display[y0_dst : y0_dst + h, x0_dst : x0_dst + w] = blended
 
         return display
+
+    render_fov_beacons = render_beacons
 
     def get_telemetry(self) -> dict[str, Any]:
         """Summary telemetry for UI and presenters."""

@@ -201,10 +201,10 @@ class Renderer:
         return display
 
     @staticmethod
-    def render_minimap_cached(minimap_thumb: np.ndarray, camera, *args,
+    def render_minimap_cached(minimap_thumb: np.ndarray, camera=None, *args,
                               label_size: tuple[int, int] = (400, 300),
                               scene_size: tuple[int, int] = (2000, 2000), **kwargs) -> np.ndarray:
-        """Fast path: minimap_thumb already resized. Overlays FOV bounds and home indicator."""
+        """Fast path: minimap_thumb already resized. Overlays home indicator and terminals."""
         lw, lh = label_size
         sw, sh = scene_size
         display = minimap_thumb.copy()
@@ -213,13 +213,17 @@ class Renderer:
             display = cv2.resize(display, (max(50, lw), max(50, lh)), interpolation=cv2.INTER_LINEAR)
         scale_x, scale_y = display.shape[1] / sw, display.shape[0] / sh
 
-        x0, y0, x1, y1 = camera.get_fov_rect()
-        x0s, y0s, x1s, y1s = int(x0 * scale_x), int(y0 * scale_y), int(x1 * scale_x), int(y1 * scale_y)
-        cv2.rectangle(display, (x0s, y0s), (x1s, y1s), (70, 170, 255), 1, cv2.LINE_AA)
-        fcx, fcy = (x0s + x1s) // 2, (y0s + y1s) // 2
-        cv2.line(display, (fcx - 5, fcy), (fcx + 5, fcy), (70, 170, 255), 1, cv2.LINE_AA)
-        cv2.line(display, (fcx, fcy - 5), (fcx, fcy + 5), (70, 170, 255), 1, cv2.LINE_AA)
-        cv2.circle(display, (fcx, fcy), 1, (70, 170, 255), -1, cv2.LINE_AA)
+        if camera is not None:
+            try:
+                x0, y0, x1, y1 = camera.get_fov_rect()
+                x0s, y0s, x1s, y1s = int(x0 * scale_x), int(y0 * scale_y), int(x1 * scale_x), int(y1 * scale_y)
+                cv2.rectangle(display, (x0s, y0s), (x1s, y1s), (70, 170, 255), 1, cv2.LINE_AA)
+                fcx, fcy = (x0s + x1s) // 2, (y0s + y1s) // 2
+                cv2.line(display, (fcx - 5, fcy), (fcx + 5, fcy), (70, 170, 255), 1, cv2.LINE_AA)
+                cv2.line(display, (fcx, fcy - 5), (fcx, fcy + 5), (70, 170, 255), 1, cv2.LINE_AA)
+                cv2.circle(display, (fcx, fcy), 1, (70, 170, 255), -1, cv2.LINE_AA)
+            except Exception:
+                pass
 
         try:
             hx, hy = camera.get_home()

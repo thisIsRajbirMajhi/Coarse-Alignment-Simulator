@@ -55,10 +55,6 @@ class WindowManager:
         if self._settings is None:
             self._settings = SettingsDialog(session, self._parent)
             self._settings.terminalChanged.connect(self._parent._on_terminal_config)
-            if hasattr(self._settings, "localTerminalChanged"):
-                self._settings.localTerminalChanged.connect(self._parent._on_local_terminal_config)
-            self._settings.cameraChanged.connect(self._parent._on_camera_config)
-            self._settings.controlChanged.connect(self._parent._on_control_config)
             self._settings.environmentChanged.connect(self._parent._on_environment_config)
             self._settings.disturbancesChanged.connect(self._parent._on_disturbances_config)
         try:

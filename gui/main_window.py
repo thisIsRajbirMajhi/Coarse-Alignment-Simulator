@@ -228,8 +228,6 @@ class MainWindow(QMainWindow):
                         telemetry_packet = {}
                         if getattr(snap, "terminals", None) is not None:
                             telemetry_packet["terminals"] = snap.terminals
-                        if getattr(snap, "local_terminal", None) is not None:
-                            telemetry_packet["local_terminal"] = snap.local_terminal
                         self.windows._settings.update_telemetry(telemetry_packet)
                     except Exception as e:
                         log.debug("dialog telemetry update skipped: %s", e)
@@ -327,10 +325,6 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
             log.warning("deferred %s apply failed: %s", section, e)
-
-    def _on_local_terminal_config(self, cfg) -> None:
-        self._schedule_config("local_terminal", lambda: self.controller.apply_config(
-            ApplyConfigCommand(section="local_terminal", config=cfg)))
 
     def _on_camera_config(self, cfg) -> None:
         self._schedule_config("camera", lambda: self.controller.apply_config(

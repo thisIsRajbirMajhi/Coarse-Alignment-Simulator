@@ -266,3 +266,21 @@ def test_figure8_remote_motion_bounded_and_repeating():
     assert min(xs) < 1000.0 < max(xs)
     assert any(abs(x - 1000.0) < 60.0 and abs(y - 1000.0) < 60.0 for x, y in zip(xs, ys))
 
+
+def test_remote_terminal_without_camera():
+    import numpy as np
+    from remote_terminal.config import RemoteTerminalScenarioConfig
+    from remote_terminal.scenario import RemoteTerminalScenario
+
+    cfg = RemoteTerminalScenarioConfig(terminal_count=2)
+    scen = RemoteTerminalScenario(cfg, bounds=(2000, 2000))
+    # Update without camera
+    scen.update(0.1, camera=None)
+    telem = scen.get_telemetry()
+    assert telem["terminal_count"] == 2
+
+    # Render beacons on full frame without camera
+    frame = np.zeros((1000, 1000, 3), dtype=np.uint8)
+    rendered = scen.render_beacons(frame, camera=None)
+    assert rendered.shape == (1000, 1000, 3)
+

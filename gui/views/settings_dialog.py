@@ -67,7 +67,7 @@ class SettingsDialog(QDialog):
         title.setStyleSheet("font-size:16px; font-weight:700; color:#ffffff;")
         title_block.addWidget(title)
 
-        sub = QLabel("Local Optical Terminal • Remote Terminal • Environment • Disturbances", header)
+        sub = QLabel("Remote Terminal • Environment • Disturbances", header)
         sub.setStyleSheet("font-size:11px; color:#e2e8f0;")
         sub.setWordWrap(True)
         sub.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -77,7 +77,7 @@ class SettingsDialog(QDialog):
 
         self.btn_randomize = QPushButton("🎲 Randomize All", header)
         self.btn_randomize.setObjectName("randomizeAllButton")
-        self.btn_randomize.setToolTip("Randomize all remote and local terminal parameters and synchronize optical pairing on the go")
+        self.btn_randomize.setToolTip("Randomize all remote terminal, environment, and disturbance parameters on the go")
         self.btn_randomize.setMinimumHeight(30)
         self.btn_randomize.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.btn_randomize.setStyleSheet(
@@ -97,13 +97,12 @@ class SettingsDialog(QDialog):
         self.btn_randomize_scope.setObjectName("settingsButton")
         self.btn_randomize_scope.setMinimumHeight(30)
         self.btn_randomize_scope.setFixedWidth(34)
-        self.btn_randomize_scope.setToolTip("Randomize one scope: Environment, Disturbances, Remote, Local, or Seed only")
+        self.btn_randomize_scope.setToolTip("Randomize one scope: Environment, Disturbances, Remote, or Seed only")
         scope_menu = _QMenu(self.btn_randomize_scope)
         scope_menu.addAction("Everything", self.randomize_all)
         scope_menu.addAction("Environment", self.randomize_environment)
         scope_menu.addAction("Disturbances", self.randomize_disturbances)
         scope_menu.addAction("Remote Terminal", self.randomize_remote)
-        scope_menu.addAction("Local Terminal", self.randomize_local)
         scope_menu.addAction("Seed only", self.randomize_seed_only)
         self.btn_randomize_scope.setMenu(scope_menu)
         hbox.addWidget(self.btn_randomize_scope)
@@ -143,40 +142,25 @@ class SettingsDialog(QDialog):
 
         from gui.panels.disturbances_panel import DisturbancesPanel
         from gui.panels.environment_panel import EnvironmentPanel
-        from gui.panels.local_terminal_panel import LocalTerminalPanel
         from gui.panels.remote_terminal_panel import RemoteTerminalPanel
 
-        scene_bounds = (int(session.env_config.world_width), int(session.env_config.world_height))
-
-        # 1. Local Terminal Panel (replaces standalone camera deck)
-        lt_cfg = getattr(session, "local_terminal_config", None) or getattr(session, "camera_config", None)
-        self.local_terminal_panel = LocalTerminalPanel(initial=lt_cfg, scene_bounds=scene_bounds)
-        # Compatibility alias
-        self.camera_panel = self.local_terminal_panel
-
-        # 2. Remote Terminal Panel
+        # 1. Remote Terminal Panel
         scen_cfg = getattr(session, "scenario_config", None)
         self.terminal_panel = RemoteTerminalPanel(initial=scen_cfg)
         self.remote_terminal_panel = self.terminal_panel
 
-        # 3. Environment Panel
+        # 2. Environment Panel
         self.env_panel = EnvironmentPanel(initial=session.env_config)
 
-        # 4. Disturbances Panel
+        # 3. Disturbances Panel
         self.dist_panel = DisturbancesPanel(initial=session.disturbance_config)
 
         # Wrap each panel in a scroll area with custom clean background
         self._add_scrolled_tab(self.terminal_panel, "Remote Terminal")
-        self._add_scrolled_tab(self.local_terminal_panel, "Local Terminal")
         self._add_scrolled_tab(self.env_panel, "Environment")
         self._add_scrolled_tab(self.dist_panel, "Disturbances")
 
         # Connect signals
-        def _on_local_terminal_changed(cfg):
-            self.localTerminalChanged.emit(cfg)
-            self.cameraChanged.emit(cfg)
-
-        self.local_terminal_panel.configChanged.connect(_on_local_terminal_changed)
         self.terminal_panel.configChanged.connect(self.terminalChanged.emit)
         self.env_panel.configChanged.connect(self.environmentChanged.emit)
         self.dist_panel.configChanged.connect(self.disturbancesChanged.emit)
@@ -198,19 +182,19 @@ class SettingsDialog(QDialog):
         self.tabs.setTabToolTip(idx, f"{title} configuration")
 
     def randomize_all(self) -> None:
-        """Randomize remote and local terminal configurations in sync on the go."""
+        """Randomize configurations across all active panels."""
         import random
 
         laser_lines = [850.0, 980.0, 1064.0, 1310.0, 1550.0]
         tokens = ["ALPHA-7", "BRAVO-2", "ECHO-9", "SIERRA-4", "OMEGA-1", "KILO-6"]
-        mod_types = ["AM", "OOK"]  # 2D subset (PM/PPM/CUSTOM fold into OOK truth)
+        mod_types = ["AM", "OOK"]
 
         chosen_wl = random.choice(laser_lines)
         chosen_token = random.choice(tokens)
         chosen_mod = random.choice(mod_types)
         chosen_freq = round(random.uniform(8.0, 20.0), 1)
 
-        # 1. Randomize Remote Terminal (emits exactly 1 terminalChanged signal via connect)
+        # 1. Randomize Remote Terminal
         self.terminal_panel.randomize(
             token=chosen_token,
             wavelength=chosen_wl,
@@ -219,13 +203,11 @@ class SettingsDialog(QDialog):
             emit=True,
         )
 
-        # 2. Randomize Local Terminal (emits exactly 1 localTerminalChanged signal via connect)
-        self.local_terminal_panel.randomize(
-            wavelength=chosen_wl,
-            mod_type=chosen_mod,
-            mod_freq=chosen_freq,
-            emit=True,
-        )
+        # 2. Randomize Environment
+        self.randomize_environment()
+
+        # 3. Randomize Disturbances
+        self.randomize_disturbances()
 
     def randomize_environment(self) -> None:
         """Scope: environment only (atmosphere + starfield + seed)."""
@@ -250,13 +232,6 @@ class SettingsDialog(QDialog):
         except Exception as e:
             log.debug("scoped remote randomize skipped: %s", e)
 
-    def randomize_local(self) -> None:
-        """Scope: local terminal only."""
-        try:
-            self.local_terminal_panel.randomize(emit=True)
-        except Exception as e:
-            log.debug("scoped local randomize skipped: %s", e)
-
     def randomize_seed_only(self) -> None:
         """Scope: environment seed only."""
         try:
@@ -280,13 +255,6 @@ class SettingsDialog(QDialog):
     def update_telemetry(self, telemetry: dict) -> None:
         if not isinstance(telemetry, dict):
             return
-        # Local Terminal telemetry
-        try:
-            lt_data = telemetry.get("local_terminal") or telemetry
-            self.local_terminal_panel.update_telemetry(lt_data)
-        except Exception as e:
-            log.debug("local terminal telemetry update skipped: %s", e)
-
         # Remote Terminal telemetry
         try:
             rt_data = telemetry.get("terminals") or telemetry
@@ -296,27 +264,11 @@ class SettingsDialog(QDialog):
 
     def sync_world_bounds(self, session) -> None:
         """Push current world size into panels (call after world resize)."""
-        try:
-            bounds = (int(session.env_config.world_width), int(session.env_config.world_height))
-        except Exception as e:
-            log.debug("world bounds sync skipped: %s", e)
-            return
-        for panel, method in ((self.local_terminal_panel, "set_scene_bounds"),):
-            try:
-                getattr(panel, method)(bounds)
-            except Exception as e:
-                log.debug("%s sync skipped: %s", method, e)
+        pass
 
     def sync_from_session(self, session) -> None:
         """Pull clamped session values back into widgets (no emit, no loops)."""
         self.sync_world_bounds(session)
-        try:
-            if hasattr(session, "local_terminal_config"):
-                self.local_terminal_panel.set_config(session.local_terminal_config, emit=False)
-            elif hasattr(session, "camera_config"):
-                self.local_terminal_panel.set_config(session.camera_config, emit=False)
-        except Exception as e:
-            log.debug("local terminal sync skipped: %s", e)
         try:
             if hasattr(session, "scenario_config"):
                 self.terminal_panel.set_config(session.scenario_config, emit=False)
@@ -330,3 +282,4 @@ class SettingsDialog(QDialog):
             self.dist_panel.set_config(session.disturbance_config, emit=False)
         except Exception as e:
             log.debug("disturbances sync skipped: %s", e)
+

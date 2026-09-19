@@ -135,12 +135,14 @@ def test_dashboard_live_metrics_accumulate(window):
 
 
 def test_config_panels_produce_validated_configs(window):
-    cam = window.session.camera_config
-    assert cam.fov_width > 0
     from gui.views.settings_dialog import SettingsDialog
     dlg = SettingsDialog(window.session, window)
-    cfg = dlg.camera_panel.collect_config()
-    assert cfg.validate((2000, 2000)).fov_width > 0
+    cfg_term = dlg.terminal_panel.collect_config()
+    assert cfg_term.terminal_count >= 1
+    cfg_env = dlg.env_panel.collect_config()
+    assert cfg_env.world_width >= 2000
+    cfg_dist = dlg.dist_panel.collect_config()
+    assert cfg_dist is not None
     dlg.close()
 
 
@@ -176,7 +178,7 @@ def test_headless_unaffected():
 
 def test_no_sim_imports_qt():
     import subprocess, sys
-    code = "import simulation.headless, disturbance, local_terminal.terminal; print('ok')"
+    code = "import simulation.headless, disturbance, remote_terminal; print('ok')"
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert "PyQt" not in r.stdout + r.stderr or "ok" in r.stdout
 
@@ -261,13 +263,13 @@ def test_reset_restores_everything(window):
 
 def test_hot_reload_is_debounced(window):
     import copy
-    cfg = copy.copy(window.session.controller_config)
-    cfg.kp = float(cfg.kp) + 0.05
-    old_kp = window.session.controller_config.kp
-    window._on_control_config(cfg)
-    assert window.session.controller_config.kp == old_kp
-    window._fire_config("control")
-    assert window.session.controller_config.kp != old_kp
+    cfg = copy.copy(window.session.disturbance_config)
+    cfg.turbulence = int(cfg.turbulence) + 1
+    old_turb = window.session.disturbance_config.turbulence
+    window._on_disturbances_config(cfg)
+    assert window.session.disturbance_config.turbulence == old_turb
+    window._fire_config("disturbances")
+    assert window.session.disturbance_config.turbulence != old_turb
 
 
 def test_settings_deck_matches_console_chrome(window):
@@ -279,16 +281,7 @@ def test_settings_deck_matches_console_chrome(window):
     assert dlg.windowTitle() == "Settings"
     assert dlg.btn_close is not None and dlg.btn_close.text() == "Close"
     tabs = dlg.findChild(QTabWidget)
-    assert tabs is not None and tabs.count() in (4, 5)  # RemoteTerminal/Camera/Control/Environment/Disturbances
-    dlg.close()
-
-
-def test_camera_fov_sliders_capped_to_world(window):
-    from gui.views.settings_dialog import SettingsDialog
-    dlg = SettingsDialog(window.session, window)
-    w, h = int(window.session.env_config.world_width), int(window.session.env_config.world_height)
-    assert dlg.camera_panel.fov_w_slider.maximum() == w - 10
-    assert dlg.camera_panel.fov_h_slider.maximum() == h - 10
+    assert tabs is not None and tabs.count() == 3  # RemoteTerminal/Environment/Disturbances
     dlg.close()
 
 
@@ -296,7 +289,7 @@ def test_dialog_sync_back_after_world_change(window):
     from gui.views.settings_dialog import SettingsDialog
     dlg = SettingsDialog(window.session, window)
     dlg.sync_from_session(window.session)
-    assert dlg.camera_panel.fov_h_slider.value() == int(window.session.camera_config.fov_height)
+    assert dlg.env_panel.slider_world_w.value() == int(window.session.env_config.world_width)
     dlg.close()
 
 
