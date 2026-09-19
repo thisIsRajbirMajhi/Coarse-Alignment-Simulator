@@ -6,11 +6,13 @@
 #   Still sensor/image-space (FOV centre), follows camera.
 
 import math
+import threading
 
 import numpy as np
 
 # Cache for vignetting masks — key: (h,w, quantized_strength)
 _VIG_CACHE: dict[tuple[int, int, int], np.ndarray] = {}
+_VIG_LOCK = threading.Lock()
 _CACHE_MAX = 16
 
 
@@ -18,31 +20,38 @@ def _get_vig_mask(h: int, w: int, strength: float) -> np.ndarray:
     # Quantize strength to 1% to avoid cache explosion
     q = int(round(float(strength) * 100))
     key = (h, w, q)
-    if key in _VIG_CACHE:
-        return _VIG_CACHE[key]
+    with _VIG_LOCK:
+        hit = _VIG_CACHE.get(key)
+        if hit is not None:
+            return hit
+    # Single-pass radial field with asymmetric centre (sensor tilt 1.5% down).
+    # Previous version computed r/max_r then discarded it — now r_eff only.
     ys, xs = np.ogrid[:h, :w]
     cx, cy = w * 0.5, h * 0.5
-    r = np.sqrt((xs - cx) ** 2 + (ys - cy) ** 2)
     max_r = math.sqrt(cx * cx + cy * cy)
-    # Physical cos4 approx: (r/max_r)^2.1 gives smooth natural falloff for 4° FOV
-    # Add subtle asymmetry: bottom slightly less vignetted (sensor tilt) — 3% shift
-    # by biasing y centre 1.5% down
     cy_eff = cy * 1.015
-    r_eff = np.sqrt((xs - cx) ** 2 + (ys - cy_eff) ** 2)
-    norm = np.clip(r_eff / (max_r + 1e-6), 0, 1).astype(np.float32)
-    # Cosine-fourth + mechanical: vig = 1 - s*(norm^2.1 + 0.12*norm^4)
-    vig = 1.0 - (q / 100.0) * (np.power(norm, 2.1).astype(np.float32) + 0.12 * np.power(norm, 4.0).astype(np.float32))
-    vig = np.clip(vig, 0.28, 1.0).astype(np.float32)
-    # LRU eviction
-    if len(_VIG_CACHE) >= _CACHE_MAX:
-        oldest = next(iter(_VIG_CACHE))
-        del _VIG_CACHE[oldest]
-    _VIG_CACHE[key] = vig
+    dx = xs - cx
+    dy = ys - cy_eff
+    # sqrt + normalize in float32; norm^2.1 + 0.12*norm^4 (cos4 approx for 4° FOV)
+    r_eff = np.sqrt(dx * dx + dy * dy, dtype=np.float32)
+    norm = r_eff / (max_r + 1e-6)
+    np.clip(norm, 0, 1, out=norm)
+    n2 = norm * norm
+    # norm^2.1 = norm^2 * norm^0.1 (one pow instead of two)
+    falloff = n2 * np.power(norm, 0.1, dtype=np.float32) + 0.12 * (n2 * n2)
+    vig = 1.0 - (q / 100.0) * falloff
+    vig = np.clip(vig, 0.28, 1.0).astype(np.float32, copy=False)
+    with _VIG_LOCK:
+        if len(_VIG_CACHE) >= _CACHE_MAX:
+            oldest = next(iter(_VIG_CACHE))
+            del _VIG_CACHE[oldest]
+        _VIG_CACHE[key] = vig
     return vig
 
 
 def clear_vignetting_cache() -> None:
-    _VIG_CACHE.clear()
+    with _VIG_LOCK:
+        _VIG_CACHE.clear()
 
 
 def apply_vignetting(base: np.ndarray, strength: float) -> np.ndarray:
@@ -65,8 +74,10 @@ def apply_vignetting(base: np.ndarray, strength: float) -> np.ndarray:
     h, w = base.shape[0], base.shape[1]
     vig = _get_vig_mask(h, w, float(strength))
     if base.dtype == np.uint8:
-        base_f = base.astype(np.float32)
+        # In-place friendly: single float32 temp, out= ops avoid extra allocs.
+        base_f = base.astype(np.float32, copy=True)
         base_f *= vig[:, :, None]
-        return np.clip(base_f, 0, 255).astype(np.uint8)
-    base *= vig[:, :, None]
-    return np.clip(base, 0, 255)
+        np.clip(base_f, 0, 255, out=base_f)
+        return base_f.astype(np.uint8, copy=False)
+    np.multiply(base, vig[:, :, None], out=base, casting="unsafe")
+    return np.clip(base, 0, 255, out=base)

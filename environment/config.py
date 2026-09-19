@@ -129,13 +129,20 @@ class EnvironmentConfig(BaseValidatedConfig):
         Domain randomization for AI data generation — produces challenging variants.
 
         Args:
-          rng: optional Generator for reproducibility
+          rng: optional Generator for reproducibility. If None, a fresh
+            non-deterministic Generator is used (warns via last_warnings).
           difficulty: "easy" | "medium" | "hard" | "mixed"
         Returns self (mutated) for chaining.
         """
+        import warnings
         if rng is None:
+            warnings.warn("randomize_for_training(rng=None): non-reproducible; pass explicit Generator for training",
+                          UserWarning, stacklevel=2)
             rng = np.random.default_rng(_random.randint(0, 999999))
         diff = str(difficulty).lower()
+        if diff not in ("easy", "medium", "hard"):
+            # mixed — 30/40/30 without recursion (strict-compat, same distribution)
+            diff = str(rng.choice(["easy", "medium", "hard"], p=[0.30, 0.40, 0.30]))
         if diff == "easy":
             self.haze_pct = int(rng.integers(0, 20))
             self.star_count = int(rng.integers(20, 120))
@@ -146,17 +153,22 @@ class EnvironmentConfig(BaseValidatedConfig):
             self.star_count = int(rng.integers(80, 400))
             self.star_brightness = float(rng.uniform(0.9, 1.4))
             self.vignetting_pct = int(rng.integers(5, 35))
-        elif diff == "hard":
+        else:  # hard
             self.haze_pct = int(rng.integers(45, 95))
             self.star_count = int(rng.integers(300, 2500))
             self.star_brightness = float(rng.uniform(1.2, 1.8))
             self.vignetting_pct = int(rng.integers(15, 60))
             self.bg_bottom = int(rng.integers(18, 40))
-        else:  # mixed — 30/40/30
-            pick = rng.choice(["easy", "medium", "hard"], p=[0.30, 0.40, 0.30])
-            return self.randomize_for_training(rng, pick)
         self.bg_top = int(rng.integers(8, 18))
         self.seed = int(rng.integers(0, 999999))
+        self.validate()
+        # Physical coupling (cheap realism): haze dims apparent star brightness.
+        # Keeps sampled value in range, preserves determinism (no extra RNG).
+        try:
+            dim = 1.0 - 0.40 * (float(self.haze_pct) / 100.0)
+            self.star_brightness = float(np.clip(float(self.star_brightness) * dim, 0.5, 1.8))
+        except (TypeError, ValueError):
+            pass
         return self.validate()
 
     @classmethod

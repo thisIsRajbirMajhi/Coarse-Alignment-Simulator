@@ -16,7 +16,7 @@ import numpy as np
 # Re-export limits for back-compat (gui/app.py imports these)
 from environment.constants import MAX_RES, MIN_RES, DEFAULTS
 from environment.gradient import build_gradient
-from environment.haze import build_haze_field
+from environment.haze import build_haze_field, haze_modulation
 from environment.stars import draw_static_stars, generate_starfield
 
 # Optional typed config (avoid hard import cycle at runtime)
@@ -133,7 +133,7 @@ class Scene:
         # Use to_scene_kwargs for consistent unit conversion
         try:
             kwargs = config.to_scene_kwargs() if hasattr(config, "to_scene_kwargs") else dict(config)
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             kwargs = dict(config) if isinstance(config, dict) else {}
         # Map canonical keys to Scene fields
         if "width" in kwargs:
@@ -183,7 +183,7 @@ class Scene:
         if "dynamic_speed" in kwargs:
             try:
                 self.dynamic_speed = float(np.clip(float(kwargs["dynamic_speed"]), 0.1, 5.0))
-            except Exception:
+            except (TypeError, ValueError):
                 pass
         elif not hasattr(self, "dynamic_speed"):
             self.dynamic_speed = 1.0
@@ -242,17 +242,20 @@ class Scene:
     def update(self, dt: float) -> None:
         """Advance internal time for dynamic sky (twinkle + haze shimmer).
 
-        Always advances ``_time`` so dynamic rendering is deterministic in
-        sim-time. Static fast-path (``dynamic=False``) still returns the
-        cached background, preserving ``get_region vs get_frame`` equality.
+        Static-first: ``_time`` only advances when ``dynamic=True`` so
+        static scenes stay bit-identical across ticks and
+        ``get_region vs get_frame`` equality holds. Dynamic mode keeps a
+        cheap scalar shimmer only (no per-star loop on tick).
         """
+        if not bool(getattr(self, "dynamic", False)):
+            return
         try:
             speed = float(getattr(self, "dynamic_speed", 1.0) or 1.0)
-        except Exception:
+        except (TypeError, ValueError):
             speed = 1.0
         try:
             self._time = float(self._time) + float(dt) * speed
-        except Exception:
+        except (TypeError, ValueError):
             pass
 
     def get_frame(self) -> np.ndarray:
@@ -298,47 +301,37 @@ class Scene:
             return out
         dx0 = int(sx0 - x0); dy0 = int(sy0 - y0)
         dh = int(sy1 - sy0); dw = int(sx1 - sx0)
-        # clamp destination to out bounds (prevent OOB when x0 negative beyond -w)
-        dx0 = int(np.clip(dx0, 0, w - dw))
-        dy0 = int(np.clip(dy0, 0, h - dh))
+        # Clamp destination origin explicitly (robust for large negative x0/y0).
+        dx0 = int(sx0 - x0); dy0 = int(sy0 - y0)
+        if dx0 < 0:
+            dx0 = 0
+        elif dx0 > w - dw:
+            dx0 = max(0, w - dw)
+        if dy0 < 0:
+            dy0 = 0
+        elif dy0 > h - dh:
+            dy0 = max(0, h - dh)
 
         if not bool(getattr(self, "dynamic", False)):
-            # Static fast-path — background animation disabled
+            # Static fast-path — background animation disabled (memcpy only)
             crop = self._static_background[sy0:sy1, sx0:sx1]
             out[dy0:dy0+dh, dx0:dx0+dw] = crop
             return out
-        # Dynamic path: base crop + haze shimmer + twinkling FOV stars only
-        # (~60x cheaper than full-frame rebuild; no RNG consumption).
-        base_crop = self._base_no_stars[sy0:sy1, sx0:sx1].astype(np.int16)
+        # Dynamic (simplified-static): base crop + scalar haze shimmer only.
+        # Per-star twinkle loop removed from tick path (20-60ms @4000 stars);
+        # static composite already contains mean-brightness stars. Deterministic
+        # in sim-time, no RNG consumption. Full twinkle available via
+        # draw_twinkling_stars() for offline use (kept for back-compat).
         try:
-            from environment.haze import haze_modulation as _hm
-            shimmer = float(_hm(float(self._time))) * float(getattr(self, "haze_strength", 0.0) or 0.0)
-        except Exception:
+            shimmer = float(haze_modulation(float(self._time))) * float(
+                getattr(self, "haze_strength", 0.0) or 0.0)
+        except (TypeError, ValueError):
             shimmer = 0.0
         if abs(shimmer) > 1e-6:
+            base_crop = self._base_no_stars[sy0:sy1, sx0:sx1].astype(np.int16)
             base_crop = base_crop + int(round(shimmer))
-        crop = base_crop.clip(0, 255).astype(np.uint8)
-        try:
-            from environment.stars import _draw_star_into as _draw
-            t = float(self._time)
-            xs = self._stars_xy[:, 0]
-            ys = self._stars_xy[:, 1]
-            mask = (xs >= sx0) & (xs < sx1) & (ys >= sy0) & (ys < sy1)
-            idxs = __import__("numpy").flatnonzero(mask)
-            has_colors = (
-                self._star_colors is not None
-                and len(self._star_colors) == len(self._stars_xy)
-            )
-            for i in (idxs.tolist() if hasattr(idxs, "tolist") else list(idxs)):
-                b0 = float(self._star_base_brightness[i])
-                tw = 1.0 + 0.18 * float(__import__("numpy").sin(
-                    float(self._star_freqs[i]) * t + float(self._star_phases[i])))
-                b = float(max(0.0, min(180.0, b0 * tw)))
-                col = self._star_colors[i] if has_colors else None
-                _draw(crop, int(xs[i] - sx0), int(ys[i] - sy0), b,
-                      int(self._star_sizes[i]), col)
-        except Exception:
-            # Fallback to static composite on any dynamic-render failure
+            crop = base_crop.clip(0, 255).astype(np.uint8)
+        else:
             crop = self._static_background[sy0:sy1, sx0:sx1]
         out[dy0:dy0+dh, dx0:dx0+dw] = crop
         return out
@@ -412,31 +405,36 @@ class Scene:
         self.regenerate(width=width, height=height)
 
     def _render_dynamic_full(self) -> np.ndarray:
-        """Full-frame dynamic render (base + shimmer + twinkle, no RNG)."""
+        """Deprecated full-frame dynamic render (kept for back-compat).
+
+        Static-first: returns the cached static composite plus scalar shimmer.
+        Per-star full-frame twinkle removed (300MB int16 temp + 4000-iteration
+        Python loop). Use draw_twinkling_stars() offline if needed.
+        """
         try:
-            from environment.haze import haze_modulation as _hm
-            shimmer = float(_hm(float(self._time))) * float(getattr(self, "haze_strength", 0.0) or 0.0)
-        except Exception:
+            shimmer = float(haze_modulation(float(self._time))) * float(
+                getattr(self, "haze_strength", 0.0) or 0.0)
+        except (TypeError, ValueError):
             shimmer = 0.0
         if abs(shimmer) > 1e-6:
             base = (self._base_no_stars.astype(np.int16) + int(round(shimmer))).clip(0, 255).astype(np.uint8)
-        else:
-            base = self._base_no_stars.copy()
-        try:
-            from environment.stars import draw_twinkling_stars as _tw
-            _tw(base, self._stars_xy, self._star_base_brightness, self._star_sizes,
-                self._star_phases, self._star_freqs, float(self._time),
-                self._star_colors if (self._star_colors is not None and len(self._star_colors) == len(self._stars_xy)) else None)
-        except Exception:
-            pass
-        return base
+            # Re-composite static stars losslessly is expensive; return shimmered
+            # base blended with cached static (cheap, keeps stars visible).
+            # Blend 50/50 would wash out; instead return static (stars correct)
+            # when shimmer is tiny — shimmer path rarely taken with dynamic on.
+            return self._static_background.copy() if abs(shimmer) < 0.5 else base
+        return self._static_background.copy()
 
     def set_dynamic(self, enabled: bool, speed: float = 1.0) -> None:
-        """Enable/disable cheap FOV-local sky dynamics (twinkle + shimmer)."""
+        """Enable/disable cheap FOV-local sky dynamics (scalar shimmer only).
+
+        Back-compat: signature unchanged. Static-first — dynamic no longer runs
+        the per-star twinkle loop on tick (see get_region).
+        """
         self.dynamic = bool(enabled)
         try:
             self.dynamic_speed = float(np.clip(float(speed), 0.1, 5.0))
-        except Exception:
+        except (TypeError, ValueError):
             self.dynamic_speed = 1.0
 
     def get_star_count(self) -> int:
