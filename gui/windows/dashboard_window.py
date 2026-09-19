@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout, QLabel, QMainWindow, QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
-from gui.styles import APP_STYLE
+from gui.theme import apply_theme
 from gui.views.dashboard_view import DashboardView
 
 log = logging.getLogger(__name__)
@@ -24,7 +24,7 @@ class DashboardWindow(QMainWindow):
         self.setWindowTitle("Live Dashboard")
         self.setMinimumSize(700, 600)
         self.resize(900, 800)
-        self.setStyleSheet(APP_STYLE)
+        apply_theme(self)
         self._fullscreen = False
 
         central = QWidget(self)

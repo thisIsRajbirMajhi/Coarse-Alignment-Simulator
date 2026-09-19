@@ -13,9 +13,10 @@ from gui.application.controller import ApplicationController
 from gui.application.session import SimulationSession
 from gui.application.state import LifecycleState
 from gui.application.worker import SimWorker
+from gui.theme import apply_theme, current_theme, toggle_theme
 from gui.core.window_manager import WindowManager
 from gui.presentation.simulation_presenter import SimulationPresenter
-from gui.styles import APP_STYLE, TICK_MS
+from gui.styles import TICK_MS
 from gui.views.control_view import ControlView
 from gui.views.simulation_view import SimulationView
 
@@ -30,7 +31,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Coarse Alignment Simulator")
         self.setMinimumSize(1150, 760)
         self.resize(1350, 900)
-        self.setStyleSheet(APP_STYLE)
+        apply_theme(self)
         self._fullscreen = False
 
         # Application layer (owns sim)
@@ -78,6 +79,8 @@ class MainWindow(QMainWindow):
         self.controls.btn_dashboard.clicked.connect(lambda: self.windows.show_dashboard())
         self.controls.btn_fullscreen.clicked.connect(self.toggle_fullscreen)
         self.controls.btn_settings.clicked.connect(lambda: self.windows.show_settings(self.session))
+        self.controls.btn_theme.clicked.connect(self._on_theme_toggle)
+        self._refresh_theme_button()
         # Queued: controller.step() executes in the worker thread, so its
         # signals must hop back to the GUI thread (AutoConnection would
         # deliver directly in the worker thread since the controller object
@@ -96,12 +99,43 @@ class MainWindow(QMainWindow):
         self._config_timers: dict[str, QTimer] = {}
         self._pending_config: dict = {}
         self._apply_button_states()
+        self._refresh_live_badge()
+
+    def _refresh_live_badge(self) -> None:
+        try:
+            from gui.application.state import LifecycleState as _LS
+            self.controls.set_live(
+                pending=bool(self._pending_config),
+                running=self.controller.lifecycle == _LS.RUNNING,
+            )
+        except Exception as e:
+            log.debug("live badge refresh skipped: %s", e)
 
     # -- dashboard proxy
     @property
     def dashboard(self):
         """The Live Dashboard view inside its own separate window."""
         return self.windows.ensure_dashboard().view
+
+    # -- theme ----------------------------------------------------------
+    def _refresh_theme_button(self) -> None:
+        try:
+            dark = current_theme() == "dark"
+            self.controls.btn_theme.setText("◑ Light" if dark else "◐ Dark")
+        except Exception as e:
+            log.debug("theme button refresh skipped: %s", e)
+
+    def _on_theme_toggle(self) -> None:
+        try:
+            toggle_theme()
+            apply_theme(self)
+            if getattr(self.windows, "_settings", None) is not None:
+                apply_theme(self.windows._settings)
+            if getattr(self.windows, "_dashboard_window", None) is not None:
+                apply_theme(self.windows._dashboard_window)
+            self._refresh_theme_button()
+        except Exception as e:
+            log.debug("theme toggle skipped: %s", e)
 
     # -- fullscreen -----------------------------------------------------
     def toggle_fullscreen(self) -> None:
@@ -129,6 +163,40 @@ class MainWindow(QMainWindow):
         except Exception as e:
             log.debug("step request skipped: %s", e)
 
+    def _refresh_status_bar(self) -> None:
+        """Compact status strip (Design.md §17):
+        ● LIVE | Seed 42 | 2000×2000 | Fog 100% | Turb 4 (collapses narrow)."""
+        try:
+            running = self.controller.lifecycle == LifecycleState.RUNNING
+            dot = "● LIVE" if running else ("◌ PAUSED" if str(self.controller.lifecycle) == "LifecycleState.PAUSED" else "○ IDLE")
+        except Exception:
+            dot, running = "○ IDLE", False
+        try:
+            seed = self.session.env_config.seed
+            seed_t = f"Seed {int(seed)}" if seed is not None else "Seed —"
+            world_t = f"{int(self.session.env_config.world_width)}×{int(self.session.env_config.world_height)}"
+        except Exception:
+            seed_t, world_t = "Seed —", "—×—"
+        try:
+            dc = self.session.disturbance_config
+            preset = str(getattr(dc, "atmospheric_preset", "Clear"))
+            sev = int(float(getattr(dc, "channel_severity", 1.0)) * 100)
+            turb = int(getattr(dc, "turbulence", 0))
+            dist_t = f"{preset} {sev}% | Turb {turb}"
+        except Exception:
+            dist_t = "—"
+        try:
+            narrow = self.centralWidget() is not None and self.centralWidget().width() < 900
+        except Exception:
+            narrow = False
+        try:
+            if narrow:
+                self._statusbar.showMessage(f"{dot}  |  {seed_t}  |  Custom")
+            else:
+                self._statusbar.showMessage(f"{dot}  |  {seed_t}  |  {world_t}  |  {dist_t}")
+        except Exception as e:
+            log.debug("status strip refresh skipped: %s", e)
+
     def _on_snapshot(self, snap) -> None:
         self._step_pending = False
         if snap is None:
@@ -153,6 +221,7 @@ class MainWindow(QMainWindow):
                 self.dashboard.render(state)
             except Exception as e:
                 log.debug("dashboard render skipped: %s", e)
+            self._refresh_status_bar()
             if getattr(self.windows, "_settings", None) is not None:
                 if self.windows._settings.isVisible():
                     try:
@@ -202,22 +271,17 @@ class MainWindow(QMainWindow):
 
     def _on_lifecycle(self, value: str) -> None:
         self._apply_button_states()
+        self._refresh_live_badge()
         if value != LifecycleState.RUNNING.value:
             self._step_pending = False
         try:
-            if value == LifecycleState.RUNNING.value:
-                self._statusbar.showMessage(f"Running — {self.session.camera_config.fov_width}x{self.session.camera_config.fov_height} FOV")
-            elif value == LifecycleState.PAUSED.value:
-                self._statusbar.showMessage("Paused")
-            elif value == LifecycleState.STOPPED.value:
-                self._statusbar.showMessage("Stopped — press Start")
+            if value == LifecycleState.STOPPED.value:
                 self.presenter.reset()
                 try:
                     self.dashboard.render(self.presenter.update(None, self.session, self.controller))
                 except Exception as e:
                     log.debug("empty dashboard render failed: %s", e)
-            else:
-                self._statusbar.showMessage(value)
+            self._refresh_status_bar()
         except Exception as e:
             log.debug("status update skipped: %s", e)
 
@@ -244,15 +308,18 @@ class MainWindow(QMainWindow):
             self._config_timers[section] = timer
         self._pending_config[section] = apply
         timer.start(250)
+        self._refresh_live_badge()
 
     def _fire_config(self, section: str) -> None:
         apply = self._pending_config.pop(section, None)
+        self._refresh_live_badge()
         if apply is None:
             return
         try:
             # Serialized against worker steps (bounded by a single step).
             with self.worker.guard():
                 apply()
+            self._refresh_status_bar()
         except Exception as e:
             # Never a silent no-op: the user just moved a control.
             try:

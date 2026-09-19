@@ -74,6 +74,13 @@ class RemoteTerminalPanel(BaseConfigPanel):
         self._updating = False
         self._advanced_visible = False
         self._build_ui()
+        # Restore persisted Advanced state (default collapsed per spec).
+        try:
+            from gui.components import expansion_state as _exp_state
+            if _exp_state("remote/advanced", False):
+                self.toggle_advanced()
+        except Exception:
+            pass
         self.set_config(self._scenario_config, emit=False)
 
     def _build_ui(self) -> None:
@@ -332,6 +339,11 @@ class RemoteTerminalPanel(BaseConfigPanel):
             self.btn_toggle_advanced.setText("▼ ⚙️ Advanced Parameters [Click to Collapse]")
         else:
             self.btn_toggle_advanced.setText("▶ ⚙️ Advanced Parameters (Motion Detail, Telemetry, Protocol) [Click to Expand]")
+        try:
+            from gui.components import set_expansion_state as _save_exp
+            _save_exp("remote/advanced", bool(self._advanced_visible))
+        except Exception:
+            pass
 
     # --- ADVANCED CARD BUILDERS --------------------------------------
 
@@ -488,16 +500,11 @@ class RemoteTerminalPanel(BaseConfigPanel):
         self._on_any_change()
 
     def _on_any_change(self, *args) -> None:
+        # Live-apply (Design.md §15): scenario/beacon edits cost no rebuild.
+        # Terminal-count drags stay release-gated (structural refresh).
         if self._updating:
             return
         self._save_selected_terminal()
-        # Release-only: skip while a slider drag is in flight.
-        try:
-            sender = self.sender()
-            if isinstance(sender, QSlider) and sender.isSliderDown():
-                return
-        except Exception:
-            pass
         try:
             self.configChanged.emit(self.collect_config())
         except Exception as e:
@@ -728,7 +735,19 @@ class RemoteTerminalPanel(BaseConfigPanel):
         best = telemetry.get("best_link", "NO_LINK")
         emitting = telemetry.get("emitting_count", 0)
         total = telemetry.get("terminal_count", len(self._scenario_config.terminals))
-        self.live_status_badge.setText(f"SCENARIO: {emitting}/{total} EMITTING | LINK: {best}")
+        # Compact identity strip (Design.md §30.1): id · state · beacon · link.
+        sel_id, sel_beacon = "RT-?", "—"
+        try:
+            term_list = telemetry.get("terminals", [])
+            if isinstance(term_list, list) and 0 <= self._selected_idx < len(term_list):
+                td0 = term_list[self._selected_idx]
+                if isinstance(td0, dict):
+                    sel_id = str(td0.get("id", sel_id))
+                    sel_beacon = str(td0.get("beacon_state", sel_beacon))
+        except (TypeError, ValueError, AttributeError, IndexError):
+            pass
+        self.live_status_badge.setText(
+            f"{sel_id} · {emitting}/{total} EMITTING · BEACON: {sel_beacon} · LINK: {best}")
 
         term_list = telemetry.get("terminals", [])
         if not isinstance(term_list, list) or self._selected_idx >= len(term_list):

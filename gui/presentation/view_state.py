@@ -80,3 +80,10 @@ class DashboardState:
     target_switch_count: int = 0
     rms_px: float | None = None
     rms_mrad: float | None = None
+
+    # Diagnostics strip (Design.md §29.6) — best-effort link telemetry.
+    source_id: str = "—"
+    target_id: str = "—"
+    link_state: str = "—"
+    beacon_state: str = "—"
+    frame_id: int = 0

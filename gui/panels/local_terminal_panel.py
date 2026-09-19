@@ -326,6 +326,13 @@ class LocalTerminalPanel(BaseConfigPanel):
 
         self._setup_backward_compatibility_aliases()
         self._wire_signals()
+        # Restore persisted Advanced state (default collapsed per spec).
+        try:
+            from gui.components import expansion_state as _exp_state
+            if _exp_state("local/advanced", False):
+                self.toggle_advanced()
+        except Exception:
+            pass
 
     def toggle_advanced(self) -> None:
         self._advanced_visible = not getattr(self, "_advanced_visible", False)
@@ -334,6 +341,11 @@ class LocalTerminalPanel(BaseConfigPanel):
             self.btn_toggle_advanced.setText("▼ ⚙️ Advanced Parameters [Click to Collapse]")
         else:
             self.btn_toggle_advanced.setText("▶ ⚙️ Advanced Parameters (Mechanics, Noise & Fine-Tuning) [Click to Expand]")
+        try:
+            from gui.components import set_expansion_state as _save_exp
+            _save_exp("local/advanced", bool(self._advanced_visible))
+        except Exception:
+            pass
 
     # -----------------------------------------------------------------
     # ADVANCED SECTION SUB-GROUPS
@@ -732,19 +744,18 @@ class LocalTerminalPanel(BaseConfigPanel):
             chk.toggled.connect(self._on_change)
 
         self.txt_comm_proto.editingFinished.connect(self._on_change)
+        # Identity fields were previously unwired (stale until any slider
+        # moved) — apply on focus-out/Enter like all other text edits.
+        self.tgt_id_edit.editingFinished.connect(self._on_change)
+        self.tgt_token_edit.editingFinished.connect(self._on_change)
 
     def _on_slider_moved(self) -> None:
-        """Label-only update during drags; emit on release (or immediately for
-        keyboard/programmatic steps where the slider is not held down)."""
+        """Live-apply (Design.md §15): local-terminal changes cost no scene
+        rebuild, so every step emits (MainWindow coalesces at 250 ms).
+        Labels update on the same pass."""
         if self._updating:
             return
         self._update_derived_angular_labels()
-        try:
-            sender = self.sender()
-            if isinstance(sender, QSlider) and sender.isSliderDown():
-                return
-        except Exception:
-            pass
         try:
             self.configChanged.emit(self.collect_config())
         except Exception as e:

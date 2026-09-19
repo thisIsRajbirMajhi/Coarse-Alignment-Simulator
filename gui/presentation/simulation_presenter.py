@@ -86,6 +86,35 @@ class SimulationPresenter:
         except Exception:
             snap_metrics = {}
 
+        # Diagnostics strip fields (best-effort; stay "—" when unknown).
+        source_id, target_id, link_state, beacon_state = "—", "—", "—", "—"
+        frame_id = 0
+        try:
+            if snapshot is not None:
+                frame_id = int(getattr(snapshot, "frame_id", 0) or 0)
+            terms = getattr(snapshot, "terminals", None) if snapshot else None
+            if isinstance(terms, dict):
+                link_state = str(terms.get("best_link", "—"))
+                try:
+                    emitting = int(terms.get("emitting_count", 0) or 0)
+                    beacon_state = "EMITTING" if emitting > 0 else "—"
+                except (TypeError, ValueError):
+                    pass
+                try:
+                    term_list = terms.get("terminals", []) or []
+                    if term_list and isinstance(term_list[0], dict):
+                        target_id = str(term_list[0].get("id", "—"))
+                except (TypeError, ValueError, AttributeError, IndexError):
+                    pass
+            lt = getattr(snapshot, "local_terminal", None) if snapshot else None
+            if isinstance(lt, dict):
+                for key in ("terminal_id", "id", "source_id"):
+                    if lt.get(key):
+                        source_id = str(lt.get(key))
+                        break
+        except Exception:
+            pass
+
         return DashboardState(
             status=status,
             duration_s=float(controller.duration_s) if controller else 0.0,
@@ -118,4 +147,9 @@ class SimulationPresenter:
             target_switch_count=int(snap_metrics.get("target_switch_count", 0)),
             rms_px=snap_metrics.get("rms_px"),
             rms_mrad=snap_metrics.get("rms_mrad"),
+            source_id=source_id,
+            target_id=target_id,
+            link_state=link_state,
+            beacon_state=beacon_state,
+            frame_id=frame_id,
         )

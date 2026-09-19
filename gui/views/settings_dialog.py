@@ -16,7 +16,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from gui.styles import APP_STYLE
+from gui.theme import apply_theme
 
 log = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("Settings")
         self.setMinimumSize(1000, 720)
         self.resize(1440, 920)
-        self.setStyleSheet(APP_STYLE)
+        apply_theme(self)
         self.setWindowFlags(self.windowFlags() | Qt.Window)
         self._fullscreen = False
 
@@ -89,6 +89,25 @@ class SettingsDialog(QDialog):
         self.btn_randomize.clicked.connect(self.randomize_all)
         hbox.addWidget(self.btn_randomize)
 
+        # Scoped randomize overflow (Design.md §16/§46): Everything stays on
+        # the main button; the ▾ menu randomizes one module without touching
+        # the others (non-blocking, no modal confirmation).
+        from PyQt5.QtWidgets import QMenu as _QMenu
+        self.btn_randomize_scope = QPushButton("▾", header)
+        self.btn_randomize_scope.setObjectName("settingsButton")
+        self.btn_randomize_scope.setMinimumHeight(30)
+        self.btn_randomize_scope.setFixedWidth(34)
+        self.btn_randomize_scope.setToolTip("Randomize one scope: Environment, Disturbances, Remote, Local, or Seed only")
+        scope_menu = _QMenu(self.btn_randomize_scope)
+        scope_menu.addAction("Everything", self.randomize_all)
+        scope_menu.addAction("Environment", self.randomize_environment)
+        scope_menu.addAction("Disturbances", self.randomize_disturbances)
+        scope_menu.addAction("Remote Terminal", self.randomize_remote)
+        scope_menu.addAction("Local Terminal", self.randomize_local)
+        scope_menu.addAction("Seed only", self.randomize_seed_only)
+        self.btn_randomize_scope.setMenu(scope_menu)
+        hbox.addWidget(self.btn_randomize_scope)
+
         self.btn_fullscreen = QPushButton("Full Screen", header)
         self.btn_fullscreen.setObjectName("settingsButton")
         self.btn_fullscreen.setMinimumHeight(30)
@@ -115,7 +134,7 @@ class SettingsDialog(QDialog):
         self.tabs.setToolTip("Switch configuration sections — changes apply live")
         layout.addWidget(self.tabs, 1)
 
-        footer_hint = QLabel("Changes apply live • Randomize All keeps optical wavelength / modulation in sync", self)
+        footer_hint = QLabel("● LIVE preview — cheap knobs apply instantly, heavy scene rebuilds apply on release", self)
         footer_hint.setObjectName("footerHint")
         footer_hint.setStyleSheet("color:#6b7280; font-size:10px; font-style:italic;")
         footer_hint.setWordWrap(True)
@@ -207,6 +226,43 @@ class SettingsDialog(QDialog):
             mod_freq=chosen_freq,
             emit=True,
         )
+
+    def randomize_environment(self) -> None:
+        """Scope: environment only (atmosphere + starfield + seed)."""
+        try:
+            self.env_panel._randomize_all()
+        except Exception as e:
+            log.debug("scoped environment randomize skipped: %s", e)
+
+    def randomize_disturbances(self) -> None:
+        """Scope: disturbances only (emits exactly 1 disturbancesChanged)."""
+        try:
+            import numpy as _np
+            cfg = self.dist_panel.collect_config().randomize_for_training(_np.random.default_rng(), "mixed")
+            self.dist_panel.set_config(cfg.validate(), emit=True)
+        except Exception as e:
+            log.debug("scoped disturbances randomize skipped: %s", e)
+
+    def randomize_remote(self) -> None:
+        """Scope: remote terminal only."""
+        try:
+            self.terminal_panel.randomize(emit=True)
+        except Exception as e:
+            log.debug("scoped remote randomize skipped: %s", e)
+
+    def randomize_local(self) -> None:
+        """Scope: local terminal only."""
+        try:
+            self.local_terminal_panel.randomize(emit=True)
+        except Exception as e:
+            log.debug("scoped local randomize skipped: %s", e)
+
+    def randomize_seed_only(self) -> None:
+        """Scope: environment seed only."""
+        try:
+            self.env_panel._randomize_seed()
+        except Exception as e:
+            log.debug("scoped seed randomize skipped: %s", e)
 
     def toggle_fullscreen(self) -> None:
         try:

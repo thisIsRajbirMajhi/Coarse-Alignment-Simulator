@@ -25,6 +25,7 @@ from PyQt5.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -35,6 +36,12 @@ from disturbance.core.config import DisturbanceConfig
 from disturbance.core.constants import (
     ATMOSPHERIC_PRESETS,
     PLATFORM_PROFILES,
+)
+from gui.components import (
+    PresetSegment,
+    Toggle,
+    expansion_state,
+    set_expansion_state,
 )
 
 log = logging.getLogger(__name__)
@@ -96,10 +103,8 @@ class DisturbancesPanel(BaseConfigPanel):
 
         row = QHBoxLayout()
         row.setSpacing(8)
-        self.chk_global_enabled = QCheckBox("Enable")
-        self.chk_global_enabled.setChecked(True)
+        self.chk_global_enabled = Toggle("Disturbances", checked=True)
         self.chk_global_enabled.setToolTip("Master switch — bypasses channel, camera and sensor stages")
-        self.chk_global_enabled.setStyleSheet("color:#374151; font-size:11px; font-weight:700; background: transparent;")
         row.addWidget(self.chk_global_enabled)
         row.addWidget(self._label("Scenario"))
         self.combo_channel_preset = QComboBox()
@@ -116,6 +121,24 @@ class DisturbancesPanel(BaseConfigPanel):
         self.btn_reset.setMaximumWidth(90)
         row.addWidget(self.btn_reset)
         hl.addLayout(row)
+
+        # Quick preset chips (Design.md §15) + module nav (Design.md §5)
+        self.quick_presets = PresetSegment(["Clear", "Fog", "Rain", "Shake", "Low Light", "Custom"])
+        self.quick_presets.presetSelected.connect(self._on_quick_preset)
+        hl.addWidget(self.quick_presets)
+        nav_row = QHBoxLayout()
+        nav_row.setSpacing(8)
+        self.nav_air = QPushButton()
+        self.nav_camera = QPushButton()
+        self.nav_sensor = QPushButton()
+        for _nb in (self.nav_air, self.nav_camera, self.nav_sensor):
+            _nb.setMinimumHeight(40)
+            _nb.setToolTip("Jump to this module tab")
+            nav_row.addWidget(_nb)
+        hl.addLayout(nav_row)
+        self.nav_air.clicked.connect(lambda: self.tabs.setCurrentIndex(0))
+        self.nav_camera.clicked.connect(lambda: self.tabs.setCurrentIndex(1))
+        self.nav_sensor.clicked.connect(lambda: self.tabs.setCurrentIndex(2))
 
         self.label_summary = QLabel("")
         self.label_summary.setStyleSheet("color:#1e40af; font-size:10px; background: transparent;")
@@ -137,6 +160,16 @@ class DisturbancesPanel(BaseConfigPanel):
         layout.addStretch()
         self._wire_signals()
         self._building = False
+        # Restore persisted Advanced states (default collapsed per spec).
+        try:
+            if expansion_state("dist/air_details", False):
+                self.chk_air_details.setChecked(True)
+            if expansion_state("dist/cam_details", False):
+                self.chk_cam_details.setChecked(True)
+            if expansion_state("dist/sensor_details", False):
+                self.chk_sensor_details.setChecked(True)
+        except Exception as e:
+            log.debug("expansion restore skipped: %s", e)
         self._sync_atmo_enabled()
         self._sync_image_noise_visibility()
         self._refresh_summary()
@@ -199,6 +232,11 @@ class DisturbancesPanel(BaseConfigPanel):
         self.label_atmo_hint.setStyleSheet("color:#64748b; font-size:10px; font-style:italic;")
         self.label_atmo_hint.setWordWrap(True)
         wx.addWidget(self.label_atmo_hint, 4, 0, 1, 3)
+        # Weather context summary (Design.md §6): current state at a glance.
+        self.label_weather_context = QLabel("")
+        self.label_weather_context.setStyleSheet("color:#1e40af; font-size:10px; font-weight:700;")
+        self.label_weather_context.setWordWrap(True)
+        wx.addWidget(self.label_weather_context, 5, 0, 1, 3)
         tl.addWidget(wx_box)
 
         # Turbulence — single beam-distortion slider
@@ -222,10 +260,8 @@ class DisturbancesPanel(BaseConfigPanel):
         tl.addWidget(tb_box)
 
         # Details — expert beam controls, hidden by default
-        self.chk_channel_enabled = QCheckBox("Enable Channel")
-        self.chk_channel_enabled.setChecked(True)
+        self.chk_channel_enabled = Toggle("Optical channel", checked=True)
         self.chk_channel_enabled.setToolTip("Ideal beam → channel → received signal")
-        self.chk_channel_enabled.setStyleSheet("color:#374151; font-size:11px;")
         tl.addWidget(self.chk_channel_enabled)
         self.chk_air_details = QCheckBox("Show beam details (attenuation, wander, spread)")
         self.chk_air_details.setStyleSheet("color:#64748b; font-size:11px;")
@@ -307,9 +343,8 @@ class DisturbancesPanel(BaseConfigPanel):
         jg.setHorizontalSpacing(8)
         jg.setVerticalSpacing(8)
         jg.setColumnStretch(1, 1)
-        self.chk_jitter_enabled = QCheckBox("Enable shake")
-        self.chk_jitter_enabled.setChecked(True)
-        self.chk_jitter_enabled.setStyleSheet("color:#374151; font-size:11px;")
+        self.chk_jitter_enabled = Toggle("Shake", checked=True)
+        self.chk_jitter_enabled.setToolTip("Camera shake on/off")
         jg.addWidget(self.chk_jitter_enabled, 0, 0)
         jg.addWidget(self._label("Amount"), 0, 1)
         self.slider_jitter = QSlider(Qt.Horizontal)
@@ -329,9 +364,8 @@ class DisturbancesPanel(BaseConfigPanel):
         pg.setHorizontalSpacing(8)
         pg.setVerticalSpacing(8)
         pg.setColumnStretch(2, 1)
-        self.chk_platform_enabled = QCheckBox("Enable drift")
-        self.chk_platform_enabled.setChecked(True)
-        self.chk_platform_enabled.setStyleSheet("color:#374151; font-size:11px;")
+        self.chk_platform_enabled = Toggle("Drift", checked=True)
+        self.chk_platform_enabled.setToolTip("Platform motion on/off")
         pg.addWidget(self.chk_platform_enabled, 0, 0)
         pg.addWidget(self._label("Path"), 0, 1)
         self.combo_platform = QComboBox()
@@ -586,6 +620,10 @@ class DisturbancesPanel(BaseConfigPanel):
         self.chk_air_details.toggled.connect(lambda on: self.air_details.setVisible(bool(on)))
         self.chk_cam_details.toggled.connect(lambda on: self.cam_details.setVisible(bool(on)))
         self.chk_sensor_details.toggled.connect(lambda on: self._sync_sensor_details(bool(on)))
+        # Persist Advanced disclosure states across runs (Design.md §50.7).
+        self.chk_air_details.toggled.connect(lambda on: set_expansion_state("dist/air_details", bool(on)))
+        self.chk_cam_details.toggled.connect(lambda on: set_expansion_state("dist/cam_details", bool(on)))
+        self.chk_sensor_details.toggled.connect(lambda on: set_expansion_state("dist/sensor_details", bool(on)))
         # Release-only heavy emits: valueChanged updates the pill label (cheap,
         # wired above); the config itself fires on sliderReleased or for
         # non-drag changes (keyboard, programmatic). _emit_config() gates
@@ -632,7 +670,39 @@ class DisturbancesPanel(BaseConfigPanel):
         finally:
             self.combo_channel_preset.blockSignals(False)
             self._applying_preset = False
+        self._sync_quick_presets(str(preset))
         self._emit_config()
+
+    def _on_quick_preset(self, name: str) -> None:
+        """Quick preset chips (Design.md §15): Clear/Fog/Rain/Low Light map to
+        channel presets; Shake enables camera shake; Custom just marks."""
+        if name == "Shake":
+            self._applying_preset = True
+            try:
+                self.chk_jitter_enabled.setChecked(True)
+                self.slider_jitter.setValue(80)  # 8.0 px
+                self.slider_platform_speed.setValue(50)  # 5.0 px/f
+            finally:
+                self._applying_preset = False
+            self._sync_quick_presets("Custom")
+            self._emit_config()
+            return
+        if name == "Custom":
+            self._sync_quick_presets("Custom")
+            return
+        self._on_channel_preset_changed(name)
+
+    def _sync_quick_presets(self, preset: str) -> None:
+        """Mirror the scenario combo into the quick chips (incl. Custom •)."""
+        try:
+            key = {"Haze": "Haze", "Fog": "Fog", "Rain": "Rain",
+                   "Low Light": "Low Light", "Low light": "Low Light",
+                   "Clear": "Clear"}.get(str(preset), "Custom")
+            self.quick_presets.set_active(key if key != "Custom" else None)
+            if key == "Custom":
+                self.quick_presets.mark_custom()
+        except Exception as e:
+            log.debug("quick preset sync skipped: %s", e)
 
     def _on_gaussian_sigma_changed(self):
         if self.slider_gaussian_sigma.value() > self.slider_gaussian_max.value():
@@ -733,6 +803,58 @@ class DisturbancesPanel(BaseConfigPanel):
             self.label_summary.setText("Clear air — no visible effect.")
         else:
             self.label_summary.setText(" · ".join(parts))
+        self._refresh_module_nav(cfg)
+
+    def _refresh_module_nav(self, cfg) -> None:
+        """Module status at a glance without opening tabs (Design.md §5)."""
+        try:
+            preset = str(cfg.atmospheric_preset)
+            try:
+                sev = int(float(getattr(cfg, "channel_severity", 1.0)) * 100)
+            except (TypeError, ValueError):
+                sev = 100
+            turb = int(getattr(cfg, "turbulence", 0))
+            air_on = preset != "Clear" or turb > 0
+            air_sub = f"{preset} · {sev}%" if air_on else "Clear"
+            if air_on and turb > 0:
+                air_sub += f" · turb {turb}"
+            jit = float(getattr(cfg, "camera_jitter", 0.0))
+            spd = float(getattr(cfg, "platform_speed", 0.0))
+            cam_on = jit > 1e-9 or spd > 1e-9
+            cam_sub = f"shake {jit:.1f}px" if jit > 1e-9 else ""
+            if spd > 1e-9:
+                cam_sub = (cam_sub + " · " if cam_sub else "") + f"drift {spd:.1f}px/f"
+            cam_sub = cam_sub or "Off"
+            noises = []
+            if bool(cfg.enable_gaussian):
+                noises.append(f"grain σ{float(cfg.gaussian_sigma):.1f}")
+            if bool(cfg.enable_salt_pepper):
+                noises.append(f"speckle {float(cfg.salt_pepper_density) * 100:.0f}%")
+            if bool(cfg.enable_poisson):
+                noises.append("flicker")
+            sen_on = bool(noises)
+            sen_sub = " + ".join(noises) if noises else "Off"
+            self.nav_air.setText(f"Air & Light\n{'● ' + air_sub if air_on else '○ Off'}")
+            self.nav_camera.setText(f"Camera Motion\n{'● ' + cam_sub if cam_on else '○ Off'}")
+            self.nav_sensor.setText(f"Sensor Noise\n{'● ' + sen_sub if sen_on else '○ Off'}")
+            # Weather context line under the Weather card (§6).
+            try:
+                self.label_weather_context.setText(
+                    f"{preset} · severity {sev}% · contrast {int(cfg.atmospheric_contrast)}% · "
+                    f"brightness {int(cfg.atmospheric_brightness)}%"
+                    if air_on else "Clear air — no weather effect.")
+            except (TypeError, ValueError, AttributeError):
+                pass
+            # Mirror scenario combo into quick chips (manual edits → Custom).
+            if not getattr(self, "_applying_preset", False):
+                combo_txt = ""
+                try:
+                    combo_txt = str(self.combo_channel_preset.currentText())
+                except Exception:
+                    pass
+                self._sync_quick_presets(combo_txt or preset)
+        except Exception as e:
+            log.debug("module nav refresh skipped: %s", e)
 
     def collect_config(self) -> DisturbanceConfig:
         # Hidden legacy sliders are 0 (removed from UI); channel turbulence
@@ -911,16 +1033,10 @@ class DisturbancesPanel(BaseConfigPanel):
     def _emit_config(self) -> None:
         if getattr(self, "_building", False):
             return
-        # Release-only: skip while a slider drag is in flight (the matching
-        # sliderReleased re-emits once). Keyboard/programmatic changes and
-        # checkbox/combo senders fall through immediately.
-        try:
-            from PyQt5.QtWidgets import QSlider as _QSlider
-            _sender = self.sender()
-            if isinstance(_sender, _QSlider) and _sender.isSliderDown():
-                return
-        except Exception:
-            pass
+        # Live-apply (Design.md §15): disturbance changes cost no rebuild —
+        # they take effect on the next frame, so every gesture step emits and
+        # MainWindow's 250 ms coalescer bounds the apply rate. sliderReleased
+        # re-emits the final value as a guarantee.
         # Any manual tweak means the setup no longer matches a named preset.
         if not getattr(self, "_applying_preset", False):
             try:

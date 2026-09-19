@@ -156,9 +156,25 @@ class SimulationSession:
 
     def apply_environment_config(self, config) -> None:
         new_cfg = config.validate()
-        old_w = int(getattr(self.env_config, "world_width", 0) or 0)
-        old_h = int(getattr(self.env_config, "world_height", 0) or 0)
+        old = self.env_config
+        old_w = int(getattr(old, "world_width", 0) or 0)
+        old_h = int(getattr(old, "world_height", 0) or 0)
         new_w, new_h = int(new_cfg.world_width), int(new_cfg.world_height)
+        # Vignetting-only fast path: capture-stage effect, no sky rebuild.
+        # Makes the vignette slider truly live (Design.md §15 hybrid).
+        if (self._built and new_w == old_w and new_h == old_h
+                and int(getattr(old, "vignetting_pct", 0)) != int(getattr(new_cfg, "vignetting_pct", 0))
+                and all(int(getattr(old, k, 0)) == int(getattr(new_cfg, k, 0)) for k in
+                        ("world_width", "world_height", "bg_top", "bg_bottom",
+                         "haze_pct", "star_count"))
+                and float(getattr(old, "star_brightness", 1.0)) == float(getattr(new_cfg, "star_brightness", 1.0))
+                and str(getattr(old, "seed", "")) == str(getattr(new_cfg, "seed", ""))):
+            self.env_config = new_cfg
+            try:
+                self.local_terminal.set_vignetting(float(getattr(new_cfg, "vignetting_pct", 0)) / 100.0)
+            except (AttributeError, TypeError, ValueError):
+                pass
+            return
         self.env_config = new_cfg
         if self._built and new_w == old_w and new_h == old_h:
             # Fast path: same world size — regenerate sky in place, keep
