@@ -22,74 +22,134 @@ class ApplicationController(QObject):
         super().__init__(parent)
         self.session = session
         self.lifecycle: LifecycleState = LifecycleState.STOPPED
+        self.last_error: str | None = None
         self._frames = 0
         self._sim_time = 0.0
         self._proc_ms: list[float] = []
         self._last_step_wall: float | None = None
         self._last_snapshot: FrameSnapshot | None = None
 
-    # -- lifecycle ---------------------------------------------------
-    def start(self) -> None:
-        try:
-            self.session.ensure_built()
-        except Exception as e:
-            self.lifecycle = LifecycleState.ERROR
-            self.stateChanged.emit(self.lifecycle.value)
-            self.errorRaised.emit(f"Simulation init failed: {e}")
-            log.exception("start failed")
-            return
-        if self.lifecycle == LifecycleState.RUNNING:
-            return
-        if self.lifecycle == LifecycleState.PAUSED:
-            self.resume()
-            return
-        if self.lifecycle == LifecycleState.STOPPED:
-            self._frames = 0
-            self._sim_time = 0.0
-            self._proc_ms = []
-        self.lifecycle = LifecycleState.RUNNING
-        self._last_step_wall = None
+    # -- error / transition helpers ----------------------------------
+    def _fail(self, message: str) -> None:
+        """Enter ERROR: remember the message and notify (state + error)."""
+        self.lifecycle = LifecycleState.ERROR
+        self.last_error = message
         self.stateChanged.emit(self.lifecycle.value)
+        self.errorRaised.emit(message)
+        log.error("%s", message)
 
-    def stop(self) -> None:
-        self.lifecycle = LifecycleState.STOPPED
+    def _warn(self, message: str) -> None:
+        """Non-fatal problem: remember + notify, lifecycle unchanged."""
+        self.last_error = message
+        self.errorRaised.emit(message)
+        log.warning("%s", message)
+
+    def _enter(self, state: LifecycleState) -> None:
+        self.lifecycle = state
+        self.last_error = None
+        self.stateChanged.emit(state.value)
+
+    def _clear_counters(self) -> None:
         self._frames = 0
         self._sim_time = 0.0
         self._proc_ms = []
         self._last_snapshot = None
         self._last_step_wall = None
-        self.stateChanged.emit(self.lifecycle.value)
 
-    def pause(self) -> None:
+    # -- lifecycle ---------------------------------------------------
+    def start(self) -> bool:
+        """Enter RUNNING. Returns True if a transition happened.
+
+        From ERROR a full rebuild is forced — the session may be flagged
+        built yet broken, so ``ensure_built`` alone would not recover it.
+        From PAUSED this resumes. Already RUNNING is a no-op (False).
+        """
+        if self.lifecycle == LifecycleState.RUNNING:
+            return False
+        if self.lifecycle == LifecycleState.PAUSED:
+            return self.resume()
+        try:
+            if self.lifecycle == LifecycleState.ERROR:
+                self.session.build()
+            else:
+                self.session.ensure_built()
+        except Exception as e:
+            self._fail(f"Simulation init failed ({type(e).__name__}): {e}")
+            log.exception("start failed")
+            return False
+        self._clear_counters()
+        self._enter(LifecycleState.RUNNING)
+        return True
+
+    def stop(self) -> bool:
+        """Enter STOPPED and clear runtime stats. No-op (False) if already there."""
+        if self.lifecycle == LifecycleState.STOPPED:
+            return False
+        self._clear_counters()
+        self._enter(LifecycleState.STOPPED)
+        return True
+
+    def pause(self) -> bool:
+        """Pause a running sim. Returns False unless RUNNING -> PAUSED."""
         if self.lifecycle != LifecycleState.RUNNING:
-            return
-        self.lifecycle = LifecycleState.PAUSED
-        self.stateChanged.emit(self.lifecycle.value)
+            log.debug("pause ignored in state %s", self.lifecycle)
+            return False
+        self._enter(LifecycleState.PAUSED)
+        return True
 
-    def resume(self) -> None:
+    def resume(self) -> bool:
+        """Resume a paused sim. Returns False unless PAUSED -> RUNNING."""
         if self.lifecycle != LifecycleState.PAUSED:
-            return
-        self.lifecycle = LifecycleState.RUNNING
+            log.debug("resume ignored in state %s", self.lifecycle)
+            return False
         self._last_step_wall = None
-        self.stateChanged.emit(self.lifecycle.value)
+        self._enter(LifecycleState.RUNNING)
+        return True
 
-    def reset(self, seed: int | None = None) -> None:
+    def toggle_pause(self) -> bool:
+        """Pause <-> resume. Returns False in states where neither applies."""
+        if self.lifecycle == LifecycleState.PAUSED:
+            return self.resume()
+        if self.lifecycle == LifecycleState.RUNNING:
+            return self.pause()
+        return False
+
+    def reset(self, seed: int | None = None) -> bool:
+        """Rebuild the session, keeping configs; zero counters.
+
+        RUNNING stays RUNNING (restart in place); every other state lands
+        on STOPPED (explicit Start required). Returns False on failure
+        (controller is then in ERROR).
+        """
         was_running = self.lifecycle == LifecycleState.RUNNING
         try:
             self.session.reset(seed=seed)
         except Exception as e:
-            self.lifecycle = LifecycleState.ERROR
-            self.stateChanged.emit(self.lifecycle.value)
-            self.errorRaised.emit(f"Reset failed: {e}")
+            self._fail(f"Reset failed ({type(e).__name__}): {e}")
             log.exception("reset failed")
-            return
-        self._frames = 0
-        self._sim_time = 0.0
-        self._proc_ms = []
-        self._last_snapshot = None
+            return False
+        self._clear_counters()
         # After reset return to STOPPED (explicit Start required) unless was running.
-        self.lifecycle = LifecycleState.RUNNING if was_running else LifecycleState.STOPPED
-        self.stateChanged.emit(self.lifecycle.value)
+        self._enter(LifecycleState.RUNNING if was_running else LifecycleState.STOPPED)
+        return True
+
+    def full_reset(self) -> bool:
+        """Drop the session for a fresh default one; always lands on STOPPED.
+
+        Used by the Reset button ("reset EVERYTHING"). The old session is
+        kept on build failure (controller goes to ERROR instead).
+        """
+        try:
+            session = SimulationSession()
+            session.ensure_built()
+        except Exception as e:
+            self._fail(f"Reset failed ({type(e).__name__}): {e}")
+            log.exception("full reset failed")
+            return False
+        self.session = session
+        self._clear_counters()
+        self._enter(LifecycleState.STOPPED)
+        return True
 
     # -- commands ----------------------------------------------------
     def dispatch(self, cmd) -> None:
@@ -122,7 +182,7 @@ class ApplicationController(QObject):
             else:
                 raise ValueError(f"unknown config section: {cmd.section}")
         except Exception as e:
-            self.errorRaised.emit(f"Invalid {cmd.section} config: {e}")
+            self._warn(f"Invalid {cmd.section} config ({type(e).__name__}): {e}")
             log.exception("apply_config failed")
 
     # -- stepping (called by thin QTimer) ----------------------------
@@ -136,9 +196,7 @@ class ApplicationController(QObject):
         try:
             snap = self.session.step(dt)
         except Exception as e:
-            self.lifecycle = LifecycleState.ERROR
-            self.stateChanged.emit(self.lifecycle.value)
-            self.errorRaised.emit(f"Step failed: {e}")
+            self._fail(f"Step failed ({type(e).__name__}): {e}")
             log.exception("step failed")
             return self._last_snapshot
         self._frames += 1

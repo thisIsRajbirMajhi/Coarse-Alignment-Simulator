@@ -55,6 +55,14 @@ class SimWorker(QObject):
         """Mutex guard for session swaps / config applies from the GUI thread."""
         return _MutexGuard(self.mutex)
 
+    def try_guard(self, timeout_ms: int = 2000):
+        """Mutex guard that raises TimeoutError instead of hanging the UI.
+
+        Use for GUI-thread session swaps / config applies so a stuck worker
+        step surfaces as an error message rather than a frozen window.
+        """
+        return _TimedMutexGuard(self.mutex, timeout_ms)
+
     def shutdown(self, timeout_ms: int = 2000) -> None:
         try:
             self._thread.quit()
@@ -70,6 +78,31 @@ class _MutexGuard:
 
     def __enter__(self):
         self._mutex.lock()
+        return self
+
+    def __exit__(self, *exc):
+        try:
+            self._mutex.unlock()
+        except Exception:
+            pass
+        return False
+
+
+class _TimedMutexGuard:
+    """Like _MutexGuard but gives up after ``timeout_ms`` (raises TimeoutError)."""
+
+    def __init__(self, mutex: QMutex, timeout_ms: int = 2000):
+        self._mutex = mutex
+        self._timeout_ms = int(timeout_ms)
+
+    def __enter__(self):
+        try:
+            locked = self._mutex.tryLock(self._timeout_ms)
+        except TypeError:
+            # Fallback for bindings without the timed overload.
+            locked = self._mutex.tryLock()
+        if not locked:
+            raise TimeoutError(f"sim worker busy for >{self._timeout_ms} ms")
         return self
 
     def __exit__(self, *exc):

@@ -165,12 +165,20 @@ class MainWindow(QMainWindow):
 
     def _refresh_status_bar(self) -> None:
         """Compact status strip (Design.md §17):
-        ● LIVE | Seed 42 | 2000×2000 | Fog 100% | Turb 4 (collapses narrow)."""
+        ● LIVE | Seed 42 | 2000×2000 | Fog 100% | Turb 4 (collapses narrow).
+        ERROR latches the last error until recovery (Start/Reset)."""
         try:
-            running = self.controller.lifecycle == LifecycleState.RUNNING
-            dot = "● LIVE" if running else ("◌ PAUSED" if str(self.controller.lifecycle) == "LifecycleState.PAUSED" else "○ IDLE")
+            state = self.controller.lifecycle
+            if state == LifecycleState.RUNNING:
+                dot = "● LIVE"
+            elif state == LifecycleState.PAUSED:
+                dot = "◌ PAUSED"
+            elif state == LifecycleState.ERROR:
+                dot = "⚠ ERROR"
+            else:
+                dot = "○ IDLE"
         except Exception:
-            dot, running = "○ IDLE", False
+            dot = "○ IDLE"
         try:
             seed = self.session.env_config.seed
             seed_t = f"Seed {int(seed)}" if seed is not None else "Seed —"
@@ -190,7 +198,10 @@ class MainWindow(QMainWindow):
         except Exception:
             narrow = False
         try:
-            if narrow:
+            if self.controller.lifecycle == LifecycleState.ERROR:
+                err = getattr(self.controller, "last_error", None) or "simulation fault"
+                self._statusbar.showMessage(f"{dot} — {err}  |  Start or Reset to recover")
+            elif narrow:
                 self._statusbar.showMessage(f"{dot}  |  {seed_t}  |  Custom")
             else:
                 self._statusbar.showMessage(f"{dot}  |  {seed_t}  |  {world_t}  |  {dist_t}")
@@ -231,23 +242,25 @@ class MainWindow(QMainWindow):
 
     # -- slots --------------------------------------------------------
     def _on_pause_button(self) -> None:
-        if self.controller.lifecycle == LifecycleState.PAUSED:
-            self.controller.resume()
-        else:
-            self.controller.pause()
+        self.controller.toggle_pause()
 
     def _on_reset(self) -> None:
         """Reset EVERYTHING: default configs, fresh session, fresh presentation."""
         try:
-            with self.worker.guard():
-                self.session = SimulationSession()
-                self.session.ensure_built()
-                self.controller.session = self.session
+            # Bounded wait: a stuck worker step surfaces as an error, not a freeze.
+            with self.worker.try_guard(timeout_ms=2000):
+                ok = self.controller.full_reset()
+        except TimeoutError as e:
+            self._on_error(f"Reset failed: {e}")
+            return
         except Exception as e:
-            self.controller.errorRaised.emit(f"Reset failed: {e}")
+            self._on_error(f"Reset failed ({type(e).__name__}): {e}")
             log.exception("full reset failed")
             return
-        self.controller.stop()
+        if not ok:
+            return
+        # full_reset swapped in a fresh session — re-point the window at it.
+        self.session = self.controller.session
         try:
             self.presenter.reset()
         except Exception as e:
@@ -276,13 +289,20 @@ class MainWindow(QMainWindow):
                     self.dashboard.render(self.presenter.update(None, self.session, self.controller))
                 except Exception as e:
                     log.debug("empty dashboard render failed: %s", e)
+            elif value == LifecycleState.ERROR.value:
+                # Unfreeze the dashboard so it reports ERROR instead of a stale RUNNING.
+                try:
+                    self.dashboard.render(self.presenter.update(None, self.session, self.controller))
+                except Exception as e:
+                    log.debug("error dashboard render failed: %s", e)
             self._refresh_status_bar()
         except Exception as e:
             log.debug("status update skipped: %s", e)
 
     def _on_error(self, msg: str) -> None:
         try:
-            self._statusbar.showMessage(msg)
+            text = str(msg)
+            self._statusbar.showMessage(text if text.startswith("⚠") else f"⚠ {text}")
         except Exception:
             pass
         log.error("%s", msg)
@@ -312,13 +332,19 @@ class MainWindow(QMainWindow):
             return
         try:
             # Serialized against worker steps (bounded by a single step).
-            with self.worker.guard():
+            with self.worker.try_guard(timeout_ms=2000):
                 apply()
             self._refresh_status_bar()
+        except TimeoutError as e:
+            try:
+                self._statusbar.showMessage(f"⚠ {section} config not applied: sim busy ({e})")
+            except Exception:
+                pass
+            log.warning("deferred %s apply timed out: %s", section, e)
         except Exception as e:
             # Never a silent no-op: the user just moved a control.
             try:
-                self._statusbar.showMessage(f"{section} config not applied: {e}")
+                self._statusbar.showMessage(f"⚠ {section} config not applied ({type(e).__name__}): {e}")
             except Exception:
                 pass
             log.warning("deferred %s apply failed: %s", section, e)
