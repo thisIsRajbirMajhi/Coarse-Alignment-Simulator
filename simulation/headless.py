@@ -78,12 +78,22 @@ class HeadlessSimulation:
 
         self._last_frame: np.ndarray | None = None
         self._last_fov: np.ndarray | None = None
+        self._sim_time_s = 0.0
+        self._pending_track_error: tuple[float, float] | None = None
+        self._last_disturbed_center: tuple[float, float] | None = None
 
         self._build_simulation()
         self._disturbance_pipeline = DisturbancePipeline(
             DisturbanceContext(self.disturbance_config, rng=self.rng, dt=self.dt),
             bounds=self._scene_size,
         )
+        from local_terminal import AutonomySupervisor, SignatureRegistry
+        self.supervisor = AutonomySupervisor(registry=SignatureRegistry.from_scenario(self.scenario_config))
+        self.tracker = self.supervisor.tracker
+        self.comm_rx = self.supervisor.comm_rx
+        self.validator = self.supervisor.validator
+        self._pending_pid_active = False
+        self._pending_target_angles = None
 
     def _build_simulation(self):
         cfg = self.env_config.validate()
@@ -146,6 +156,20 @@ class HeadlessSimulation:
             self.env_config.seed = self.seed
             self.env_config.validate()
         self.step_count = 0
+        self._sim_time_s = 0.0
+        self._pending_track_error = None
+        self._pending_pid_active = False
+        self._pending_target_angles = None
+        self._last_disturbed_center = None
+        self._last_val_snr_db = 6.0
+        try:
+            from local_terminal import AutonomySupervisor, SignatureRegistry
+            self.supervisor = AutonomySupervisor(registry=SignatureRegistry.from_scenario(self.scenario_config))
+            self.tracker = self.supervisor.tracker
+            self.comm_rx = self.supervisor.comm_rx
+            self.validator = self.supervisor.validator
+        except Exception:
+            pass
         try:
             from disturbance.core.state import reset_disturbance_state
             reset_disturbance_state()
@@ -169,6 +193,10 @@ class HeadlessSimulation:
             obs["terminals"] = self.remote.get_telemetry()
         except (AttributeError, TypeError, ValueError, RuntimeError):
             pass
+        try:
+            obs["tracker"] = self.tracker.autonomy_telemetry()
+        except (AttributeError, TypeError, ValueError, RuntimeError):
+            pass
         if self._last_frame is not None:
             obs["frame"] = self._last_frame
         if self._last_fov is not None:
@@ -182,6 +210,7 @@ class HeadlessSimulation:
     def step(self, action: np.ndarray | tuple | None = None, dt: float | None = None) -> tuple[dict, float, bool, bool, dict]:
         dt = float(dt if dt is not None else self.dt)
         dt_eff = float(np.clip(dt * self.sim_speed, 1e-4, 0.1))
+        self._sim_time_s += dt_eff
 
         try:
             self.scene.update(dt_eff)
@@ -192,29 +221,27 @@ class HeadlessSimulation:
         except Exception:
             pass
 
-        # -- Camera tracking & FOV extraction --
+        # -- Camera tracking from the detected image centroid (Plan Stage 1) --
+        # -- Camera tracking from Autonomy Supervisor (Plan.md Stages 1-4) --
         cmd_pan, cmd_tilt = 0.0, 0.0
         if action is not None and len(action) >= 2:
             cmd_pan, cmd_tilt = float(action[0]), float(action[1])
-        elif self.controller.config.mode == "AUTO":
-            try:
-                tel = self.remote.get_telemetry()
-                term_list = tel.get("terminals", []) if isinstance(tel, dict) else []
-                active_target = next((t for t in term_list if t.get("emitting")), term_list[0] if term_list else None)
-                if active_target is not None:
-                    pos = active_target.get("position_m", (0.0, 0.0))
-                    cx, cy = self.camera.get_fov_center_world()
-                    cmd_pan, cmd_tilt = self.controller.compute_from_pixels(
-                        error_x_px=float(pos[0]) - cx,
-                        error_y_px=float(pos[1]) - cy,
-                        deg_per_px_h=self.camera.config.deg_per_px_h,
-                        deg_per_px_v=self.camera.config.deg_per_px_v,
-                        dt=dt_eff,
-                    )
-            except Exception:
-                pass
-
-        self.camera.update(dt_eff, cmd_pan_vel=cmd_pan, cmd_tilt_vel=cmd_tilt)
+            self.camera.update(dt_eff, cmd_pan_vel=cmd_pan, cmd_tilt_vel=cmd_tilt)
+        elif self.controller.config.mode == "AUTO" and self._pending_pid_active and self._pending_track_error is not None:
+            ex, ey = self._pending_track_error
+            cmd_pan, cmd_tilt = self.controller.compute_from_pixels(
+                error_x_px=ex,
+                error_y_px=ey,
+                deg_per_px_h=self.camera.config.deg_per_px_h,
+                deg_per_px_v=self.camera.config.deg_per_px_v,
+                dt=dt_eff,
+            )
+            self.camera.update(dt_eff, cmd_pan_vel=cmd_pan, cmd_tilt_vel=cmd_tilt)
+        elif self._pending_target_angles is not None:
+            self.camera.set_target_angles(self._pending_target_angles[0], self._pending_target_angles[1])
+            self.camera.update(dt_eff)
+        else:
+            self.camera.update(dt_eff, cmd_pan_vel=0.0, cmd_tilt_vel=0.0)
 
         # Camera pose disturbances (jitter/vibration/platform/drift) shift
         # where the camera looks. Disturb the post-update pose so the FOV
@@ -225,7 +252,8 @@ class HeadlessSimulation:
         pipe = self._disturbance_pipeline
         pipe.context.config = self.disturbance_config
         pipe.context.rng = self.rng
-        cx, cy = self.camera.get_fov_center_world()
+        fb = bool(getattr(self.camera_config, "use_measured_feedback", False))
+        cx, cy = self.camera.get_fov_center_world(use_measured=fb)
         dcx, dcy = _apply_pose(cx, cy, self.disturbance_config, dt_eff, self.rng, pipeline=pipe)
 
         frame = self._capture_frame(dt_eff, advance=False)
@@ -235,6 +263,43 @@ class HeadlessSimulation:
         fov_frame = self.camera.extract_fov_at(frame, dcx, dcy)
         self._last_fov = fov_frame
 
+        # Origin shift for motion model
+        if self._last_disturbed_center is None:
+            shift = (0.0, 0.0)
+        else:
+            shift = (dcx - self._last_disturbed_center[0], dcy - self._last_disturbed_center[1])
+        self._last_disturbed_center = (dcx, dcy)
+
+        # Autonomy Supervisor cycle (Plan.md §9)
+        from local_terminal import CommSource
+        sources = []
+        for term in getattr(self.remote, "terminals", []):
+            try:
+                sources.append(CommSource(
+                    position=(float(term.position_m.x), float(term.position_m.y)),
+                    emitting=bool(term.runtime.effective_emission_enabled),
+                    power_w=float(term.runtime.instantaneous_power_w),
+                    chip_at=term.generator.chip_at,
+                ))
+            except (AttributeError, TypeError, ValueError):
+                continue
+
+        sup_out = self.supervisor.step(
+            fov_frame=fov_frame,
+            dt=dt_eff,
+            sim_time_s=self._sim_time_s,
+            comm_sources=sources,
+            boresight_world=(float(dcx), float(dcy)),
+            cam_home=self.camera.get_home(),
+            px_per_deg=(self.camera.config.px_per_deg_h, self.camera.config.px_per_deg_v),
+            origin_shift=shift,
+            fov_size=(int(self.camera.fov_width), int(self.camera.fov_height)),
+        )
+
+        self._pending_pid_active = sup_out.pid_active
+        self._pending_track_error = sup_out.track_error_px
+        self._pending_target_angles = sup_out.camera_target_angles
+
         self.step_count += 1
         reward = 0.0
         terminated = False
@@ -243,6 +308,7 @@ class HeadlessSimulation:
         obs = self.get_observation()
         obs["frame"] = frame
         obs["fov_frame"] = fov_frame
+        obs["tracker"] = sup_out.telemetry
 
         info = {
             "step_count": self.step_count,

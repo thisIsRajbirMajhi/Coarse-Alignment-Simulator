@@ -6,6 +6,7 @@ from typing import Any
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QHBoxLayout,
     QLabel,
@@ -188,6 +189,14 @@ class CameraPanel(BaseConfigPanel):
         mech_grid.addWidget(self.slider_noise, 2, 1)
         mech_grid.addWidget(self.lbl_noise, 2, 2)
 
+        # Measured feedback (Plan Stage 2): disturb-pose input from
+        # encoder-measured angles (quantized + noisy) instead of truth.
+        self.chk_measured_feedback = QCheckBox("Measured feedback")
+        self.chk_measured_feedback.setToolTip(
+            "Disturb the encoder-measured pose instead of the true pose")
+        self.chk_measured_feedback.setStyleSheet("color:#374151; font-size:11px;")
+        mech_grid.addWidget(self.chk_measured_feedback, 3, 0, 1, 3)
+
         root.addWidget(mech_box)
         root.addStretch(1)
 
@@ -205,6 +214,7 @@ class CameraPanel(BaseConfigPanel):
         for s in sliders:
             s.valueChanged.connect(self._on_control_changed)
             s.sliderReleased.connect(self._on_control_changed)
+        self.chk_measured_feedback.toggled.connect(self._on_control_changed)
 
     def _on_control_changed(self) -> None:
         """Handle live changes from sliders (skipped mid-drag)."""
@@ -245,6 +255,7 @@ class CameraPanel(BaseConfigPanel):
             backlash_deg=float(self.slider_backlash.value()) / self.factor_backlash,
             damping_ratio=float(self.slider_damping.value()) / self.factor_damping,
             encoder_noise_deg=float(self.slider_noise.value()) / self.factor_noise,
+            use_measured_feedback=bool(self.chk_measured_feedback.isChecked()),
         )
         return cfg.validate()
 
@@ -261,6 +272,7 @@ class CameraPanel(BaseConfigPanel):
         ]
         for s in sliders:
             s.blockSignals(True)
+        self.chk_measured_feedback.blockSignals(True)
 
         try:
             self.slider_fov_h.setValue(int(round(c.fov_deg_h * self.factor_fov_h)))
@@ -300,9 +312,12 @@ class CameraPanel(BaseConfigPanel):
 
             self.slider_noise.setValue(int(round(c.encoder_noise_deg * self.factor_noise)))
             self.lbl_noise.setText(f"{c.encoder_noise_deg:.4f}°")
+
+            self.chk_measured_feedback.setChecked(bool(getattr(c, "use_measured_feedback", False)))
         finally:
             for s in sliders:
                 s.blockSignals(False)
+            self.chk_measured_feedback.blockSignals(False)
 
         if emit:
             self.configChanged.emit(c)

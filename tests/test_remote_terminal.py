@@ -274,7 +274,7 @@ def test_optics_math_and_preservation():
     assert em.beam_center_angle_deg == pytest.approx(12.0)
     assert em.beam_width_rad == pytest.approx(1e-3)
     dark = beam.emission(config=cfg, beam_angle_deg=0.0, range_m=1.0, chip_level=0)
-    assert dark.instantaneous_power_w == pytest.approx(0.0)
+    assert dark.instantaneous_power_w == pytest.approx(0.5 * 0.45)
 
 
 def test_geometry_and_pointing():

@@ -156,15 +156,23 @@ class PTZCamera:
             t_min, t_max = t_max, t_min
         return (p_min, p_max, t_min, t_max)
 
-    def get_fov_center_world(self) -> tuple[float, float]:
+    def get_fov_center_world(self, use_measured: bool = False) -> tuple[float, float]:
         """
         Calculate current optical axis intersection with the 2D world plane (x, y).
         Home (0°, 0°) is at (world_w / 2, world_h / 2).
         Bounded so the 640x480 FOV rectangle never extends outside the world scene.
+
+        Args:
+            use_measured: use encoder-measured (quantized + noisy) angles
+                instead of true angles (Plan Stage 2 measured-feedback mode).
         """
         home_x, home_y = self.get_home()
-        cx = home_x + self.pan_deg * self.config.px_per_deg_h
-        cy = home_y - self.tilt_deg * self.config.px_per_deg_v
+        if use_measured:
+            meas_pan, meas_tilt = self.get_measured_angles()
+        else:
+            meas_pan, meas_tilt = self.pan_deg, self.tilt_deg
+        cx = home_x + meas_pan * self.config.px_per_deg_h
+        cy = home_y - meas_tilt * self.config.px_per_deg_v
         half_w = self.config.resolution_w / 2.0
         half_h = self.config.resolution_h / 2.0
         cx = float(np.clip(cx, half_w, max(half_w, self.world_size[0] - half_w)))

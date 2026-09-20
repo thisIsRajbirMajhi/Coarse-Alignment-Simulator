@@ -100,7 +100,7 @@ class SimulationView(QWidget):
                 overlayed_fov = Renderer.render_viewport(
                     fov_frame,
                     camera=getattr(session, "camera", None),
-                    telemetry=getattr(snapshot, "terminals", None),
+                    telemetry=getattr(snapshot, "tracker_telemetry", None) or getattr(snapshot, "terminals", None),
                     camera_telemetry=getattr(snapshot, "camera_telemetry", None),
                     pid_telemetry=getattr(snapshot, "pid_telemetry", None),
                 )

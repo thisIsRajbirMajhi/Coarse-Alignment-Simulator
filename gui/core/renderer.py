@@ -280,6 +280,30 @@ class Renderer:
                 x, y, color, label = marker[:4]
                 Renderer.draw_tracker_point(display, (x, y), color=color, label=label)
 
+        # 2b. Candidate markers (subtle reticles for non-selected candidates)
+        if telemetry and isinstance(telemetry, dict):
+            autonomy = telemetry.get("autonomy") or {}
+            cands = autonomy.get("candidates") or []
+            for c in cands:
+                cx_c = float(c.get("fov_x", 0.0))
+                cy_c = float(c.get("fov_y", 0.0))
+                if marker is not None and math.hypot(cx_c - marker[0], cy_c - marker[1]) < 6.0:
+                    continue
+                icx, icy = int(round(cx_c)), int(round(cy_c))
+                if 0 <= icx < w and 0 <= icy < h:
+                    cv2.rectangle(display, (icx - 7, icy - 7), (icx + 7, icy + 7), (250, 204, 21), 1, cv2.LINE_AA)
+                    conf = float(c.get("confidence", 0.0))
+                    Renderer.draw_hud_badge(
+                        display,
+                        f"CAND {conf:.2f}",
+                        (icx + 9, icy + 4),
+                        bg_color=(10, 15, 25),
+                        text_color=(250, 204, 21),
+                        font_scale=0.36,
+                        padding=2,
+                        border_color=(30, 41, 59),
+                    )
+
         # 3. Simple, Clean Telemetry Badges
         cam_tel = kwargs.get("camera_telemetry")
         pid_tel = kwargs.get("pid_telemetry")
@@ -315,8 +339,19 @@ class Renderer:
             err_px_val = math.hypot(epx, epy)
             mode_str = str(pid_tel.get("mode", "AUTO"))
 
-        status_txt = "LOCKED" if err_px_val <= 10.0 and err_px_val > 0.0 else ("TRACKING" if err_px_val <= 50.0 and err_px_val > 0.0 else "SEARCHING")
-        status_col = (74, 222, 128) if status_txt == "LOCKED" else ((250, 204, 21) if status_txt == "TRACKING" else (148, 163, 184))
+        # Real autonomy state from telemetry
+        aut_state = None
+        if telemetry and isinstance(telemetry, dict):
+            aut = telemetry.get("autonomy")
+            if isinstance(aut, dict):
+                aut_state = aut.get("state")
+
+        if aut_state:
+            status_txt = str(aut_state).upper()
+        else:
+            status_txt = "LOCKED" if err_px_val <= 10.0 and err_px_val > 0.0 else ("TRACKING" if err_px_val <= 50.0 and err_px_val > 0.0 else "SEARCHING")
+
+        status_col = Renderer.tracker_point_color(status_txt)
 
         status_badge_text = f"[{mode_str}] {status_txt}  Err: {err_px_val:.1f}px"
         (stw, _), _ = cv2.getTextSize(status_badge_text, cv2.FONT_HERSHEY_DUPLEX, 0.44, 1)

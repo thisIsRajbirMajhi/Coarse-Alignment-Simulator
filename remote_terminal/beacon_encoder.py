@@ -9,6 +9,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+# Recent-frame history for time-truthful chip sampling (chip_at). A receiver
+# sampling a past interval after the manager already advanced would otherwise
+# read the NEW frame's clamped chip-0 for the OLD frame's tail chips and
+# corrupt every CRC. Four frames (~1.3 s) cover any sampling lag.
+FRAME_HISTORY_LEN: int = 4
+
 from common.protocol.beacon.frame import BeaconFrame
 from common.protocol.beacon.navigation import (
     CAP_NAVIGATION_STATE,
@@ -75,6 +81,8 @@ class BeaconGenerator:
         self.sequence = 0
         self.current: GeneratedBeacon | None = None
         self._ook = OOKEncoder()
+        from collections import deque as _deque
+        self.history: _deque = _deque(maxlen=FRAME_HISTORY_LEN)
 
     def new_frame(self, navigation: NavigationState2D, sim_time_s: float) -> GeneratedBeacon:
         """Encode a new frame from a pre-sampled navigation snapshot.
@@ -110,6 +118,7 @@ class BeaconGenerator:
             start_time_s=float(sim_time_s),
         )
         self.current = beacon
+        self.history.append(beacon)
         self.sequence = (seq + 1) % SEQUENCE_MODULUS
         return beacon
 
@@ -122,10 +131,24 @@ class BeaconGenerator:
         return self.current.is_complete(float(sim_time_s))
 
     def chip_at(self, sim_time_s: float) -> int:
-        """Current OOK chip level; 1 when no frame exists yet."""
+        """Current OOK chip level; 1 when no frame exists yet.
+
+        Time-truthful: the frame covering ``sim_time_s`` answers (newest
+        first), so post-update sampling of a past interval reads the frame
+        that actually owned those milliseconds — not the current frame's
+        clamped edge. Outside all known frames the legacy clamps apply
+        (pre-emission idle-high, post-end last chip), matching BeamModel.
+        """
+        t = float(sim_time_s)
+        for beacon in reversed(self.history):
+            start = float(beacon.start_time_s)
+            if start <= t < start + beacon.frame_period_s and beacon.chips:
+                idx = int((t - start) / CHIP_DURATION_S)
+                idx = min(max(idx, 0), len(beacon.chips) - 1)
+                return 1 if beacon.chips[idx] else 0
         if self.current is None:
             return 1
-        return self.current.chip_at(sim_time_s)
+        return self.current.chip_at(t)
 
 
 __all__ = [
@@ -133,4 +156,5 @@ __all__ = [
     "GeneratedBeacon",
     "CHIP_DURATION_S",
     "FIRST_FRAME_STAGGER_CHIPS",
+    "FRAME_HISTORY_LEN",
 ]

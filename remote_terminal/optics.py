@@ -56,8 +56,11 @@ class BeamModel:
         width = beam_width_rad(config.spot_size_mrad)
         power = 0.0
         if active:
-            if config.modulation == ModulationType.CW or int(chip_level) == 1:
+            if config.modulation == ModulationType.CW:
                 power = max(0.0, float(config.optical_power_w))
+            else:
+                extinction = 1.0 if int(chip_level) == 1 else 0.45
+                power = max(0.0, float(config.optical_power_w)) * extinction
         return OpticalEmission(
             active=active,
             wavelength_nm=float(config.wavelength_nm),

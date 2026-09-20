@@ -24,6 +24,7 @@ class FrameSnapshot:
     pan: float = 0.0
     tilt: float = 0.0
     fov_size: tuple[int, int] = (640, 480)
+    tracker_telemetry: dict | None = None  # Plan Stage 1: image-tracker state
 
 
 class SimulationSession:
@@ -82,6 +83,17 @@ class SimulationSession:
             rng=self.rng,
         )
         self.controller = PIDController(config=self.pid_config)
+        from local_terminal import AutonomySupervisor, SignatureRegistry
+        self.supervisor = AutonomySupervisor(registry=SignatureRegistry.from_scenario(self.scenario_config))
+        self.tracker = self.supervisor.tracker
+        self.comm_rx = self.supervisor.comm_rx
+        self.validator = self.supervisor.validator
+        self._pending_track_error: tuple[float, float] | None = None
+        self._pending_pid_active: bool = False
+        self._pending_target_angles: tuple[float, float] | None = None
+        self._last_disturbed_center: tuple[float, float] | None = None
+        self._last_val_snr_db = 6.0
+        self._sim_time_s = 0.0
         self._disturbance_pipeline = None
         self._built = True
         self._frame_id = 0
@@ -142,6 +154,10 @@ class SimulationSession:
         self.ensure_built()
         self.scenario_config = config.validate()
         self.remote.apply_config(self.scenario_config)
+        # New mission file = new expectations: fresh registry in supervisor (documented).
+        from local_terminal import SignatureRegistry
+        self.supervisor.set_registry(SignatureRegistry.from_scenario(self.scenario_config))
+        self.validator = self.supervisor.validator
 
     # -- stepping ------------------------------------------------------
     def _disturbance_pipeline_for(self, dt: float):
@@ -160,6 +176,7 @@ class SimulationSession:
         self.ensure_built()
         dt_eff = float(np.clip(dt, 1e-4, 0.1))
         self._last_dt = dt_eff
+        self._sim_time_s += dt_eff
         self.scene.update(dt_eff)
         try:
             self.remote.update(dt_eff)
@@ -183,37 +200,22 @@ class SimulationSession:
         except Exception as e:
             log.debug("vignetting skipped: %s", e)
 
-        # -- Closed-loop PTZ Tracking --
+        # -- Autonomous camera control & tracking (Plan.md Stages 1-4) --
         terms = self._safe_remote_telemetry()
         cmd_pan, cmd_tilt = 0.0, 0.0
-        if terms and isinstance(terms, dict):
-            term_list = terms.get("terminals", [])
-            # Prioritize emitting terminal, otherwise pick first terminal
-            active_target = None
-            for t in term_list:
-                if t.get("emitting"):
-                    active_target = t
-                    break
-            if active_target is None and term_list:
-                active_target = term_list[0]
-
-            if active_target is not None:
-                pos = active_target.get("position_m", (0.0, 0.0))
-                tx, ty = float(pos[0]), float(pos[1])
-                cx, cy = self.camera.get_fov_center_world()
-                err_x_px = tx - cx
-                err_y_px = ty - cy
-
-                cmd_pan, cmd_tilt = self.controller.compute_from_pixels(
-                    error_x_px=err_x_px,
-                    error_y_px=err_y_px,
-                    deg_per_px_h=self.camera.config.deg_per_px_h,
-                    deg_per_px_v=self.camera.config.deg_per_px_v,
-                    dt=dt_eff,
-                )
-
-        if self.controller.config.mode == "AUTO":
+        if self.controller.config.mode == "AUTO" and self._pending_pid_active and self._pending_track_error is not None:
+            ex, ey = self._pending_track_error
+            cmd_pan, cmd_tilt = self.controller.compute_from_pixels(
+                error_x_px=ex,
+                error_y_px=ey,
+                deg_per_px_h=self.camera.config.deg_per_px_h,
+                deg_per_px_v=self.camera.config.deg_per_px_v,
+                dt=dt_eff,
+            )
             self.camera.update(dt_eff, cmd_pan_vel=cmd_pan, cmd_tilt_vel=cmd_tilt)
+        elif self.controller.config.mode == "AUTO" and self._pending_target_angles is not None:
+            self.camera.set_target_angles(self._pending_target_angles[0], self._pending_target_angles[1])
+            self.camera.update(dt_eff)
         else:
             self.camera.update(dt_eff, cmd_pan_vel=0.0, cmd_tilt_vel=0.0)
 
@@ -224,7 +226,8 @@ class SimulationSession:
         # again. True gimbal state stays clean (observation noise, not motion).
         from simulation.fov_pipeline import apply_jitter as _apply_pose
         from simulation.fov_pipeline import apply_post_noise as _apply_post
-        cx, cy = self.camera.get_fov_center_world()
+        fb = bool(getattr(self.camera_config, "use_measured_feedback", False))
+        cx, cy = self.camera.get_fov_center_world(use_measured=fb)
         try:
             dcx, dcy = _apply_pose(cx, cy, self.disturbance_config, dt_eff, self.rng, pipeline=pipe)
         except Exception as e:
@@ -238,6 +241,43 @@ class SimulationSession:
 
         # Extract FOV viewport at the disturbed pose.
         fov_frame = self.camera.extract_fov_at(world_frame, dcx, dcy)
+
+        # Origin shift for motion model
+        if self._last_disturbed_center is None:
+            shift = (0.0, 0.0)
+        else:
+            shift = (dcx - self._last_disturbed_center[0], dcy - self._last_disturbed_center[1])
+        self._last_disturbed_center = (dcx, dcy)
+
+        # Autonomy Supervisor cycle (Plan.md §9)
+        from local_terminal import CommSource
+        sources = []
+        for term in getattr(self.remote, "terminals", []):
+            try:
+                sources.append(CommSource(
+                    position=(float(term.position_m.x), float(term.position_m.y)),
+                    emitting=bool(term.runtime.effective_emission_enabled),
+                    power_w=float(term.runtime.instantaneous_power_w),
+                    chip_at=term.generator.chip_at,
+                ))
+            except (AttributeError, TypeError, ValueError):
+                continue
+
+        sup_out = self.supervisor.step(
+            fov_frame=fov_frame,
+            dt=dt_eff,
+            sim_time_s=self._sim_time_s,
+            comm_sources=sources,
+            boresight_world=(float(dcx), float(dcy)),
+            cam_home=self.camera.get_home(),
+            px_per_deg=(self.camera.config.px_per_deg_h, self.camera.config.px_per_deg_v),
+            origin_shift=shift,
+            fov_size=(int(self.camera.fov_width), int(self.camera.fov_height)),
+        )
+
+        self._pending_pid_active = sup_out.pid_active
+        self._pending_track_error = sup_out.track_error_px
+        self._pending_target_angles = sup_out.camera_target_angles
 
         self._frame_id += 1
         cam_st = self.camera.get_state()
@@ -254,6 +294,7 @@ class SimulationSession:
             pan=cam_st.pan_deg,
             tilt=cam_st.tilt_deg,
             fov_size=(self.camera.fov_width, self.camera.fov_height),
+            tracker_telemetry=sup_out.telemetry,
         )
 
     def _safe_remote_telemetry(self) -> dict | None:

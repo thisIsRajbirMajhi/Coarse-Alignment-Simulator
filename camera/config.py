@@ -46,6 +46,9 @@ class CameraConfig(BaseValidatedConfig):
     backlash_deg: float = 0.005          # Gear backlash (hysteresis on reversal)
     encoder_bits: int = 16               # Optical encoder quantization
     encoder_noise_deg: float = 0.001     # Encoder noise 1-sigma
+    use_measured_feedback: bool = False  # Disturb-pose input from measured
+                                         # (quantized+noisy) angles instead of
+                                         # true angles (Plan Stage 2)
 
     LIMITS: ClassVar[dict[str, tuple[float, float]]] = CAMERA_LIMITS
     DEFAULTS: ClassVar[dict[str, object]] = CAMERA_DEFAULTS

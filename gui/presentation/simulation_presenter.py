@@ -42,10 +42,12 @@ class SimulationPresenter:
     """Builds DashboardState from session/controller telemetry. No Qt."""
 
     def __init__(self):
-        pass
+        self._total_track_frames = 0
+        self._center_hit_frames = 0
 
     def reset(self) -> None:
-        pass
+        self._total_track_frames = 0
+        self._center_hit_frames = 0
 
     def update(self, snapshot, session, controller) -> DashboardState:
         # Lifecycle status
@@ -88,26 +90,61 @@ class SimulationPresenter:
             prof = str(getattr(dc, "platform_profile", "Linear"))
             spd = float(getattr(dc, "platform_speed", 0.0))
 
+        # Plan Stage 1: real image-tracker state replaces placeholder zeros.
+        tt = dict(getattr(snapshot, "tracker_telemetry", None) or {})
+
         if status == "RUNNING":
             dur = float(controller.duration_s) if controller else 0.0
+            search_t = float(tt.get("total_searching_time_s", dur))
+            acq_t = tt.get("acquisition_time_s")
+            reacq_t = tt.get("reacquisition_time_s")
             snap_metrics = {
-                "searching_time_s": dur,
-                "detection_rate_pct": 0.0,
-                "reacquisition_count": 0,
-                "target_loss_count": 0,
+                "searching_time_s": search_t,
+                "acquisition_time_s": float(acq_t) if acq_t is not None else None,
+                "reacquisition_time_s": float(reacq_t) if reacq_t is not None else None,
+                "detection_rate_pct": float(tt.get("detection_rate_pct", 0.0)),
+                "reacquisition_count": int(tt.get("reacquisition_count", 0)),
+                "target_loss_count": int(tt.get("target_loss_count", 0)),
                 "target_switch_count": 0,
             }
+            # Tracking error and stability metrics
+            losses = int(tt.get("target_loss_count", 0))
+            locked = bool(tt.get("locked", False))
             pid_tel = getattr(snapshot, "pid_telemetry", None)
+            err_px_val = None
             if pid_tel and isinstance(pid_tel, dict) and pid_tel.get("active"):
                 err_px = float(pid_tel.get("error_pan_px", 0.0))
                 err_py = float(pid_tel.get("error_tilt_px", 0.0))
-                dist_px = (err_px ** 2 + err_py ** 2) ** 0.5
-                snap_metrics["avg_track_err_px"] = dist_px
-                snap_metrics["rms_px"] = dist_px
+                err_px_val = (err_px ** 2 + err_py ** 2) ** 0.5
+                snap_metrics["avg_track_err_px"] = err_px_val
+                snap_metrics["rms_px"] = err_px_val
                 # Convert to mrad: (4° / 640px) * (pi / 180) * 1000 mrad/rad = ~0.109 mrad/px
-                err_mrad = dist_px * (4.0 / 640.0) * (3.14159265 / 180.0) * 1000.0
+                err_mrad = err_px_val * (4.0 / 640.0) * (3.14159265 / 180.0) * 1000.0
                 snap_metrics["avg_track_err_mrad"] = err_mrad
                 snap_metrics["rms_mrad"] = err_mrad
+
+            # Center hit rate and retention rate
+            if locked and err_px_val is not None:
+                self._total_track_frames = getattr(self, "_total_track_frames", 0) + 1
+                if err_px_val <= 10.0:
+                    self._center_hit_frames = getattr(self, "_center_hit_frames", 0) + 1
+                snap_metrics["center_hit_rate_pct"] = round(
+                    100.0 * self._center_hit_frames / max(1, self._total_track_frames), 1
+                )
+                snap_metrics["retention_rate_pct"] = max(
+                    0.0, min(100.0, round(100.0 * (1.0 - losses / max(1.0, self._total_track_frames / 30.0)), 1))
+                )
+            elif getattr(self, "_total_track_frames", 0) > 0:
+                snap_metrics["center_hit_rate_pct"] = round(
+                    100.0 * self._center_hit_frames / max(1, self._total_track_frames), 1
+                )
+                snap_metrics["retention_rate_pct"] = max(
+                    0.0, min(100.0, round(100.0 * (1.0 - losses / max(1.0, self._total_track_frames / 30.0)), 1))
+                )
+
+            # Average loss rate per minute
+            if dur > 0.5:
+                snap_metrics["target_loss_rate_per_min"] = round(losses / (dur / 60.0), 2)
         else:
             snap_metrics = {}
 
@@ -172,7 +209,7 @@ class SimulationPresenter:
             atmospheric_preset=preset,
             platform_profile=prof,
             platform_speed=spd,
-            acquisition_time_s=snap_metrics.get("acquisition_time_s"),
+            acquisition_time_s=snap_metrics.get("acquisition_time_s", tt.get("acquisition_time_s")),
             reacquisition_time_s=snap_metrics.get("reacquisition_time_s"),
             searching_time_s=snap_metrics.get("searching_time_s"),
             retention_rate_pct=snap_metrics.get("retention_rate_pct"),
