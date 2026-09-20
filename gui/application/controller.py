@@ -169,7 +169,13 @@ class ApplicationController(QObject):
         else:
             raise ValueError(f"unknown command: {type(cmd).__name__}")
 
-    def apply_config(self, cmd: ApplyConfigCommand) -> None:
+    def apply_config(self, cmd: ApplyConfigCommand) -> bool:
+        """Apply a validated config section. Returns True on success.
+
+        Validation failures are non-fatal (warn, lifecycle unchanged) but
+        return False so callers (hot-reload) can roll the UI back instead
+        of silently diverging from session truth.
+        """
         try:
             if cmd.section == "camera":
                 self.session.apply_camera_config(cmd.config)
@@ -186,6 +192,8 @@ class ApplicationController(QObject):
         except Exception as e:
             self._warn(f"Invalid {cmd.section} config ({type(e).__name__}): {e}")
             log.exception("apply_config failed")
+            return False
+        return True
 
     # -- stepping (called by thin QTimer) ----------------------------
     def step(self) -> FrameSnapshot | None:

@@ -22,6 +22,23 @@ from gui.views.simulation_view import SimulationView
 
 log = logging.getLogger(__name__)
 
+# Hot-reload debounce per config section (ms). Cheap in-place knobs
+# (camera/PID/disturbances) apply fast for a live feel; heavyweight
+# environment rebuilds (scene regen, world-size rebuild) wait longer so a
+# slider drag coalesces into one rebuild instead of many.
+HOT_RELOAD_DELAY_MS: dict[str, int] = {
+    "camera": 120,
+    "control": 120,
+    "disturbances": 150,
+    "remote_terminal": 200,
+    "environment": 350,
+}
+# When the sim worker holds the step mutex, a pending apply is re-queued
+# (non-blocking) instead of freezing the GUI. Bounded so a stuck worker
+# surfaces as an error, not an infinite loop.
+_BUSY_RETRY_MS = 100
+_MAX_BUSY_RETRIES = 20
+
 
 class MainWindow(QMainWindow):
     """Simulator window only. Constructs layout, attaches controller/views, connects signals."""
@@ -77,6 +94,7 @@ class MainWindow(QMainWindow):
         self.controls.btn_pause.clicked.connect(self._on_pause_button)
         self.controls.btn_reset.clicked.connect(self._on_reset)
         self.controls.btn_dashboard.clicked.connect(lambda: self.windows.show_dashboard())
+        self.controls.btn_fov.clicked.connect(lambda: self.windows.show_fov())
         self.controls.btn_fullscreen.clicked.connect(self.toggle_fullscreen)
         self.controls.btn_settings.clicked.connect(lambda: self.windows.show_settings(self.session))
         # Queued: controller.step() executes in the worker thread, so its
@@ -96,6 +114,7 @@ class MainWindow(QMainWindow):
         # Debounced hot-reload timers per config section.
         self._config_timers: dict[str, QTimer] = {}
         self._pending_config: dict = {}
+        self._config_retries: dict[str, int] = {}
         self._apply_button_states()
         self._refresh_live_badge()
 
@@ -211,6 +230,11 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 log.debug("dashboard render skipped: %s", e)
             self._refresh_status_bar()
+            if getattr(self.windows, "fov_window", None) is not None and self.windows.fov_window.isVisible():
+                try:
+                    self.windows.fov_window.render_snapshot(snap, self.session)
+                except Exception as e:
+                    log.debug("fov render skipped: %s", e)
             if getattr(self.windows, "_settings", None) is not None:
                 if self.windows._settings.isVisible():
                     try:
@@ -248,11 +272,7 @@ class MainWindow(QMainWindow):
             log.debug("presenter reset skipped: %s", e)
         self.sim_view.invalidate_world_cache()
         self.windows.drop_settings()
-        for timer in getattr(self, "_config_timers", {}).values():
-            try:
-                timer.stop()
-            except Exception as e:
-                log.debug("config timer stop skipped: %s", e)
+        self.clear_pending_configs()
         try:
             self.dashboard.render(self.presenter.update(None, self.session, self.controller))
         except Exception as e:
@@ -295,6 +315,39 @@ class MainWindow(QMainWindow):
             log.debug("button state apply failed: %s", e)
 
     # -- config intents (from SettingsDialog via WindowManager) ------
+    @property
+    def has_pending_configs(self) -> bool:
+        """True while a debounced hot-reload apply is queued."""
+        return bool(getattr(self, "_pending_config", {}))
+
+    def clear_pending_configs(self) -> None:
+        """Drop queued hot-reload applies (e.g. Reset swaps the session)."""
+        for timer in getattr(self, "_config_timers", {}).values():
+            try:
+                timer.stop()
+            except Exception as e:
+                log.debug("config timer stop skipped: %s", e)
+        try:
+            self._pending_config.clear()
+        except Exception:
+            pass
+        try:
+            self._config_retries.clear()
+        except Exception:
+            pass
+        self._refresh_live_badge()
+
+    def flush_pending_configs(self) -> None:
+        """Apply every queued config immediately (e.g. before Start/close)."""
+        for section in list(getattr(self, "_pending_config", {}).keys()):
+            try:
+                timer = self._config_timers.get(section)
+                if timer is not None:
+                    timer.stop()
+            except Exception as e:
+                log.debug("config timer stop skipped: %s", e)
+            self._fire_config(section)
+
     def _schedule_config(self, section: str, apply) -> None:
         timer = self._config_timers.get(section)
         if timer is None:
@@ -302,33 +355,75 @@ class MainWindow(QMainWindow):
             timer.setSingleShot(True)
             timer.timeout.connect(lambda s=section: self._fire_config(s))
             self._config_timers[section] = timer
+        # Last-write-wins: only the newest config per section is kept.
         self._pending_config[section] = apply
-        timer.start(250)
+        self._config_retries[section] = 0
+        timer.start(HOT_RELOAD_DELAY_MS.get(section, 250))
         self._refresh_live_badge()
 
     def _fire_config(self, section: str) -> None:
-        apply = self._pending_config.pop(section, None)
-        self._refresh_live_badge()
+        apply = self._pending_config.get(section)
         if apply is None:
+            self._refresh_live_badge()
+            return
+        # Non-blocking busy handling: never freeze the GUI waiting on the
+        # worker mutex — re-queue briefly, then surface a stuck worker.
+        try:
+            locked = self.worker.mutex.tryLock()
+        except TypeError:
+            try:
+                locked = self.worker.mutex.tryLock(0)
+            except Exception:
+                locked = False
+        if not locked:
+            retries = int(self._config_retries.get(section, 0)) + 1
+            self._config_retries[section] = retries
+            if retries > _MAX_BUSY_RETRIES:
+                self._pending_config.pop(section, None)
+                self._config_retries.pop(section, None)
+                self._refresh_live_badge()
+                msg = f"{section} config not applied: sim busy"
+                try:
+                    self._statusbar.showMessage(f"⚠ {msg}")
+                except Exception:
+                    pass
+                log.warning("deferred %s apply gave up after %d retries", section, retries)
+                return
+            try:
+                self._config_timers[section].start(_BUSY_RETRY_MS)
+            except Exception as e:
+                log.debug("config retry schedule skipped: %s", e)
             return
         try:
-            # Serialized against worker steps (bounded by a single step).
-            with self.worker.try_guard(timeout_ms=2000):
-                apply()
+            ok = apply()
+            # controller.apply_config returns False on validation failure;
+            # lambdas wrapping it forward that value (None = legacy success).
+            if ok is False:
+                raise ValueError(f"invalid {section} config rejected")
+            self._pending_config.pop(section, None)
+            self._config_retries.pop(section, None)
+            self._refresh_live_badge()
             self._refresh_status_bar()
-        except TimeoutError as e:
+        except Exception as e:
+            # Roll the open Control Deck back to session truth so the
+            # sliders never silently diverge from what is actually running.
+            self._pending_config.pop(section, None)
+            self._config_retries.pop(section, None)
+            self._refresh_live_badge()
             try:
-                self._statusbar.showMessage(f"⚠ {section} config not applied: sim busy ({e})")
+                self.windows.sync_dialog(self.session)
             except Exception:
                 pass
-            log.warning("deferred %s apply timed out: %s", section, e)
-        except Exception as e:
-            # Never a silent no-op: the user just moved a control.
             try:
                 self._statusbar.showMessage(f"⚠ {section} config not applied ({type(e).__name__}): {e}")
             except Exception:
                 pass
             log.warning("deferred %s apply failed: %s", section, e)
+        finally:
+            try:
+                self.worker.mutex.unlock()
+            except Exception:
+                pass
 
     def _on_camera_config(self, cfg) -> None:
         self._schedule_config("camera", lambda: self.controller.apply_config(
@@ -340,10 +435,13 @@ class MainWindow(QMainWindow):
 
     def _on_environment_config(self, cfg) -> None:
         def _apply():
-            self.controller.apply_config(ApplyConfigCommand(section="environment", config=cfg))
+            ok = self.controller.apply_config(ApplyConfigCommand(section="environment", config=cfg))
+            if ok is False:
+                return False
             self.sim_view.invalidate_world_cache()
             self.presenter.reset()
             self.windows.sync_dialog(self.session)
+            return True
         self._schedule_config("environment", _apply)
 
     def _on_disturbances_config(self, cfg) -> None:
@@ -352,8 +450,11 @@ class MainWindow(QMainWindow):
 
     def _on_remote_config(self, cfg) -> None:
         def _apply():
-            self.controller.apply_config(ApplyConfigCommand(section="remote_terminal", config=cfg))
+            ok = self.controller.apply_config(ApplyConfigCommand(section="remote_terminal", config=cfg))
+            if ok is False:
+                return False
             self.windows.sync_dialog(self.session)
+            return True
         self._schedule_config("remote_terminal", _apply)
 
     # -- compat adapters --------------------------------------------
@@ -362,11 +463,10 @@ class MainWindow(QMainWindow):
             self.timer.stop()
         except Exception:
             pass
-        for timer in getattr(self, "_config_timers", {}).values():
-            try:
-                timer.stop()
-            except Exception as e:
-                log.debug("config timer stop skipped: %s", e)
+        try:
+            self.clear_pending_configs()
+        except Exception as e:
+            log.debug("config clear skipped: %s", e)
         try:
             self.windows.close_all()
         except Exception:

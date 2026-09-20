@@ -415,3 +415,25 @@ def test_first_frames_staggered_deterministically():
     for _ in range(20):
         mgr2.update(0.005)
     assert [t.generator.current.start_time_s for t in mgr2.terminals] == starts
+
+
+def test_remote_terminals_bounded_inside_world():
+    """Test that remote terminals bounce off boundaries and stay strictly inside world bounds."""
+    from remote_terminal import make_default_scenario
+    from remote_terminal.config import MotionProfile
+    from remote_terminal.scenario import RemoteTerminalManager
+
+    # High speed heading right towards the boundary
+    cfg = make_default_scenario(3)
+    cfg.formation.speed_mps = 100.0
+    cfg.formation.heading_deg = 0.0
+    cfg.formation.motion_profile = MotionProfile.LINEAR
+    mgr = RemoteTerminalManager(cfg, bounds=(2000, 2000), seed=42)
+
+    # Run for 30 seconds (would travel 3000m without boundaries)
+    for _ in range(300):
+        runtime = mgr.update(0.1)
+        for t in runtime.terminals:
+            pos = t.position_m
+            assert 0.0 <= pos.x <= 2000.0
+            assert 0.0 <= pos.y <= 2000.0

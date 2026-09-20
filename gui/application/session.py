@@ -16,22 +16,25 @@ class FrameSnapshot:
     frame_id: int
     world_frame: Any  # np.ndarray BGR, full scene with beacons & disturbances
     world_size: tuple[int, int]
+    fov_frame: Any = None
+    camera_telemetry: dict | None = None
+    pid_telemetry: dict | None = None
     dt: float = 1 / 30
     terminals: dict | None = None
-
-    @property
-    def fov_frame(self) -> Any:
-        return self.world_frame
+    pan: float = 0.0
+    tilt: float = 0.0
+    fov_size: tuple[int, int] = (640, 480)
 
 
 class SimulationSession:
-    """Owns Scene/Disturbance/Remote-terminal scenario.
+    """Owns Scene/Disturbance/Remote-terminal/PTZ-Camera/PID-Controller scenario.
 
     GUI talks to this; widgets never touch sim objects directly.
     """
 
     def __init__(self, env_config=None, disturbance_config=None, scenario_config=None,
-                 seed: int = 42, **kwargs):
+                 camera_config=None, pid_config=None, seed: int = 42, **kwargs):
+        from camera.config import CameraConfig, PIDConfig
         from disturbance.core.config import DisturbanceConfig
         from environment.config import EnvironmentConfig
         from remote_terminal import make_default_scenario
@@ -41,12 +44,16 @@ class SimulationSession:
         self.disturbance_config = (disturbance_config or DisturbanceConfig()).validate()
         scenario_config = scenario_config or kwargs.get("remote_config")
         self.scenario_config = (scenario_config or make_default_scenario()).validate()
+        self.camera_config = (camera_config or CameraConfig()).validate()
+        self.pid_config = (pid_config or PIDConfig()).validate()
         self._built = False
         self._frame_id = 0
         self._last_dt = 1 / 30
 
     # -- construction -------------------------------------------------
     def build(self) -> None:
+        from camera.pid_controller import PIDController
+        from camera.ptz import PTZCamera
         from common.rng import get_rng, seed_global
         from environment.scene import Scene
         from remote_terminal import RemoteTerminalManager
@@ -69,6 +76,12 @@ class SimulationSession:
             bounds=(int(cfg.world_width), int(cfg.world_height)),
             seed=scene_seed,
         )
+        self.camera = PTZCamera(
+            config=self.camera_config,
+            world_size=(int(cfg.world_width), int(cfg.world_height)),
+            rng=self.rng,
+        )
+        self.controller = PIDController(config=self.pid_config)
         self._disturbance_pipeline = None
         self._built = True
         self._frame_id = 0
@@ -86,13 +99,23 @@ class SimulationSession:
             except Exception as e:
                 log.debug("seed apply skipped: %s", e)
         self.build()
+        if hasattr(self, "camera") and self.camera is not None:
+            self.camera.reset()
+        if hasattr(self, "controller") and self.controller is not None:
+            self.controller.reset()
 
     # -- config application (validated, explicit) ----------------------
     def apply_camera_config(self, config=None) -> None:
-        pass
+        if config is not None:
+            self.camera_config = config.validate()
+            if hasattr(self, "camera") and self.camera is not None:
+                self.camera.apply_config(self.camera_config)
 
     def apply_controller_config(self, config=None) -> None:
-        pass
+        if config is not None:
+            self.pid_config = config.validate()
+            if hasattr(self, "controller") and self.controller is not None:
+                self.controller.apply_config(self.pid_config)
 
     def apply_environment_config(self, config) -> None:
         new_cfg = config.validate()
@@ -160,16 +183,77 @@ class SimulationSession:
         except Exception as e:
             log.debug("vignetting skipped: %s", e)
 
-        world_frame = pipe.apply_frame(world_frame, advance=True)
+        # -- Closed-loop PTZ Tracking --
+        terms = self._safe_remote_telemetry()
+        cmd_pan, cmd_tilt = 0.0, 0.0
+        if terms and isinstance(terms, dict):
+            term_list = terms.get("terminals", [])
+            # Prioritize emitting terminal, otherwise pick first terminal
+            active_target = None
+            for t in term_list:
+                if t.get("emitting"):
+                    active_target = t
+                    break
+            if active_target is None and term_list:
+                active_target = term_list[0]
+
+            if active_target is not None:
+                pos = active_target.get("position_m", (0.0, 0.0))
+                tx, ty = float(pos[0]), float(pos[1])
+                cx, cy = self.camera.get_fov_center_world()
+                err_x_px = tx - cx
+                err_y_px = ty - cy
+
+                cmd_pan, cmd_tilt = self.controller.compute_from_pixels(
+                    error_x_px=err_x_px,
+                    error_y_px=err_y_px,
+                    deg_per_px_h=self.camera.config.deg_per_px_h,
+                    deg_per_px_v=self.camera.config.deg_per_px_v,
+                    dt=dt_eff,
+                )
+
+        if self.controller.config.mode == "AUTO":
+            self.camera.update(dt_eff, cmd_pan_vel=cmd_pan, cmd_tilt_vel=cmd_tilt)
+        else:
+            self.camera.update(dt_eff, cmd_pan_vel=0.0, cmd_tilt_vel=0.0)
+
+        # Camera pose disturbances (jitter/vibration/platform/drift) shift
+        # where the camera looks. Disturb the post-update pose so the FOV
+        # matches the fresh gimbal position; disturb_camera_pose advances
+        # pipeline time once, so the optical/sensor stages must NOT advance
+        # again. True gimbal state stays clean (observation noise, not motion).
+        from simulation.fov_pipeline import apply_jitter as _apply_pose
+        from simulation.fov_pipeline import apply_post_noise as _apply_post
+        cx, cy = self.camera.get_fov_center_world()
+        try:
+            dcx, dcy = _apply_pose(cx, cy, self.disturbance_config, dt_eff, self.rng, pipeline=pipe)
+        except Exception as e:
+            log.debug("camera pose disturbance skipped: %s", e)
+            dcx, dcy = cx, cy
+            world_frame = pipe.apply_frame(world_frame, advance=True)
+        else:
+            world_frame = _apply_post(
+                world_frame, self.disturbance_config, dt_eff, self.rng, pipe, advance=False,
+            )
+
+        # Extract FOV viewport at the disturbed pose.
+        fov_frame = self.camera.extract_fov_at(world_frame, dcx, dcy)
 
         self._frame_id += 1
+        cam_st = self.camera.get_state()
 
         return FrameSnapshot(
             frame_id=self._frame_id,
             world_frame=world_frame,
             world_size=(int(self.env_config.world_width), int(self.env_config.world_height)),
+            fov_frame=fov_frame,
+            camera_telemetry=self.camera.get_telemetry(),
+            pid_telemetry=self.controller.get_telemetry(),
             dt=dt_eff,
-            terminals=self._safe_remote_telemetry(),
+            terminals=terms,
+            pan=cam_st.pan_deg,
+            tilt=cam_st.tilt_deg,
+            fov_size=(self.camera.fov_width, self.camera.fov_height),
         )
 
     def _safe_remote_telemetry(self) -> dict | None:

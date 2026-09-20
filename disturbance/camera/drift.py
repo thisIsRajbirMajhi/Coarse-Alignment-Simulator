@@ -41,10 +41,13 @@ def apply_camera_motion_with_state(
     Args:
       pan, tilt: pre-drift world pixels
       intensity: 0..10
-      state: dict holding vx,vy,bias_pan/bias_tilt,_last_wall. If None, uses fresh dict.
+      state: dict holding vx,vy,bias_pan/bias_tilt,ox/oy,_last_wall. If None, uses fresh dict.
       dt: seconds, sim-speed-scaled. If None, derives from wall time (fallback).
 
-    Returns (pan+drift, tilt+drift).
+    Returns (pan+drift, tilt+drift) where drift is the *accumulated* offset.
+    Accumulation matters: tick callers pass the absolute true pose every
+    frame, so a per-frame dx=v*dt alone would never wander — the offset
+    must persist in state to render slow thermal walk.
     """
     if float(intensity) <= 0:
         return pan, tilt
@@ -74,4 +77,11 @@ def apply_camera_motion_with_state(
     state["bias_pan"] = bias; state["bias_tilt"] = bias2
     dpan += bias * float(dt) * 0.3
     dtilt += bias2 * float(dt) * 0.3
-    return pan + dpan, tilt + dtilt
+    # Accumulate the offset in state so the rendered view slowly wanders
+    # (callers pass the absolute true pose each frame — nothing else persists
+    # it). Clamp the walk so long runs stay FOV-plausible: ±(3·I+5) px.
+    wander_max = 3.0 * float(intensity) + 5.0
+    ox = float(np.clip(float(state.get("ox", 0.0)) + dpan, -wander_max, wander_max))
+    oy = float(np.clip(float(state.get("oy", 0.0)) + dtilt, -wander_max, wander_max))
+    state["ox"], state["oy"] = ox, oy
+    return pan + ox, tilt + oy

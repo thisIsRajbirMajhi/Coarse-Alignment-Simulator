@@ -326,7 +326,7 @@ def test_settings_deck_matches_console_chrome(window):
     assert dlg.windowTitle() == "Settings"
     assert dlg.btn_close is not None and dlg.btn_close.text() == "Close"
     tabs = dlg.findChild(QTabWidget)
-    assert tabs is not None and tabs.count() == 3  # Remote Terminal/Environment/Disturbances
+    assert tabs is not None and tabs.count() == 5  # Remote Terminal/Environment/Disturbances/Camera/PID
     assert tabs.tabText(0) == "Remote Terminal"
     dlg.close()
 

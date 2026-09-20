@@ -37,9 +37,12 @@ class ControlView(QWidget):
         self.btn_control_deck = self.btn_settings
         self.btn_dashboard = QPushButton("Live Dashboard")
         self.btn_dashboard.setObjectName("settingsButton")
+        self.btn_fov = QPushButton("Camera FOV")
+        self.btn_fov.setObjectName("settingsButton")
+        self.btn_fov.setToolTip("Open dedicated 640×480 monochrome Camera FOV viewport window")
         self.btn_fullscreen = QPushButton("Full Screen")
         self.btn_fullscreen.setObjectName("settingsButton")
-        for b in (self.btn_start, self.btn_stop, self.btn_pause, self.btn_reset, self.btn_dashboard, self.btn_fullscreen, self.btn_settings):
+        for b in (self.btn_start, self.btn_stop, self.btn_pause, self.btn_reset, self.btn_dashboard, self.btn_fov, self.btn_fullscreen, self.btn_settings):
             layout.addWidget(b)
 
     def apply_button_states(self, states: dict) -> None:

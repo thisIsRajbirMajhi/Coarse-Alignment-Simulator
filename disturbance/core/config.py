@@ -171,8 +171,8 @@ class PlatformMotionConfig:
 
 @dataclass
 class CameraDisturbanceConfig:
-    vibration: int = 0
-    camera_motion: int = 0
+    vibration: float = 0.0
+    camera_motion: float = 0.0
     camera_jitter: float = 0.0
     jitter_enabled: bool = True
     jitter_max_x: float = 20.0
@@ -230,10 +230,11 @@ class DisturbanceConfig(BaseValidatedConfig):
     optical: OpticalDisturbanceConfig = field(default_factory=OpticalDisturbanceConfig)
     sensor: SensorDisturbanceConfig = field(default_factory=SensorDisturbanceConfig)
 
-    # Legacy sliders 0..10
+    # Legacy mount sliders 0..10 (float — fractional intensities are
+    # preserved; int inputs still validate to whole floats).
     turbulence: int = DISTURBANCE_DEFAULTS["turbulence"]
-    vibration: int = DISTURBANCE_DEFAULTS["vibration"]
-    camera_motion: int = DISTURBANCE_DEFAULTS["camera_motion"]
+    vibration: float = 0.0
+    camera_motion: float = 0.0
     noise: int = DISTURBANCE_DEFAULTS["noise"]
 
     # Image Noise
@@ -349,10 +350,11 @@ class DisturbanceConfig(BaseValidatedConfig):
         except Exception:
             pass
 
-        # legacy 0..10 ints
+        # legacy turbulence/noise stay int; vibration/camera_motion are float
+        # (fractional mount intensities must survive validation).
         self.turbulence = int(clip_field(self.turbulence, *DISTURBANCE_LIMITS["turbulence"]))
-        self.vibration = int(clip_field(self.vibration, *DISTURBANCE_LIMITS["vibration"]))
-        self.camera_motion = int(clip_field(self.camera_motion, *DISTURBANCE_LIMITS["camera_motion"]))
+        self.vibration = float(clip_field(float(self.vibration), *DISTURBANCE_LIMITS["vibration"]))
+        self.camera_motion = float(clip_field(float(self.camera_motion), *DISTURBANCE_LIMITS["camera_motion"]))
         self.noise = int(clip_field(self.noise, *DISTURBANCE_LIMITS["noise"]))
 
         self.enable_salt_pepper = bool(self.enable_salt_pepper)

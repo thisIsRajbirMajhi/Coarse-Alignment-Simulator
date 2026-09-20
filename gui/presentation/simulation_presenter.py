@@ -97,6 +97,17 @@ class SimulationPresenter:
                 "target_loss_count": 0,
                 "target_switch_count": 0,
             }
+            pid_tel = getattr(snapshot, "pid_telemetry", None)
+            if pid_tel and isinstance(pid_tel, dict) and pid_tel.get("active"):
+                err_px = float(pid_tel.get("error_pan_px", 0.0))
+                err_py = float(pid_tel.get("error_tilt_px", 0.0))
+                dist_px = (err_px ** 2 + err_py ** 2) ** 0.5
+                snap_metrics["avg_track_err_px"] = dist_px
+                snap_metrics["rms_px"] = dist_px
+                # Convert to mrad: (4° / 640px) * (pi / 180) * 1000 mrad/rad = ~0.109 mrad/px
+                err_mrad = dist_px * (4.0 / 640.0) * (3.14159265 / 180.0) * 1000.0
+                snap_metrics["avg_track_err_mrad"] = err_mrad
+                snap_metrics["rms_mrad"] = err_mrad
         else:
             snap_metrics = {}
 

@@ -146,25 +146,37 @@ class SettingsDialog(QDialog):
         footer_hint.setAlignment(Qt.AlignCenter)
         layout.addWidget(footer_hint)
 
+        from gui.panels.camera_panel import CameraPanel
+        from gui.panels.controller_panel import ControllerPanel
         from gui.panels.disturbances_panel import DisturbancesPanel
         from gui.panels.environment_panel import EnvironmentPanel
         from gui.panels.remote_terminal_panel import RemoteTerminalPanel
 
-        # 1. Remote Terminal Panel
+        # 1. Camera & PTZ Panel
+        self.camera_panel = CameraPanel(initial=getattr(session, "camera_config", None))
+
+        # 2. PID Controller Panel
+        self.controller_panel = ControllerPanel(initial=getattr(session, "pid_config", None))
+
+        # 3. Remote Terminal Panel
         self.remote_panel = RemoteTerminalPanel(initial=session.scenario_config)
 
-        # 2. Environment Panel
+        # 4. Environment Panel
         self.env_panel = EnvironmentPanel(initial=session.env_config)
 
-        # 3. Disturbances Panel
+        # 5. Disturbances Panel
         self.dist_panel = DisturbancesPanel(initial=session.disturbance_config)
 
         # Wrap each panel in a scroll area with custom clean background
         self._add_scrolled_tab(self.remote_panel, "Remote Terminal")
         self._add_scrolled_tab(self.env_panel, "Environment")
         self._add_scrolled_tab(self.dist_panel, "Disturbances")
+        self._add_scrolled_tab(self.camera_panel, "Camera & PTZ")
+        self._add_scrolled_tab(self.controller_panel, "PID Controller")
 
         # Connect signals
+        self.camera_panel.configChanged.connect(self.cameraChanged.emit)
+        self.controller_panel.configChanged.connect(self.controlChanged.emit)
         self.remote_panel.configChanged.connect(self.remoteTerminalChanged.emit)
         self.env_panel.configChanged.connect(self.environmentChanged.emit)
         self.dist_panel.configChanged.connect(self.disturbancesChanged.emit)
@@ -205,6 +217,12 @@ class SettingsDialog(QDialog):
 
     def reset_to_defaults(self) -> None:
         """Reset every panel to default settings (each emits once)."""
+        try:
+            from camera.config import CameraConfig, PIDConfig
+            self.camera_panel.set_config(CameraConfig().validate(), emit=True)
+            self.controller_panel.set_config(PIDConfig().validate(), emit=True)
+        except Exception as e:
+            log.debug("camera/controller reset skipped: %s", e)
         try:
             from remote_terminal import make_default_scenario
             self.remote_panel.set_config(make_default_scenario(), emit=True)
@@ -274,6 +292,13 @@ class SettingsDialog(QDialog):
     def sync_from_session(self, session) -> None:
         """Pull clamped session values back into widgets (no emit, no loops)."""
         self.sync_world_bounds(session)
+        try:
+            if hasattr(session, "camera_config"):
+                self.camera_panel.set_config(session.camera_config, emit=False)
+            if hasattr(session, "pid_config"):
+                self.controller_panel.set_config(session.pid_config, emit=False)
+        except Exception as e:
+            log.debug("camera/controller sync skipped: %s", e)
         try:
             self.remote_panel.set_config(session.scenario_config, emit=False)
         except Exception as e:

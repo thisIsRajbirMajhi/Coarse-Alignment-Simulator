@@ -125,3 +125,40 @@ def test_parametric_sensor_noise_intensity(intensity):
     assert out.shape == frame.shape
     if intensity == 0:
         assert np.array_equal(frame, out)
+
+
+def test_camera_drift_accumulates_into_visible_wander():
+    """Regression: drift must persist its offset in state.
+
+    Tick callers pass the absolute true pose every frame, so a per-frame
+    dx=v*dt alone never wanders (sub-pixel, invisible). The kernel must
+    accumulate the offset for slow thermal walk to render.
+    """
+    from disturbance.camera.drift import apply_camera_motion_with_state
+    rng = np.random.default_rng(0)
+    state: dict = {}
+    devs = []
+    for _ in range(120):
+        x, y = apply_camera_motion_with_state(1000.0, 1000.0, 8, state, dt=0.033, rng=rng)
+        devs.append(abs(x - 1000.0) + abs(y - 1000.0))
+    assert float(np.mean(devs[80:])) > float(np.mean(devs[:20]))
+    assert float(np.max(devs[80:])) > 1.0
+
+
+def test_vibration_pose_deviates_from_true_pose():
+    """Vibration must shift the reported pose by a visible amount."""
+    from disturbance.camera.vibration import apply_platform_vibration
+    rng = np.random.default_rng(1)
+    state: dict = {}
+    devs = []
+    for _ in range(30):
+        x, y = apply_platform_vibration(1000.0, 1000.0, 8, dt=0.033, rng=rng, state=state)
+        devs.append(abs(x - 1000.0) + abs(y - 1000.0))
+    assert float(np.mean(devs)) > 0.5
+
+
+def test_float_mount_intensities_survive_validation():
+    """Fractional vibration/drift must not be truncated to int by validate()."""
+    cfg = DisturbanceConfig(vibration=2.7, camera_motion=1.5).validate()
+    assert cfg.vibration == pytest.approx(2.7)
+    assert cfg.camera_motion == pytest.approx(1.5)

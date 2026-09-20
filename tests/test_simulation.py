@@ -114,3 +114,27 @@ def test_fsOC_env_render():
     assert frame is not None
     assert frame.shape == (2000, 2000, 3)
     env.close()
+
+
+def _run_fovs(disturbance_config, n=10, seed=5):
+    sim = HeadlessSimulation(seed=seed, disturbance_config=disturbance_config)
+    sim.reset(seed=seed)
+    return [sim.step()[0]["fov_frame"] for _ in range(n)]
+
+
+def test_headless_camera_pose_disturbances_shift_fov():
+    """Regression: jitter/platform pose disturbances must reach the FOV.
+
+    The pose path used to be dead (only optical/sensor stages ran), so
+    these configs rendered byte-identical frames to a clean run.
+    """
+    clean = _run_fovs(DisturbanceConfig().validate())
+    for kwargs in ({"camera_jitter": 15.0}, {"platform_speed": 15.0}):
+        fovs = _run_fovs(DisturbanceConfig(**kwargs).validate())
+        assert any(not np.array_equal(a, b) for a, b in zip(fovs, clean)), kwargs
+
+
+def test_headless_camera_pose_disturbances_stay_deterministic():
+    fovs_a = _run_fovs(DisturbanceConfig(camera_jitter=12.0, platform_speed=8.0).validate())
+    fovs_b = _run_fovs(DisturbanceConfig(camera_jitter=12.0, platform_speed=8.0).validate())
+    assert all(np.array_equal(a, b) for a, b in zip(fovs_a, fovs_b))

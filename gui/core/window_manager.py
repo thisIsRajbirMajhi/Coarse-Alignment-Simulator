@@ -15,6 +15,40 @@ class WindowManager:
         self._parent = parent
         self._settings = None
         self._dashboard_window = None
+        self._fov_window = None
+
+    # -- Camera FOV Window (own separate window) ----------------------
+    def ensure_fov(self) -> object:
+        """Create the Camera FOV window on demand WITHOUT showing it."""
+        from gui.windows.fov_window import FOVWindow
+        if self._fov_window is None:
+            self._fov_window = FOVWindow(None)  # top-level, not child
+            try:
+                self._fov_window.setAttribute(Qt.WA_DeleteOnClose)
+                self._fov_window.destroyed.connect(self._on_fov_destroyed)
+            except Exception as e:
+                log.debug("fov delete-on-close skipped: %s", e)
+        return self._fov_window
+
+    def _on_fov_destroyed(self) -> None:
+        self._fov_window = None
+
+    def show_fov(self, maximized: bool = False) -> object:
+        w = self.ensure_fov()
+        try:
+            if maximized and not w.isFullScreen():
+                w.showMaximized()
+            else:
+                w.show()
+            w.raise_()
+            w.activateWindow()
+        except Exception as e:
+            log.debug("show fov window failed: %s", e)
+        return w
+
+    @property
+    def fov_window(self):
+        return self._fov_window
 
     # -- Live Dashboard (own separate window) --------------------------
     def ensure_dashboard(self) -> object:
@@ -54,6 +88,8 @@ class WindowManager:
         from gui.views.settings_dialog import SettingsDialog
         if self._settings is None:
             self._settings = SettingsDialog(session, self._parent)
+            self._settings.cameraChanged.connect(self._parent._on_camera_config)
+            self._settings.controlChanged.connect(self._parent._on_control_config)
             self._settings.remoteTerminalChanged.connect(self._parent._on_remote_config)
             self._settings.environmentChanged.connect(self._parent._on_environment_config)
             self._settings.disturbancesChanged.connect(self._parent._on_disturbances_config)
@@ -89,7 +125,7 @@ class WindowManager:
             log.debug("dialog sync skipped: %s", e)
 
     def close_all(self) -> None:
-        for attr in ("_settings", "_dashboard_window"):
+        for attr in ("_settings", "_dashboard_window", "_fov_window"):
             try:
                 w = getattr(self, attr, None)
                 if w is not None:
@@ -99,3 +135,4 @@ class WindowManager:
                 log.debug("close window skipped: %s", e)
         self._settings = None
         self._dashboard_window = None
+        self._fov_window = None

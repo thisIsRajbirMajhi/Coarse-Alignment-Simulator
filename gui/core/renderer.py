@@ -28,23 +28,56 @@ class ScreenSpec:
 
 
 class Renderer:
-    """Stateless renderer — standard crosshair and camera viewport overlays."""
+    """Stateless renderer — standard crosshair, tactical reticle, and camera viewport overlays."""
 
     @staticmethod
-    def draw_reticle(img: np.ndarray, center: tuple[int, int], gap: int = 10, arm: int = 16,
-                     color: tuple[int, int, int] = (230, 230, 230), thickness: int = 1,
+    def draw_hud_badge(
+        img: np.ndarray,
+        text: str,
+        pos: tuple[int, int],
+        bg_color: tuple[int, int, int] = (15, 23, 42),
+        text_color: tuple[int, int, int] = (226, 232, 240),
+        font_scale: float = 0.42,
+        thickness: int = 1,
+        padding: int = 4,
+        border_color: tuple[int, int, int] | None = (51, 65, 85),
+        font_face: int = cv2.FONT_HERSHEY_DUPLEX,
+    ) -> tuple[int, int, int, int]:
+        """Draw text with a high-contrast background pill for crisp readability over any video background."""
+        x, y = int(pos[0]), int(pos[1])
+        (tw, th), baseline = cv2.getTextSize(text, font_face, font_scale, thickness)
+        bx0 = max(0, x - padding)
+        by0 = max(0, y - th - padding)
+        bx1 = min(img.shape[1] - 1, x + tw + padding)
+        by1 = min(img.shape[0] - 1, y + baseline + padding)
+        cv2.rectangle(img, (bx0, by0), (bx1, by1), bg_color, -1)
+        if border_color is not None:
+            border_thick = max(1, int(round(thickness / 2.0)))
+            cv2.rectangle(img, (bx0, by0), (bx1, by1), border_color, border_thick, cv2.LINE_AA)
+        cv2.putText(img, text, (x, y), font_face, font_scale, text_color, thickness, cv2.LINE_AA)
+        return (bx0, by0, bx1, by1)
+
+    @staticmethod
+    def draw_reticle(img: np.ndarray, center: tuple[int, int], gap: int = 10, arm: int = 18,
+                     color: tuple[int, int, int] = (220, 225, 230), thickness: int = 1,
                      show_dot: bool = True) -> None:
+        """Simple, clean boresight reticle with 10px coarse alignment boundary circle."""
         cx, cy = int(center[0]), int(center[1])
+        # Crosshair arms
         cv2.line(img, (cx - gap - arm, cy), (cx - gap, cy), color, thickness, cv2.LINE_AA)
         cv2.line(img, (cx + gap, cy), (cx + gap + arm, cy), color, thickness, cv2.LINE_AA)
         cv2.line(img, (cx, cy - gap - arm), (cx, cy - gap), color, thickness, cv2.LINE_AA)
         cv2.line(img, (cx, cy + gap), (cx, cy + gap + arm), color, thickness, cv2.LINE_AA)
+
+        # 10px coarse alignment threshold circle (PDF specification limit)
+        cv2.circle(img, (cx, cy), 10, (74, 222, 128), 1, cv2.LINE_AA)
+
         if show_dot:
-            cv2.circle(img, (cx, cy), 1, color, -1, cv2.LINE_AA)
+            cv2.circle(img, (cx, cy), 1, (255, 255, 255), -1, cv2.LINE_AA)
 
     @staticmethod
-    def draw_corner_brackets(img: np.ndarray, margin: int = 6, length: int = 10,
-                             color: tuple[int, int, int] = (180, 180, 180), thickness: int = 1) -> None:
+    def draw_corner_brackets(img: np.ndarray, margin: int = 6, length: int = 12,
+                             color: tuple[int, int, int] = (140, 150, 165), thickness: int = 1) -> None:
         h, w = img.shape[:2]
         corners = [
             ((margin, margin), (margin + length, margin), (margin, margin + length)),
@@ -76,128 +109,231 @@ class Renderer:
 
     # Tracker-point colors (BGR): lock-state aware.
     TRACKER_COLORS: dict[str, tuple[int, int, int]] = {
-        "LOCKED": (80, 210, 90),
-        "TRACKING": (80, 210, 90),
-        "REACQUIRING": (60, 190, 255),
-        "DISCRIMINATING": (220, 190, 80),
-        "DETECTING": (220, 190, 80),
-        "SEARCHING": (150, 150, 150),
-        "IDLE": (150, 150, 150),
+        "LOCKED": (74, 222, 128),
+        "TRACKING": (74, 222, 128),
+        "REACQUIRING": (56, 189, 248),
+        "DISCRIMINATING": (250, 204, 21),
+        "DETECTING": (250, 204, 21),
+        "SEARCHING": (148, 163, 184),
+        "IDLE": (148, 163, 184),
     }
 
     @staticmethod
     def tracker_point_color(autonomy_state: str) -> tuple[int, int, int]:
         """BGR color for the tracker marker from autonomy state (LOCKED green ...)."""
         try:
-            return Renderer.TRACKER_COLORS.get(str(autonomy_state).upper(), (150, 150, 150))
+            return Renderer.TRACKER_COLORS.get(str(autonomy_state).upper(), (148, 163, 184))
         except Exception:
-            return (150, 150, 150)
+            return (148, 163, 184)
 
     @staticmethod
-    def tracker_marker_from_telemetry(telemetry, fov_size: tuple[int, int] | None = None):
-        """Extract (x, y, color, label) tracker point from local-terminal telemetry.
+    def tracker_marker_from_telemetry(telemetry, fov_size: tuple[int, int] | None = None, camera=None):
+        """Extract (x, y, color, label, heading_rad, speed) tracker point from telemetry.
 
-        Prefers the active target, else the best confirmed candidate, else the
-        first visible candidate (dim). Returns None when nothing trackable.
+        Supports:
+        1. Local-terminal autonomy telemetry (candidates, active_target_id)
+        2. Remote terminal list with camera world_to_fov coordinate mapping.
+        Prefers the active emitting target, else first confirmed/visible candidate.
+        Returns None when nothing trackable.
         Pure helper — never raises, safe with None/partial telemetry.
         """
         try:
             if not isinstance(telemetry, dict):
                 return None
+
+            # 1. Autonomy candidate pipeline
             autonomy = telemetry.get("autonomy") or {}
             candidates = autonomy.get("candidates") or []
-            if not candidates:
-                return None
-            active_id = autonomy.get("active_target_id")
-            state = str(autonomy.get("state") or "IDLE")
-            pick = None
-            if active_id is not None:
-                for c in candidates:
-                    if c.get("terminal_id") == active_id:
-                        pick = c
-                        break
-            if pick is None:
-                confirmed = [c for c in candidates if c.get("confirmed")]
-                if confirmed:
-                    confirmed.sort(key=lambda c: float(c.get("confidence", 0.0)), reverse=True)
-                    pick = confirmed[0]
-            if pick is None:
-                pick = candidates[0]
-            x = float(pick.get("fov_x", 0.0))
-            y = float(pick.get("fov_y", 0.0))
-            if fov_size is not None:
-                fw, fh = int(fov_size[0]), int(fov_size[1])
-                if not (0 <= x < fw and 0 <= y < fh):
-                    return None
-            color = Renderer.tracker_point_color(state)
-            label = f"{pick.get('terminal_id', 'RT')} {state}"
-            return (x, y, color, label)
+            if candidates:
+                active_id = autonomy.get("active_target_id")
+                state = str(autonomy.get("state") or "IDLE")
+                pick = None
+                if active_id is not None:
+                    for c in candidates:
+                        if c.get("terminal_id") == active_id:
+                            pick = c
+                            break
+                if pick is None:
+                    confirmed = [c for c in candidates if c.get("confirmed")]
+                    if confirmed:
+                        confirmed.sort(key=lambda c: float(c.get("confidence", 0.0)), reverse=True)
+                        pick = confirmed[0]
+                if pick is None:
+                    pick = candidates[0]
+                x = float(pick.get("fov_x", 0.0))
+                y = float(pick.get("fov_y", 0.0))
+                if fov_size is not None:
+                    fw, fh = int(fov_size[0]), int(fov_size[1])
+                    if not (0 <= x < fw and 0 <= y < fh):
+                        return None
+                color = Renderer.tracker_point_color(state)
+                label = f"{pick.get('terminal_id', 'RT')} {state}"
+                return (x, y, color, label, None, None)
+
+            # 2. Direct remote terminals pipeline with camera FOV projection
+            if camera is not None and "terminals" in telemetry:
+                term_list = telemetry.get("terminals", [])
+                if isinstance(term_list, list) and term_list:
+                    active_t = next((t for t in term_list if t.get("emitting")), term_list[0] if term_list else None)
+                    if active_t is not None:
+                        pos = active_t.get("position_m", (0.0, 0.0))
+                        tx, ty = float(pos[0]), float(pos[1])
+                        fx, fy = camera.world_to_fov(tx, ty)
+                        if fov_size is not None:
+                            fw, fh = int(fov_size[0]), int(fov_size[1])
+                            if not (0 <= fx < fw and 0 <= fy < fh):
+                                return None
+                        is_em = bool(active_t.get("emitting", False))
+                        color = (74, 222, 128) if is_em else (148, 163, 184)
+                        tid = str(active_t.get("id", "RT"))
+                        label = f"{tid} (ACTIVE)" if is_em else tid
+                        heading_rad = float(active_t.get("heading_rad", 0.0)) if "heading_rad" in active_t else None
+                        speed = float(active_t.get("velocity_m_s", 0.0)) if "velocity_m_s" in active_t else None
+                        return (fx, fy, color, label, heading_rad, speed)
+
+            return None
         except Exception:
             return None
 
     @staticmethod
     def draw_tracker_point(img: np.ndarray, spot: tuple[float, float],
-                           color: tuple[int, int, int] = (80, 210, 90),
-                           label: str | None = None) -> None:
-        """Draw the tracker point as a hollow circle so the object stays visible inside.
-
-        Ring outline only (nothing painted over the target) + error line from
-        FOV center stopping at the ring rim + label.
-        """
+                           color: tuple[int, int, int] = (74, 222, 128),
+                           label: str | None = None,
+                           heading_rad: float | None = None,
+                           speed: float | None = None) -> None:
+        """Draw clean target lock ring, error line, and clear status label."""
         h, w = img.shape[:2]
         sx, sy = int(round(float(spot[0]))), int(round(float(spot[1])))
         sx = max(0, min(w - 1, sx))
         sy = max(0, min(h - 1, sy))
         cx, cy = w // 2, h // 2
-        r = max(10, min(w, h) // 32)
-        # Error vector from FOV center, stopping at the ring rim so it never
-        # crosses the object.
+        r = 14
+
+        # 1. Error line from boresight to target rim
         try:
             dx, dy = float(sx - cx), float(sy - cy)
             dist = math.hypot(dx, dy)
-            dim = tuple(max(0, min(255, int(c * 0.55))) for c in color)
+            dim = tuple(max(0, min(255, int(c * 0.6))) for c in color)
             if dist > r + 2:
                 ex = int(round(sx - dx / dist * r))
                 ey = int(round(sy - dy / dist * r))
                 cv2.line(img, (cx, cy), (ex, ey), dim, 1, cv2.LINE_AA)
+                mx, my = (cx + ex) // 2, (cy + ey) // 2
+                Renderer.draw_hud_badge(
+                    img,
+                    f"{dist:.1f}px",
+                    (mx + 4, my - 2),
+                    bg_color=(10, 15, 25),
+                    text_color=(56, 189, 248),
+                    font_scale=0.38,
+                    padding=3,
+                    border_color=(3, 105, 161),
+                )
         except Exception:
             pass
-        # Hollow ring — object visible inside.
+
+        # 2. Hollow ring around target
         cv2.circle(img, (sx, sy), r, color, 2, cv2.LINE_AA)
+
+        # 3. Heading arrow (if moving)
+        if heading_rad is not None and speed is not None and speed > 0.5:
+            v_len = 24.0
+            vx = int(round(sx + v_len * math.cos(heading_rad)))
+            vy = int(round(sy - v_len * math.sin(heading_rad)))
+            cv2.arrowedLine(img, (sx, sy), (vx, vy), (250, 204, 21), 2, cv2.LINE_AA, tipLength=0.3)
+
+        # 4. Target label badge
         if label:
-            try:
-                (tw, th), _ = cv2.getTextSize(str(label), cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
-                tx = max(2, min(w - tw - 4, sx + r + 4))
-                ty = max(th + 4, sy - r - 4)
-                cv2.rectangle(img, (tx - 2, ty - th - 3), (tx + tw + 2, ty + 2), (10, 10, 10), -1)
-                cv2.putText(img, str(label), (tx, ty - 1), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1, cv2.LINE_AA)
-            except Exception:
-                pass
+            Renderer.draw_hud_badge(
+                img,
+                str(label),
+                (sx + r + 8, sy + 5),
+                bg_color=(10, 15, 25),
+                text_color=color,
+                font_scale=0.44,
+                thickness=1,
+                padding=4,
+                border_color=(30, 41, 59),
+            )
 
     @staticmethod
     def render_viewport(fov_frame: np.ndarray, camera=None, *args, **kwargs) -> np.ndarray:
-        """Render FOV viewport: crosshair + framing reticle + tracker point.
-
-        Tracker telemetry may be passed as ``telemetry=`` kwarg (local-terminal
-        telemetry dict) or derived from ``camera`` when it carries one. Extra
-        positional/keyword args are ignored for backward compatibility.
-        """
+        """Render FOV viewport: clean boresight reticle + target tracking + simple telemetry."""
         display = fov_frame.copy()
         h, w = display.shape[:2]
         cx, cy = w // 2, h // 2
 
-        gap = max(8, min(w, h) // 16)
-        arm = max(12, min(w, h) // 12)
-        Renderer.draw_reticle(display, (cx, cy), gap=gap, arm=arm, color=(230, 230, 230), thickness=1)
-        Renderer.draw_corner_brackets(display, margin=4, length=max(8, min(w, h) // 20), color=(180, 180, 180), thickness=1)
+        # 1. Boresight reticle & corner brackets
+        Renderer.draw_reticle(display, (cx, cy), gap=10, arm=18, color=(220, 225, 230), thickness=1)
+        Renderer.draw_corner_brackets(display, margin=6, length=12, color=(140, 150, 165), thickness=1)
 
+        # 2. Target marker
         telemetry = kwargs.get("telemetry", None)
         if telemetry is None and len(args) >= 1 and isinstance(args[0], dict):
             telemetry = args[0]
-        marker = Renderer.tracker_marker_from_telemetry(telemetry, (w, h))
+        marker = Renderer.tracker_marker_from_telemetry(telemetry, (w, h), camera=camera)
         if marker is not None:
-            x, y, color, label = marker
-            Renderer.draw_tracker_point(display, (x, y), color=color, label=label)
+            if len(marker) >= 6:
+                x, y, color, label, h_rad, spd = marker[:6]
+                Renderer.draw_tracker_point(display, (x, y), color=color, label=label, heading_rad=h_rad, speed=spd)
+            else:
+                x, y, color, label = marker[:4]
+                Renderer.draw_tracker_point(display, (x, y), color=color, label=label)
+
+        # 3. Simple, Clean Telemetry Badges
+        cam_tel = kwargs.get("camera_telemetry")
+        pid_tel = kwargs.get("pid_telemetry")
+
+        # Top-Left: Pan / Tilt
+        pan_txt, tilt_txt = "+0.00°", "+0.00°"
+        if cam_tel and isinstance(cam_tel, dict):
+            ptz = cam_tel.get("ptz", {})
+            pan_txt = f"{float(ptz.get('pan_deg', 0.0)):+.2f}°"
+            tilt_txt = f"{float(ptz.get('tilt_deg', 0.0)):+.2f}°"
+        elif camera is not None:
+            pan_txt = f"{camera.pan_deg:+.2f}°"
+            tilt_txt = f"{camera.tilt_deg:+.2f}°"
+
+        Renderer.draw_hud_badge(
+            display,
+            f"Pan: {pan_txt}  Tilt: {tilt_txt}",
+            (12, 24),
+            bg_color=(10, 15, 25),
+            text_color=(226, 232, 240),
+            font_scale=0.44,
+            thickness=1,
+            padding=5,
+            border_color=(30, 41, 59),
+        )
+
+        # Top-Right: Mode & Tracking Error
+        mode_str = "AUTO"
+        err_px_val = 0.0
+        if pid_tel and isinstance(pid_tel, dict):
+            epx = float(pid_tel.get("error_pan_px", 0.0))
+            epy = float(pid_tel.get("error_tilt_px", 0.0))
+            err_px_val = math.hypot(epx, epy)
+            mode_str = str(pid_tel.get("mode", "AUTO"))
+
+        status_txt = "LOCKED" if err_px_val <= 10.0 and err_px_val > 0.0 else ("TRACKING" if err_px_val <= 50.0 and err_px_val > 0.0 else "SEARCHING")
+        status_col = (74, 222, 128) if status_txt == "LOCKED" else ((250, 204, 21) if status_txt == "TRACKING" else (148, 163, 184))
+
+        status_badge_text = f"[{mode_str}] {status_txt}  Err: {err_px_val:.1f}px"
+        (stw, _), _ = cv2.getTextSize(status_badge_text, cv2.FONT_HERSHEY_DUPLEX, 0.44, 1)
+        right_x = max(12, w - stw - 18)
+
+        Renderer.draw_hud_badge(
+            display,
+            status_badge_text,
+            (right_x, 24),
+            bg_color=(10, 15, 25),
+            text_color=status_col,
+            font_scale=0.44,
+            thickness=1,
+            padding=5,
+            border_color=(30, 41, 59),
+        )
+
         return display
 
     @staticmethod
@@ -235,12 +371,16 @@ class Renderer:
             pass
 
         try:
-            pan_lo, pan_hi = camera.get_pan_range()
-            tilt_lo, tilt_hi = camera.get_tilt_range()
-            rx0 = int((pan_lo - camera.fov_width / 2) * scale_x)
-            ry0 = int((tilt_lo - camera.fov_height / 2) * scale_y)
-            rx1 = int((pan_hi + camera.fov_width / 2) * scale_x)
-            ry1 = int((tilt_hi + camera.fov_height / 2) * scale_y)
+            p_min, p_max, t_min, t_max = camera.get_effective_angular_limits()
+            hx, hy = camera.get_home()
+            x_min = hx + p_min * camera.config.px_per_deg_h - camera.fov_width / 2.0
+            x_max = hx + p_max * camera.config.px_per_deg_h + camera.fov_width / 2.0
+            y_min = hy - t_max * camera.config.px_per_deg_v - camera.fov_height / 2.0
+            y_max = hy - t_min * camera.config.px_per_deg_v + camera.fov_height / 2.0
+            rx0 = int(x_min * scale_x)
+            ry0 = int(y_min * scale_y)
+            rx1 = int(x_max * scale_x)
+            ry1 = int(y_max * scale_y)
             rx0 = max(0, min(rx0, display.shape[1] - 1))
             rx1 = max(0, min(rx1, display.shape[1] - 1))
             ry0 = max(0, min(ry0, display.shape[0] - 1))

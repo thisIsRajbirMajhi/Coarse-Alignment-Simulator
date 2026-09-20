@@ -99,10 +99,74 @@ class RemoteTerminalManager:
         dt = float(max(0.0, dt))
         self.sim_time_s += dt
         center, velocity = self._motion.step(dt)
+
+        # Boundary containment: ensure formation center and all terminals stay inside world bounds
+        bw = float(self.bounds[0])
+        bh = float(self.bounds[1])
+        max_ox = max((abs(o.x) for o in self._offsets), default=0.0)
+        max_oy = max((abs(o.y) for o in self._offsets), default=0.0)
+        margin_x = max(30.0, max_ox + 20.0)
+        margin_y = max(30.0, max_oy + 20.0)
+
+        cx, cy = center.x, center.y
+        vx, vy = velocity.x, velocity.y
+
+        bounced = False
+        # Reflect off left/right vertical boundary walls
+        if cx <= margin_x:
+            cx = margin_x
+            if vx < 0:
+                vx = -vx
+                bounced = True
+                if hasattr(self._motion, "heading_deg"):
+                    self._motion.heading_deg = (180.0 - self._motion.heading_deg) % 360.0
+                if hasattr(self._motion, "_random_heading_deg"):
+                    self._motion._random_heading_deg = (180.0 - self._motion._random_heading_deg) % 360.0
+        elif cx >= bw - margin_x:
+            cx = bw - margin_x
+            if vx > 0:
+                vx = -vx
+                bounced = True
+                if hasattr(self._motion, "heading_deg"):
+                    self._motion.heading_deg = (180.0 - self._motion.heading_deg) % 360.0
+                if hasattr(self._motion, "_random_heading_deg"):
+                    self._motion._random_heading_deg = (180.0 - self._motion._random_heading_deg) % 360.0
+
+        # Reflect off top/bottom horizontal boundary walls
+        if cy <= margin_y:
+            cy = margin_y
+            if vy < 0:
+                vy = -vy
+                bounced = True
+                if hasattr(self._motion, "heading_deg"):
+                    self._motion.heading_deg = (-self._motion.heading_deg) % 360.0
+                if hasattr(self._motion, "_random_heading_deg"):
+                    self._motion._random_heading_deg = (-self._motion._random_heading_deg) % 360.0
+        elif cy >= bh - margin_y:
+            cy = bh - margin_y
+            if vy > 0:
+                vy = -vy
+                bounced = True
+                if hasattr(self._motion, "heading_deg"):
+                    self._motion.heading_deg = (-self._motion.heading_deg) % 360.0
+                if hasattr(self._motion, "_random_heading_deg"):
+                    self._motion._random_heading_deg = (-self._motion._random_heading_deg) % 360.0
+
+        if bounced:
+            self._motion.velocity = Vector2(vx, vy)
+            self._motion.position = Vector2(cx, cy)
+            self._motion.start = Vector2(cx, cy)
+            self._motion.sim_time_s = 0.0
+
+        center = Vector2(cx, cy)
+        velocity = Vector2(vx, vy)
         self._center = center
+
         runtimes = []
         for terminal, offset in zip(self.terminals, self._offsets):
-            pos = Vector2(center.x + offset.x, center.y + offset.y)
+            pos_x = max(10.0, min(bw - 10.0, center.x + offset.x))
+            pos_y = max(10.0, min(bh - 10.0, center.y + offset.y))
+            pos = Vector2(pos_x, pos_y)
             runtimes.append(
                 terminal.step(
                     dt=dt,

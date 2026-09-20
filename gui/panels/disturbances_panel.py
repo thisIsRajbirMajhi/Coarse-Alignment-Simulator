@@ -387,6 +387,35 @@ class DisturbancesPanel(BaseConfigPanel):
         pg.addWidget(self._hint("Linear drifts straight; Random jitters the path; Figure 8 sweeps loops."), 2, 0, 1, 4)
         tl.addWidget(plat_box)
 
+        vib_box = QGroupBox("Mount vibration & slow drift — 0..10")
+        vg = QGridLayout(vib_box)
+        vg.setContentsMargins(12, 18, 12, 12)
+        vg.setHorizontalSpacing(8)
+        vg.setVerticalSpacing(8)
+        vg.setColumnStretch(1, 1)
+        vg.addWidget(self._label("Vibration"), 0, 0)
+        self.slider_vibration = QSlider(Qt.Horizontal)
+        self.slider_vibration.setRange(0, 100)  # 0.0 to 10.0 step 0.1
+        self.slider_vibration.setValue(0)
+        self.slider_vibration.setToolTip("Harmonic mount vibration 0..10 — high-frequency shake")
+        self.label_vibration_val = QLabel("0.0")
+        self.label_vibration_val.setMinimumHeight(26)
+        self.label_vibration_val.setStyleSheet("color:#374151; font-size:11px;")
+        vg.addWidget(self.slider_vibration, 0, 1)
+        vg.addWidget(self.label_vibration_val, 0, 2)
+        vg.addWidget(self._label("Slow drift"), 1, 0)
+        self.slider_cam_drift = QSlider(Qt.Horizontal)
+        self.slider_cam_drift.setRange(0, 100)  # 0.0 to 10.0 step 0.1
+        self.slider_cam_drift.setValue(0)
+        self.slider_cam_drift.setToolTip("Thermal/mount drift 0..10 — slow OU wander of the view")
+        self.label_cam_drift_val = QLabel("0.0")
+        self.label_cam_drift_val.setMinimumHeight(26)
+        self.label_cam_drift_val.setStyleSheet("color:#374151; font-size:11px;")
+        vg.addWidget(self.slider_cam_drift, 1, 1)
+        vg.addWidget(self.label_cam_drift_val, 1, 2)
+        vg.addWidget(self._hint("Vibration rattles the mount; drift slowly walks the view (thermal)."), 2, 0, 1, 3)
+        tl.addWidget(vib_box)
+
         self.chk_cam_details = QCheckBox("Show motion details (amplitude, direction)")
         self.chk_cam_details.setStyleSheet("color:#64748b; font-size:11px;")
         tl.addWidget(self.chk_cam_details)
@@ -603,6 +632,10 @@ class DisturbancesPanel(BaseConfigPanel):
         self.slider_poisson_peak.valueChanged.connect(lambda val: self.label_poisson_peak_val.setText(str(val)))
         self.slider_jitter.valueChanged.connect(lambda _: self._emit_config())
         self.slider_jitter.valueChanged.connect(lambda val: self.label_jitter_val.setText(f"{val/10:.1f} px"))
+        self.slider_vibration.valueChanged.connect(lambda _: self._emit_config())
+        self.slider_vibration.valueChanged.connect(lambda val: self.label_vibration_val.setText(f"{val/10:.1f}"))
+        self.slider_cam_drift.valueChanged.connect(lambda _: self._emit_config())
+        self.slider_cam_drift.valueChanged.connect(lambda val: self.label_cam_drift_val.setText(f"{val/10:.1f}"))
         self.combo_atmospheric.currentTextChanged.connect(self._on_atmo_preset_changed)
         self.slider_atmo_contrast.valueChanged.connect(lambda _: self._emit_config())
         self.slider_atmo_contrast.valueChanged.connect(lambda val: self.label_atmo_contrast_val.setText(f"{val}%"))
@@ -634,6 +667,7 @@ class DisturbancesPanel(BaseConfigPanel):
             self.slider_intensity_fluct, self.slider_salt_density, self.slider_salt_ratio,
             self.slider_gaussian_sigma, self.slider_gaussian_max,
             self.slider_poisson_scale, self.slider_poisson_peak, self.slider_jitter,
+            self.slider_vibration, self.slider_cam_drift,
             self.slider_atmo_contrast, self.slider_atmo_brightness,
             self.slider_platform_speed, self.slider_platform_amp_x,
             self.slider_platform_amp_y, self.slider_platform_direction,
@@ -788,6 +822,10 @@ class DisturbancesPanel(BaseConfigPanel):
             parts.append(f"turbulence {int(cfg.turbulence)}")
         if float(getattr(cfg, "camera_jitter", 0.0)) > 1e-9:
             parts.append(f"shake {float(cfg.camera_jitter):.1f}px")
+        if float(getattr(cfg, "vibration", 0.0)) > 1e-9:
+            parts.append(f"vibration {float(cfg.vibration):.1f}")
+        if float(getattr(cfg, "camera_motion", 0.0)) > 1e-9:
+            parts.append(f"drift {float(cfg.camera_motion):.1f}")
         noises = []
         if bool(cfg.enable_gaussian):
             noises.append(f"grain σ{float(cfg.gaussian_sigma):.1f}")
@@ -820,8 +858,14 @@ class DisturbancesPanel(BaseConfigPanel):
                 air_sub += f" · turb {turb}"
             jit = float(getattr(cfg, "camera_jitter", 0.0))
             spd = float(getattr(cfg, "platform_speed", 0.0))
-            cam_on = jit > 1e-9 or spd > 1e-9
+            vib = float(getattr(cfg, "vibration", 0.0))
+            drf = float(getattr(cfg, "camera_motion", 0.0))
+            cam_on = jit > 1e-9 or spd > 1e-9 or vib > 1e-9 or drf > 1e-9
             cam_sub = f"shake {jit:.1f}px" if jit > 1e-9 else ""
+            if vib > 1e-9:
+                cam_sub = (cam_sub + " · " if cam_sub else "") + f"vib {vib:.1f}"
+            if drf > 1e-9:
+                cam_sub = (cam_sub + " · " if cam_sub else "") + f"drift {drf:.1f}"
             if spd > 1e-9:
                 cam_sub = (cam_sub + " · " if cam_sub else "") + f"drift {spd:.1f}px/f"
             cam_sub = cam_sub or "Off"
@@ -857,12 +901,13 @@ class DisturbancesPanel(BaseConfigPanel):
             log.debug("module nav refresh skipped: %s", e)
 
     def collect_config(self) -> DisturbanceConfig:
-        # Hidden legacy sliders are 0 (removed from UI); channel turbulence
-        # slider is authoritative for the legacy turbulence field.
+        # Hidden legacy sliders are back-compat mirrors (kept synced in
+        # set_config); the visible turbulence/vibration/drift sliders below
+        # are authoritative.
         cfg = DisturbanceConfig(
             turbulence=int(self.slider_turbulence.value()),
-            vibration=int(self.sliders["Vibration"].value()),
-            camera_motion=int(self.sliders["Camera Motion"].value()),
+            vibration=float(self.slider_vibration.value()) / 10.0,
+            camera_motion=float(self.slider_cam_drift.value()) / 10.0,
             noise=int(self.sliders["Noise"].value()),
             enable_salt_pepper=bool(self.chk_salt_pepper.isChecked()),
             enable_gaussian=bool(self.chk_gaussian.isChecked()),
@@ -908,7 +953,8 @@ class DisturbancesPanel(BaseConfigPanel):
             self.slider_salt_density, self.slider_salt_ratio,
             self.slider_gaussian_sigma, self.slider_gaussian_max,
             self.slider_poisson_scale, self.slider_poisson_peak,
-            self.slider_jitter, self.combo_atmospheric, self.slider_atmo_contrast, self.slider_atmo_brightness,
+            self.slider_jitter, self.slider_vibration, self.slider_cam_drift,
+            self.combo_atmospheric, self.slider_atmo_contrast, self.slider_atmo_brightness,
             self.combo_platform, self.slider_platform_speed,
             self.slider_platform_amp_x, self.slider_platform_amp_y, self.slider_platform_direction,
         ]
@@ -918,10 +964,10 @@ class DisturbancesPanel(BaseConfigPanel):
             s.blockSignals(True)
         try:
             for k in ["Turbulence", "Vibration", "Camera Motion", "Noise"]:
-                # keep hidden sliders at cfg value (normally 0)
+                # hidden sliders mirror cfg (back-compat for external readers)
                 if k == "Turbulence": self.sliders[k].setValue(int(cfg.turbulence))
-                elif k == "Vibration": self.sliders[k].setValue(int(cfg.vibration))
-                elif k == "Camera Motion": self.sliders[k].setValue(int(cfg.camera_motion))
+                elif k == "Vibration": self.sliders[k].setValue(int(float(cfg.vibration)))
+                elif k == "Camera Motion": self.sliders[k].setValue(int(float(cfg.camera_motion)))
                 elif k == "Noise": self.sliders[k].setValue(int(cfg.noise))
             self.chk_salt_pepper.setChecked(bool(cfg.enable_salt_pepper))
             self.chk_gaussian.setChecked(bool(cfg.enable_gaussian))
@@ -940,6 +986,10 @@ class DisturbancesPanel(BaseConfigPanel):
             self.label_poisson_peak_val.setText(str(getattr(cfg, "poisson_peak", 100)))
             self.slider_jitter.setValue(int(cfg.camera_jitter * 10))
             self.label_jitter_val.setText(f"{cfg.camera_jitter:.1f} px")
+            self.slider_vibration.setValue(int(round(float(cfg.vibration) * 10)))
+            self.label_vibration_val.setText(f"{float(cfg.vibration):.1f}")
+            self.slider_cam_drift.setValue(int(round(float(cfg.camera_motion) * 10)))
+            self.label_cam_drift_val.setText(f"{float(cfg.camera_motion):.1f}")
             self.chk_jitter_enabled.setChecked(bool(getattr(cfg, "camera_jitter_enabled", True)))
             self.chk_global_enabled.setChecked(bool(getattr(cfg, "global_enabled", True)))
             self.chk_channel_enabled.setChecked(bool(getattr(cfg, "channel_enabled", True)))
@@ -1017,6 +1067,8 @@ class DisturbancesPanel(BaseConfigPanel):
             (self.slider_poisson_scale, self.label_poisson_scale_val),
             (self.slider_poisson_peak, self.label_poisson_peak_val),
             (self.slider_jitter, self.label_jitter_val),
+            (self.slider_vibration, self.label_vibration_val),
+            (self.slider_cam_drift, self.label_cam_drift_val),
             (self.slider_atmo_contrast, self.label_atmo_contrast_val),
             (self.slider_atmo_brightness, self.label_atmo_brightness_val),
             (self.slider_platform_speed, self.label_platform_speed_val),
@@ -1033,6 +1085,17 @@ class DisturbancesPanel(BaseConfigPanel):
     def _emit_config(self) -> None:
         if getattr(self, "_building", False):
             return
+        # Release-gated: coalesce slider drags into the sliderReleased
+        # emit. valueChanged during a drag only updates the pill label
+        # (wired separately); the config itself fires on release or for
+        # non-drag changes (keyboard, programmatic, toggles, combos).
+        try:
+            sender = self.sender()
+            from PyQt5.QtWidgets import QSlider as _QSlider
+            if isinstance(sender, _QSlider) and sender.isSliderDown():
+                return
+        except Exception:
+            pass
         # Live-apply (Design.md §15): disturbance changes cost no rebuild —
         # they take effect on the next frame, so every gesture step emits and
         # MainWindow's 250 ms coalescer bounds the apply rate. sliderReleased

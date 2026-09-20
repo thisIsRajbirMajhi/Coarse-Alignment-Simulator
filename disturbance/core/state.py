@@ -67,6 +67,8 @@ class CameraDriftState(_StateFields):
     vy: float = 0.0
     bias_pan: float = 0.0
     bias_tilt: float = 0.0
+    ox: float = 0.0
+    oy: float = 0.0
     _last_wall: float | None = None
 
 

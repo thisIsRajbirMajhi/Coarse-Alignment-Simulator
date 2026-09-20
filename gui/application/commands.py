@@ -32,7 +32,7 @@ class ResetCommand:
 
 @dataclass(frozen=True)
 class ApplyConfigCommand:
-    section: str  # camera|control|environment|disturbances
+    section: str  # camera|control|environment|disturbances|remote_terminal
     config: Any
 
 

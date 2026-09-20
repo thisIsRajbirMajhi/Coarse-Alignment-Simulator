@@ -28,10 +28,11 @@ class SimWorker(QObject):
     requestStep = pyqtSignal()  # GUI thread -> worker thread (queued)
 
     def __init__(self, controller, parent=None):
-        super().__init__(parent)
+        super().__init__(None)
+        self._parent = parent
         self.controller = controller
         self.mutex = QMutex()
-        self._thread = QThread(self)
+        self._thread = QThread()
         self.moveToThread(self._thread)
         self.requestStep.connect(self._on_request)
         self._thread.start()
