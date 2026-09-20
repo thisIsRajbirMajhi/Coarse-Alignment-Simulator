@@ -204,7 +204,7 @@ class Renderer:
     def render_minimap_cached(minimap_thumb: np.ndarray, camera=None, *args,
                               label_size: tuple[int, int] = (400, 300),
                               scene_size: tuple[int, int] = (2000, 2000), **kwargs) -> np.ndarray:
-        """Fast path: minimap_thumb already resized. Overlays home indicator."""
+        """Fast path: minimap_thumb already resized. Overlays home indicator and terminals."""
         lw, lh = label_size
         sw, sh = scene_size
         display = minimap_thumb.copy()
@@ -248,6 +248,27 @@ class Renderer:
             cv2.rectangle(display, (rx0, ry0), (rx1, ry1), (90, 90, 90), 1, cv2.LINE_AA)
         except Exception:
             pass
+
+        # Draw remote terminals on minimap (1 m = 1 px scene mapping).
+        terminals_data = kwargs.get("terminals")
+        if terminals_data and isinstance(terminals_data, dict):
+            term_list = terminals_data.get("terminals", [])
+            for t in term_list:
+                try:
+                    if not isinstance(t, dict):
+                        continue
+                    pos = t.get("position_m", (0, 0))
+                    txs = int(float(pos[0]) * scale_x)
+                    tys = int(float(pos[1]) * scale_y)
+                    is_em = bool(t.get("emitting", False))
+                    tid = str(t.get("id", "RT"))
+                    color = (50, 220, 120) if is_em else (140, 140, 140)
+                    cv2.circle(display, (txs, tys), 3, color, -1, cv2.LINE_AA)
+                    if is_em:
+                        cv2.circle(display, (txs, tys), 6, color, 1, cv2.LINE_AA)
+                    cv2.putText(display, tid, (txs + 5, tys + 3), cv2.FONT_HERSHEY_SIMPLEX, 0.28, color, 1, cv2.LINE_AA)
+                except (TypeError, ValueError, IndexError):
+                    continue
 
         cv2.putText(display, f"{sw}x{sh}", (4, 10), cv2.FONT_HERSHEY_SIMPLEX, 0.28, (180, 180, 180), 1, cv2.LINE_AA)
         return display

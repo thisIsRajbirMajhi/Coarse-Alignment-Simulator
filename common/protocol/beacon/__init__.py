@@ -28,6 +28,16 @@ from common.protocol.beacon.ook import (
     chips_to_intensity,
     terminal_id_to_byte,
 )
+from common.protocol.beacon.navigation import (
+    CAP_NAVIGATION_STATE,
+    NAV_EXTENSION_BYTES,
+    NAV_EXTENSION_FORMAT,
+    SEQUENCE_MODULUS,
+    NavigationState2D,
+    decode_navigation_state,
+    encode_navigation_state,
+    sequence_is_newer,
+)
 from common.protocol.beacon.payload import (
     BeaconPayload,
     DecodedPayload,
@@ -41,6 +51,15 @@ __all__ = [
     "DecodedPayload",
     "PayloadCodec",
     "PayloadDecoder",
+    # Navigation extension (RemoteTerminal.md §§17-23)
+    "CAP_NAVIGATION_STATE",
+    "NAV_EXTENSION_BYTES",
+    "NAV_EXTENSION_FORMAT",
+    "SEQUENCE_MODULUS",
+    "NavigationState2D",
+    "encode_navigation_state",
+    "decode_navigation_state",
+    "sequence_is_newer",
     # Frame
     "BeaconFrame",
     "BeaconFrameEncoder",

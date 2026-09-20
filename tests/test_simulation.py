@@ -59,6 +59,24 @@ def test_headless_simulation_step_with_action():
     assert not term
     assert not trunc
     assert info["step_count"] == 1
+    assert obs["terminals"]["terminal_count"] == 1
+    assert len(obs["terminals"]["terminals"]) == 1
+
+
+def test_headless_simulation_remote_scenario():
+    from remote_terminal import FormationShape, make_default_scenario
+    scen = make_default_scenario(2)
+    scen.formation.formation_shape = FormationShape.LINE
+    scen.formation.speed_mps = 20.0
+    scen.validate()
+    sim = HeadlessSimulation(seed=42, scenario_config=scen)
+    obs = sim.reset(seed=42)
+    assert obs["terminals"]["terminal_count"] == 2
+    step_obs, _, _, _, _ = sim.step()
+    assert step_obs["terminals"]["terminal_count"] == 2
+    first = step_obs["terminals"]["terminals"][0]
+    assert first["id"] == "RT-001"
+    assert "position_m" in first and "beacon_sequence" in first
 
 
 def test_headless_simulation_truncation():

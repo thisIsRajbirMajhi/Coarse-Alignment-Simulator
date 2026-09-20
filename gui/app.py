@@ -18,8 +18,8 @@ Module: gui.app — public entry (console architecture).
     - gui.core.renderer                : Renderer (viewport/minimap overlays, stateless)
     - gui.core.frame_presenter         : NumPy -> QPixmap
     - gui.core.window_manager          : secondary windows
-  Panels (gui/panels/* — pure inputs: display/validate/emit Config):
-    - gui.panels.base/global/camera/control/disturbances/environment
+   Panels (gui/panels/* — pure inputs: display/validate/emit Config):
+     - gui.panels.base/global/camera/control/disturbances/environment/remote_terminal
   Orchestrator:
     - gui.main_window                  : MainWindow (thin composition root)
 

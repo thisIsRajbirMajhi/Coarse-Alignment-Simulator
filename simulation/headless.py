@@ -13,6 +13,7 @@ from disturbance.core.config import DisturbanceConfig
 from disturbance.core import DisturbanceContext, DisturbancePipeline
 from environment.config import EnvironmentConfig
 from environment.scene import Scene
+from remote_terminal import RemoteTerminalManager, RemoteScenarioConfig, make_default_scenario
 
 
 @dataclass
@@ -21,6 +22,7 @@ class HeadlessConfig:
     seed: int = 42
     env: EnvironmentConfig | None = None
     disturbance: DisturbanceConfig | None = None
+    scenario: RemoteScenarioConfig | None = None
     max_steps: int = 2000
     dt: float = 1 / 30
     sim_speed: float = 1.0
@@ -31,7 +33,7 @@ class HeadlessSimulation:
     Headless FSOC simulator — deterministic, no Qt.
 
     Pipeline:
-      scene.update → disturbances → full world frame capture
+      scene.update → remote terminals → disturbances → full world frame capture
     """
 
     def __init__(
@@ -39,6 +41,7 @@ class HeadlessSimulation:
         seed: int = 42,
         env_config: EnvironmentConfig | None = None,
         disturbance_config: DisturbanceConfig | None = None,
+        scenario_config: RemoteScenarioConfig | None = None,
         rng: np.random.Generator | None = None,
         max_steps: int = 2000,
         dt: float = 1 / 30,
@@ -61,6 +64,8 @@ class HeadlessSimulation:
         self._scene_size = (int(self.env_config.world_width), int(self.env_config.world_height))
 
         self.disturbance_config = (disturbance_config or DisturbanceConfig()).validate()
+        scenario_config = scenario_config or kwargs.get("remote_config")
+        self.scenario_config = (scenario_config or make_default_scenario()).validate()
 
         self._last_frame: np.ndarray | None = None
 
@@ -75,6 +80,10 @@ class HeadlessSimulation:
         self._scene_size = (int(cfg.world_width), int(cfg.world_height))
         self.scene = Scene(config=cfg)
 
+        scene_seed = int(cfg.seed) if cfg.seed is not None else self.seed
+        self.remote = RemoteTerminalManager(
+            self.scenario_config, bounds=self._scene_size, seed=scene_seed,
+        )
         self._last_frame = None
 
     def _capture_frame(self, dt_eff: float = 1 / 30) -> np.ndarray:
@@ -84,6 +93,11 @@ class HeadlessSimulation:
         self._disturbance_pipeline.context.dt = dt_eff
 
         frame = self.scene.get_frame()
+
+        try:
+            frame = self.remote.render_spots(frame)
+        except (AttributeError, TypeError, ValueError, RuntimeError):
+            pass
 
         vig = float(getattr(self.env_config, "vignetting_pct", 0)) / 100.0
         if vig > 1e-3:
@@ -134,6 +148,10 @@ class HeadlessSimulation:
             "world_size": self._scene_size,
             "step_count": self.step_count,
         }
+        try:
+            obs["terminals"] = self.remote.get_telemetry()
+        except (AttributeError, TypeError, ValueError, RuntimeError):
+            pass
         if self._last_frame is not None:
             obs["frame"] = self._last_frame
         return obs
@@ -144,6 +162,10 @@ class HeadlessSimulation:
 
         try:
             self.scene.update(dt_eff)
+        except Exception:
+            pass
+        try:
+            self.remote.update(dt_eff)
         except Exception:
             pass
 

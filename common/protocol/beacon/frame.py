@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from common.protocol.beacon.crc import CRC8, CRCValidator
+from common.protocol.beacon.navigation import SEQUENCE_MODULUS, sequence_is_newer
 from common.protocol.beacon.ook import (
     bytes_to_chips,
     chips_to_bytes,
@@ -296,7 +297,13 @@ class BeaconFrameParser:
                     crc_ok=True,
                 )
 
-                is_new = bool(last_seq < 0 or payload.seq > last_seq)
+                is_new = bool(
+                    last_seq < 0
+                    or sequence_is_newer(
+                        int(payload.seq) % SEQUENCE_MODULUS,
+                        int(last_seq) % SEQUENCE_MODULUS,
+                    )
+                )
                 consumed_bits = start_idx + m_len + (end + 1) * 8
                 return BeaconDecodeResult(
                     **common,
@@ -328,6 +335,7 @@ class BeaconFrameEncoder:
                 seq=int(sequence_number),
                 network_id=int(getattr(self.config, "network_id", 0) or 0),
                 capabilities=int(getattr(self.config, "capabilities", 0) or 0),
+                nav=bytes(getattr(self.config, "nav_bytes", b"") or b""),
             ),
             protocol_version=int(getattr(self.config, "protocol_version", PROTOCOL_VERSION)),
             message_type=int(getattr(self.config, "message_type", MESSAGE_TYPE_BEACON)),

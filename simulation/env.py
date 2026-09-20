@@ -26,6 +26,7 @@ def _make_sim_from_config(headless_config: HeadlessConfig, seed: int) -> Headles
         seed=seed,
         env_config=headless_config.env,
         disturbance_config=headless_config.disturbance,
+        scenario_config=getattr(headless_config, "scenario", None),
         max_steps=headless_config.max_steps,
         dt=headless_config.dt,
         sim_speed=headless_config.sim_speed,
@@ -50,6 +51,8 @@ if _HAS_GYM:
                     cfg_kwargs["env"] = v
                 elif k == "disturbance_config":
                     cfg_kwargs["disturbance"] = v
+                elif k in ("scenario_config", "remote_config"):
+                    cfg_kwargs["scenario"] = v
             self.headless_config = headless_config or HeadlessConfig(seed=seed, **cfg_kwargs)
             self.headless_config.seed = int(seed)
             self.sim = _make_sim_from_config(self.headless_config, int(seed))
@@ -116,6 +119,8 @@ else:
                     cfg_kwargs["env"] = v
                 elif k == "disturbance_config":
                     cfg_kwargs["disturbance"] = v
+                elif k in ("scenario_config", "remote_config"):
+                    cfg_kwargs["scenario"] = v
             self.headless_config = headless_config or HeadlessConfig(seed=seed, **cfg_kwargs)
             self.headless_config.seed = int(seed)
             self.sim = _make_sim_from_config(self.headless_config, int(seed))

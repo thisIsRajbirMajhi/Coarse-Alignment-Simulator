@@ -76,7 +76,25 @@ class SimulationPresenter:
         try:
             if snapshot is not None:
                 frame_id = int(getattr(snapshot, "frame_id", 0) or 0)
-        except Exception:
+            terms = getattr(snapshot, "terminals", None) if snapshot else None
+            if isinstance(terms, dict):
+                term_list = terms.get("terminals", []) or []
+                emitting = [t for t in term_list
+                            if isinstance(t, dict) and t.get("emitting")]
+                if emitting:
+                    beacon_state = "EMITTING"
+                    target_id = str(emitting[0].get("id", "—"))
+                    states = {str(t.get("operational_state", "")) for t in emitting}
+                    if "linked" in states:
+                        link_state = "LINKED"
+                    elif "beaconing" in states:
+                        link_state = "BEACONING"
+                    else:
+                        link_state = "EMITTING"
+                elif term_list and isinstance(term_list[0], dict):
+                    target_id = str(term_list[0].get("id", "—"))
+                    link_state = str(term_list[0].get("operational_state", "—")).upper()
+        except (AttributeError, TypeError, ValueError):
             pass
 
 

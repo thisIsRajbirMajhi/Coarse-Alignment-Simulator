@@ -14,9 +14,10 @@ log = logging.getLogger(__name__)
 class FrameSnapshot:
     """Immutable per-step output for presenters/views."""
     frame_id: int
-    world_frame: Any  # np.ndarray BGR, full scene with disturbances
+    world_frame: Any  # np.ndarray BGR, full scene with beacons & disturbances
     world_size: tuple[int, int]
     dt: float = 1 / 30
+    terminals: dict | None = None
 
     @property
     def fov_frame(self) -> Any:
@@ -24,18 +25,22 @@ class FrameSnapshot:
 
 
 class SimulationSession:
-    """Owns Scene/Disturbance.
+    """Owns Scene/Disturbance/Remote-terminal scenario.
 
     GUI talks to this; widgets never touch sim objects directly.
     """
 
-    def __init__(self, env_config=None, disturbance_config=None, seed: int = 42, **kwargs):
+    def __init__(self, env_config=None, disturbance_config=None, scenario_config=None,
+                 seed: int = 42, **kwargs):
         from disturbance.core.config import DisturbanceConfig
         from environment.config import EnvironmentConfig
+        from remote_terminal import make_default_scenario
 
         self.seed = int(seed)
         self.env_config = (env_config or EnvironmentConfig()).validate()
         self.disturbance_config = (disturbance_config or DisturbanceConfig()).validate()
+        scenario_config = scenario_config or kwargs.get("remote_config")
+        self.scenario_config = (scenario_config or make_default_scenario()).validate()
         self._built = False
         self._frame_id = 0
         self._last_dt = 1 / 30
@@ -44,6 +49,7 @@ class SimulationSession:
     def build(self) -> None:
         from common.rng import get_rng, seed_global
         from environment.scene import Scene
+        from remote_terminal import RemoteTerminalManager
 
         cfg = self.env_config.validate()
         seed_global(int(cfg.seed) if cfg.seed is not None else self.seed)
@@ -57,6 +63,12 @@ class SimulationSession:
             log.debug("disturbance reset skipped: %s", e)
 
         self.scene = Scene(config=cfg)
+        scene_seed = int(cfg.seed) if cfg.seed is not None else self.seed
+        self.remote = RemoteTerminalManager(
+            self.scenario_config,
+            bounds=(int(cfg.world_width), int(cfg.world_height)),
+            seed=scene_seed,
+        )
         self._disturbance_pipeline = None
         self._built = True
         self._frame_id = 0
@@ -103,6 +115,11 @@ class SimulationSession:
         self.ensure_built()
         self.disturbance_config = config.validate()
 
+    def apply_remote_config(self, config) -> None:
+        self.ensure_built()
+        self.scenario_config = config.validate()
+        self.remote.apply_config(self.scenario_config)
+
     # -- stepping ------------------------------------------------------
     def _disturbance_pipeline_for(self, dt: float):
         from disturbance.core import DisturbanceContext, DisturbancePipeline
@@ -121,10 +138,19 @@ class SimulationSession:
         dt_eff = float(np.clip(dt, 1e-4, 0.1))
         self._last_dt = dt_eff
         self.scene.update(dt_eff)
+        try:
+            self.remote.update(dt_eff)
+        except Exception as e:
+            log.debug("remote terminal update skipped: %s", e)
 
         pipe = self._disturbance_pipeline_for(dt_eff)
 
         world_frame = self.scene.get_frame()
+
+        try:
+            world_frame = self.remote.render_spots(world_frame)
+        except Exception as e:
+            log.debug("remote beacon render skipped: %s", e)
 
         try:
             vig = float(getattr(self.env_config, "vignetting_pct", 0)) / 100.0
@@ -143,5 +169,13 @@ class SimulationSession:
             world_frame=world_frame,
             world_size=(int(self.env_config.world_width), int(self.env_config.world_height)),
             dt=dt_eff,
+            terminals=self._safe_remote_telemetry(),
         )
+
+    def _safe_remote_telemetry(self) -> dict | None:
+        try:
+            return self.remote.get_telemetry()
+        except Exception as e:
+            log.debug("remote telemetry skipped: %s", e)
+            return None
 

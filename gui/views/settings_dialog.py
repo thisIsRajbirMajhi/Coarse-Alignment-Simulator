@@ -1,4 +1,4 @@
-# gui/views/settings_dialog.py - Fullscreen-capable Control Deck hosting system configs.
+# gui/views/settings_dialog.py - Fullscreen-capable Control Deck hosting remote terminal and system configs.
 from __future__ import annotations
 
 import logging
@@ -25,7 +25,7 @@ class SettingsDialog(QDialog):
     """
     Control Deck window/dialog - fullscreen capable.
     Hosts:
-      - Control Panel (PID)
+      - Remote Terminal Panel (formation/motion/terminals + telemetry)
       - Environment Panel
       - Disturbances Panel
     Emits validated Config objects upward. Never touches simulation directly.
@@ -36,6 +36,7 @@ class SettingsDialog(QDialog):
     controlChanged = pyqtSignal(object)
     environmentChanged = pyqtSignal(object)
     disturbancesChanged = pyqtSignal(object)
+    remoteTerminalChanged = pyqtSignal(object)
 
     def __init__(self, session, parent=None):
         super().__init__(parent)
@@ -64,7 +65,7 @@ class SettingsDialog(QDialog):
         title.setStyleSheet("font-size:16px; font-weight:700; color:#ffffff;")
         title_block.addWidget(title)
 
-        sub = QLabel("Environment • Disturbances", header)
+        sub = QLabel("Remote Terminal • Environment • Disturbances", header)
         sub.setStyleSheet("font-size:11px; color:#e2e8f0;")
         sub.setWordWrap(True)
         sub.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -138,18 +139,24 @@ class SettingsDialog(QDialog):
 
         from gui.panels.disturbances_panel import DisturbancesPanel
         from gui.panels.environment_panel import EnvironmentPanel
+        from gui.panels.remote_terminal_panel import RemoteTerminalPanel
 
-        # 1. Environment Panel
+        # 1. Remote Terminal Panel
+        self.remote_panel = RemoteTerminalPanel(initial=session.scenario_config)
+
+        # 2. Environment Panel
         self.env_panel = EnvironmentPanel(initial=session.env_config)
 
-        # 2. Disturbances Panel
+        # 3. Disturbances Panel
         self.dist_panel = DisturbancesPanel(initial=session.disturbance_config)
 
         # Wrap each panel in a scroll area with custom clean background
+        self._add_scrolled_tab(self.remote_panel, "Remote Terminal")
         self._add_scrolled_tab(self.env_panel, "Environment")
         self._add_scrolled_tab(self.dist_panel, "Disturbances")
 
         # Connect signals
+        self.remote_panel.configChanged.connect(self.remoteTerminalChanged.emit)
         self.env_panel.configChanged.connect(self.environmentChanged.emit)
         self.dist_panel.configChanged.connect(self.disturbancesChanged.emit)
 
@@ -216,6 +223,12 @@ class SettingsDialog(QDialog):
     def update_telemetry(self, telemetry: dict) -> None:
         if not isinstance(telemetry, dict):
             return
+        try:
+            terms = telemetry.get("terminals")
+            if isinstance(terms, dict):
+                self.remote_panel.update_telemetry(terms)
+        except Exception as e:
+            log.debug("remote terminal telemetry update skipped: %s", e)
 
     def sync_world_bounds(self, session) -> None:
         """Push current world size into panels (call after world resize)."""
@@ -224,6 +237,10 @@ class SettingsDialog(QDialog):
     def sync_from_session(self, session) -> None:
         """Pull clamped session values back into widgets (no emit, no loops)."""
         self.sync_world_bounds(session)
+        try:
+            self.remote_panel.set_config(session.scenario_config, emit=False)
+        except Exception as e:
+            log.debug("remote terminal sync skipped: %s", e)
         try:
             self.env_panel.set_config(session.env_config, emit=False)
         except Exception as e:
