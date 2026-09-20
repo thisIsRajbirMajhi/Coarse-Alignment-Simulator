@@ -75,7 +75,7 @@ class SettingsDialog(QDialog):
 
         self.btn_randomize = QPushButton("🎲 Randomize All", header)
         self.btn_randomize.setObjectName("randomizeAllButton")
-        self.btn_randomize.setToolTip("Randomize all environment and disturbance parameters on the go")
+        self.btn_randomize.setToolTip("Randomize all remote terminal, environment, and disturbance parameters on the go")
         self.btn_randomize.setMinimumHeight(30)
         self.btn_randomize.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.btn_randomize.setStyleSheet(
@@ -95,14 +95,23 @@ class SettingsDialog(QDialog):
         self.btn_randomize_scope.setObjectName("settingsButton")
         self.btn_randomize_scope.setMinimumHeight(30)
         self.btn_randomize_scope.setFixedWidth(34)
-        self.btn_randomize_scope.setToolTip("Randomize one scope: Environment, Disturbances, or Seed only")
+        self.btn_randomize_scope.setToolTip("Randomize one scope: Remote Terminal, Environment, Disturbances, or Seed only")
         scope_menu = _QMenu(self.btn_randomize_scope)
         scope_menu.addAction("Everything", self.randomize_all)
+        scope_menu.addAction("Remote Terminal", self.randomize_remote)
         scope_menu.addAction("Environment", self.randomize_environment)
         scope_menu.addAction("Disturbances", self.randomize_disturbances)
         scope_menu.addAction("Seed only", self.randomize_seed_only)
         self.btn_randomize_scope.setMenu(scope_menu)
         hbox.addWidget(self.btn_randomize_scope)
+
+        self.btn_reset_defaults = QPushButton("Reset Defaults", header)
+        self.btn_reset_defaults.setObjectName("resetButton")
+        self.btn_reset_defaults.setMinimumHeight(30)
+        self.btn_reset_defaults.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.btn_reset_defaults.setToolTip("Reset all panels to their default settings")
+        self.btn_reset_defaults.clicked.connect(self.reset_to_defaults)
+        hbox.addWidget(self.btn_reset_defaults)
 
         self.btn_fullscreen = QPushButton("Full Screen", header)
         self.btn_fullscreen.setObjectName("settingsButton")
@@ -178,11 +187,39 @@ class SettingsDialog(QDialog):
 
     def randomize_all(self) -> None:
         """Randomize configurations across all active panels."""
-        # 1. Randomize Environment
+        # 1. Randomize Remote Terminal (formation, motion, every terminal)
+        self.randomize_remote()
+
+        # 2. Randomize Environment
         self.randomize_environment()
 
-        # 2. Randomize Disturbances
+        # 3. Randomize Disturbances
         self.randomize_disturbances()
+
+    def randomize_remote(self) -> None:
+        """Scope: remote terminal only (emits exactly 1 remoteTerminalChanged)."""
+        try:
+            self.remote_panel.randomize(emit=True)
+        except Exception as e:
+            log.debug("scoped remote randomize skipped: %s", e)
+
+    def reset_to_defaults(self) -> None:
+        """Reset every panel to default settings (each emits once)."""
+        try:
+            from remote_terminal import make_default_scenario
+            self.remote_panel.set_config(make_default_scenario(), emit=True)
+        except Exception as e:
+            log.debug("remote terminal reset skipped: %s", e)
+        try:
+            from environment.config import EnvironmentConfig
+            self.env_panel.set_config(EnvironmentConfig().validate(), emit=True)
+        except Exception as e:
+            log.debug("environment reset skipped: %s", e)
+        try:
+            from disturbance.core.config import DisturbanceConfig
+            self.dist_panel.set_config(DisturbanceConfig().validate(), emit=True)
+        except Exception as e:
+            log.debug("disturbances reset skipped: %s", e)
 
     def randomize_environment(self) -> None:
         """Scope: environment only (atmosphere + starfield + seed)."""

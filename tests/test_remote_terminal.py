@@ -361,6 +361,15 @@ def test_sequence_increments_with_wrap():
     assert term.generator.sequence == 0  # wrapped
 
 
+def test_telemetry_carries_switch_and_config_power():
+    mgr = RemoteTerminalManager(make_default_scenario(1), bounds=(2000, 2000), seed=5)
+    mgr.update(0.1)
+    t = mgr.get_telemetry()["terminals"][0]
+    assert t["power_on"] is True and t["beacon_on"] is True
+    assert t["optical_power_w"] == 0.5
+    assert t["wavelength_nm"] == 1550.0
+
+
 def test_controller_remote_apply_path():
     from gui.application.commands import ApplyConfigCommand
     from gui.application.controller import ApplicationController

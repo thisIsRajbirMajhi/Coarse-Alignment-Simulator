@@ -4,10 +4,17 @@ from __future__ import annotations
 import logging
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PyQt5.QtGui import QBrush, QColor
+from PyQt5.QtWidgets import (
+    QAbstractItemView, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+)
 
 from gui.components import StatusChip
-from gui.presentation.view_state import DashboardState, fmt_px_mrad
+from gui.presentation.view_state import (
+    DashboardState, fmt_deg, fmt_on_off, fmt_range_m, fmt_xy, fmt_px_mrad,
+    short_op_state,
+)
 
 log = logging.getLogger(__name__)
 
@@ -112,6 +119,75 @@ class DashboardView(QWidget):
         frame.setObjectName("dashboardCard")
         frame.setLayout(grid)
         root.addWidget(frame)
+
+        # --- LIVE STATE: first emitting terminal (else first terminal) ---
+        live_box = QGroupBox("LIVE STATE")
+        live_grid = QGridLayout(live_box)
+        live_grid.setColumnStretch(1, 1)
+        self.live_id_label = QLabel("—")
+        self.live_id_label.setStyleSheet("font-size:13px; font-weight:700;")
+        live_grid.addWidget(self.live_id_label, 0, 0, 1, 2)
+        self._live_labels: dict[str, QLabel] = {}
+        live_rows = [
+            ("position", "Position"),
+            ("velocity", "Velocity"),
+            ("los", "LOS"),
+            ("beam", "Beam Direction"),
+            ("pointing", "Pointing Error"),
+            ("range", "Range"),
+            ("diameter", "Beam Diameter"),
+            ("emission", "Emission"),
+        ]
+        for i, (key, title_text) in enumerate(live_rows, start=1):
+            name = QLabel(title_text)
+            name.setStyleSheet("font-size:11px; color:#8F9CAB;")
+            live_grid.addWidget(name, i, 0)
+            val = QLabel("—")
+            val.setStyleSheet("font-size:12px; font-weight:600;")
+            live_grid.addWidget(val, i, 1)
+            self._live_labels[key] = val
+            self._pills[f"Live {title_text}"] = val
+        root.addWidget(live_box)
+
+        # --- TERMINALS: per-terminal config + switch state table ---
+        term_box = QGroupBox("TERMINALS")
+        term_lay = QVBoxLayout(term_box)
+        self.terminals_table = QTableWidget(0, 6)
+        self.terminals_table.setHorizontalHeaderLabels(
+            ["ID", "Power", "Beacon", "State", "Power(W)", "λ (nm)"])
+        self.terminals_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.terminals_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.terminals_table.verticalHeader().setVisible(False)
+        self.terminals_table.horizontalHeader().setStretchLastSection(True)
+        self.terminals_table.setMinimumHeight(80)
+        term_lay.addWidget(self.terminals_table)
+        root.addWidget(term_box)
+        self._last_table: dict[tuple[int, int], str] = {}
+
+        # --- COMMUNICATION STATUS: link/beacon/fleet roll-up ---
+        comm_box = QGroupBox("COMMUNICATION STATUS")
+        comm_grid = QGridLayout(comm_box)
+        comm_grid.setColumnStretch(1, 1)
+        self._comm_labels: dict[str, QLabel] = {}
+        comm_rows = [
+            ("link", "Link"),
+            ("beacon", "Beacon"),
+            ("fleet", "Terminals"),
+            ("target", "Active Target"),
+            ("seq", "Beacon Seq"),
+            ("navtime", "Nav Timestamp"),
+            ("simtime", "Sim Time"),
+        ]
+        for i, (key, title_text) in enumerate(comm_rows):
+            name = QLabel(title_text)
+            name.setStyleSheet("font-size:11px; color:#8F9CAB;")
+            comm_grid.addWidget(name, i, 0)
+            val = QLabel("—")
+            val.setStyleSheet("font-size:12px; font-weight:600;")
+            comm_grid.addWidget(val, i, 1)
+            self._comm_labels[key] = val
+            self._pills[f"Comm {title_text}"] = val
+        root.addWidget(comm_box)
 
         # --- Diagnostics strip (§29.6): one secondary line ---
         self.diag_strip = QLabel("")
@@ -229,3 +305,101 @@ class DashboardView(QWidget):
                 self.diag_strip.setText(diag)
         except Exception as e:
             log.debug("diagnostics strip update skipped: %s", e)
+
+        self._render_live_state(state)
+        self._render_terminals_table(state)
+        self._render_comm_status(state)
+
+    # -- remote-terminal sections ----------------------------------------
+    def _set_cached(self, label: QLabel, key: str, text: str) -> None:
+        if self._last_text.get(key) != text:
+            label.setText(text)
+            self._last_text[key] = text
+
+    def _render_live_state(self, state: DashboardState) -> None:
+        """LIVE STATE card: first emitting terminal, else first terminal."""
+        try:
+            live = state.live_terminal
+            tid = getattr(live, "terminal_id", None) if live is not None else None
+            self._set_cached(self.live_id_label, "live_id", str(tid) if tid else "—")
+            vals = {
+                "position": fmt_xy(getattr(live, "pos_x_m", None), getattr(live, "pos_y_m", None), "m"),
+                "velocity": fmt_xy(getattr(live, "vel_x_mps", None), getattr(live, "vel_y_mps", None), "m/s"),
+                "los": fmt_deg(getattr(live, "los_deg", None)),
+                "beam": fmt_deg(getattr(live, "beam_deg", None)),
+                "pointing": fmt_deg(getattr(live, "pointing_err_deg", None)),
+                "range": fmt_range_m(getattr(live, "range_m", None)),
+                "diameter": f"{live.beam_diameter_m:.2f} m" if live is not None and live.beam_diameter_m is not None else "—",
+                "emission": "ACTIVE" if live is not None and live.emitting else ("INACTIVE" if live is not None and live.emitting is not None else "—"),
+            }
+            for key, text in vals.items():
+                self._set_cached(self._live_labels[key], f"live_{key}", text)
+            emitting = bool(live is not None and live.emitting)
+            color = _GREEN if emitting else None
+            if live is None or live.emitting is None:
+                color = None
+            if self._last_color.get("Live Emission") != color:
+                self._live_labels["emission"].setStyleSheet(
+                    f"font-size:12px; font-weight:700; color:{color[0]};" if color
+                    else "font-size:12px; font-weight:600;")
+                self._last_color["Live Emission"] = color
+        except Exception as e:
+            log.debug("live state update skipped: %s", e)
+
+    def _render_terminals_table(self, state: DashboardState) -> None:
+        """TERMINALS table: one row per terminal (ID/Power/Beacon/State/W/λ)."""
+        try:
+            rows = list(getattr(state, "terminals", None) or ())
+            table = self.terminals_table
+            if table.rowCount() != len(rows):
+                table.setRowCount(len(rows))
+            for r, t in enumerate(rows):
+                cells = [
+                    str(t.terminal_id) if t.terminal_id else "—",
+                    fmt_on_off(t.power_on),
+                    fmt_on_off(t.beacon_on),
+                    short_op_state(t.op_state),
+                    f"{t.power_w:.2f}" if t.power_w is not None else "—",
+                    f"{t.wavelength_nm:.0f}" if t.wavelength_nm is not None else "—",
+                ]
+                for c, text in enumerate(cells):
+                    if self._last_table.get((r, c)) != text:
+                        item = QTableWidgetItem(text)
+                        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                        table.setItem(r, c, item)
+                        self._last_table[(r, c)] = text
+                try:
+                    em_item = table.item(r, 3)
+                    if em_item is not None:
+                        st = (t.op_state or "").lower()
+                        color = _GREEN[0] if st in ("beaconing", "linked") else (
+                            _RED[0] if st == "fault" else None)
+                        em_item.setForeground(QBrush(QColor(color)) if color else QBrush())
+                except Exception:
+                    pass
+            # Drop stale cache keys when the table shrinks.
+            for key in [k for k in self._last_table if k[0] >= len(rows)]:
+                del self._last_table[key]
+        except Exception as e:
+            log.debug("terminals table update skipped: %s", e)
+
+    def _render_comm_status(self, state: DashboardState) -> None:
+        """COMMUNICATION STATUS card: link/beacon/fleet roll-up."""
+        try:
+            live = state.live_terminal
+            seq = getattr(live, "beacon_seq", None) if live is not None else None
+            nav_ms = getattr(live, "nav_timestamp_ms", None) if live is not None else None
+            vals = {
+                "link": str(state.link_state),
+                "beacon": str(state.beacon_state),
+                "fleet": f"{int(state.emitting_count)}/{int(state.terminal_count)} emitting"
+                         if state.terminal_count else "—",
+                "target": str(state.target_id),
+                "seq": f"#{int(seq)}" if seq is not None else "—",
+                "navtime": f"{int(nav_ms)} ms" if nav_ms is not None else "—",
+                "simtime": f"{float(state.sim_time_s):.1f} s",
+            }
+            for key, text in vals.items():
+                self._set_cached(self._comm_labels[key], f"comm_{key}", text)
+        except Exception as e:
+            log.debug("comm status update skipped: %s", e)

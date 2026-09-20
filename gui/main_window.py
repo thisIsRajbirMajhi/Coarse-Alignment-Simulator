@@ -13,7 +13,7 @@ from gui.application.controller import ApplicationController
 from gui.application.session import SimulationSession
 from gui.application.state import LifecycleState
 from gui.application.worker import SimWorker
-from gui.theme import apply_theme, current_theme, toggle_theme
+from gui.theme import apply_theme
 from gui.core.window_manager import WindowManager
 from gui.presentation.simulation_presenter import SimulationPresenter
 from gui.styles import TICK_MS
@@ -79,8 +79,6 @@ class MainWindow(QMainWindow):
         self.controls.btn_dashboard.clicked.connect(lambda: self.windows.show_dashboard())
         self.controls.btn_fullscreen.clicked.connect(self.toggle_fullscreen)
         self.controls.btn_settings.clicked.connect(lambda: self.windows.show_settings(self.session))
-        self.controls.btn_theme.clicked.connect(self._on_theme_toggle)
-        self._refresh_theme_button()
         # Queued: controller.step() executes in the worker thread, so its
         # signals must hop back to the GUI thread (AutoConnection would
         # deliver directly in the worker thread since the controller object
@@ -116,26 +114,6 @@ class MainWindow(QMainWindow):
     def dashboard(self):
         """The Live Dashboard view inside its own separate window."""
         return self.windows.ensure_dashboard().view
-
-    # -- theme ----------------------------------------------------------
-    def _refresh_theme_button(self) -> None:
-        try:
-            dark = current_theme() == "dark"
-            self.controls.btn_theme.setText("◑ Light" if dark else "◐ Dark")
-        except Exception as e:
-            log.debug("theme button refresh skipped: %s", e)
-
-    def _on_theme_toggle(self) -> None:
-        try:
-            toggle_theme()
-            apply_theme(self)
-            if getattr(self.windows, "_settings", None) is not None:
-                apply_theme(self.windows._settings)
-            if getattr(self.windows, "_dashboard_window", None) is not None:
-                apply_theme(self.windows._dashboard_window)
-            self._refresh_theme_button()
-        except Exception as e:
-            log.debug("theme toggle skipped: %s", e)
 
     # -- fullscreen -----------------------------------------------------
     def toggle_fullscreen(self) -> None:

@@ -40,6 +40,74 @@ def fmt_count(v: int | None) -> str:
     return "—" if v is None else str(int(v))
 
 
+def fmt_xy(x: float | None, y: float | None, unit: str, decimals: int = 1) -> str:
+    if x is None or y is None:
+        return "—"
+    return f"({x:.{decimals}f}, {y:.{decimals}f}) {unit}"
+
+
+def fmt_deg(v: float | None) -> str:
+    return "—" if v is None else f"{v:.1f}°"
+
+
+def fmt_range_m(v: float | None) -> str:
+    if v is None:
+        return "—"
+    if abs(v) >= 1000.0:
+        return f"{v / 1000.0:.2f} km"
+    return f"{v:.1f} m"
+
+
+def fmt_on_off(v: bool | None) -> str:
+    if v is None:
+        return "—"
+    return "ON" if v else "OFF"
+
+
+_OP_STATE_SHORT = {
+    "beaconing": "BEACON",
+    "linked": "LINKED",
+    "standby": "STANDBY",
+    "off": "OFF",
+    "fault": "FAULT",
+}
+
+
+def short_op_state(v: str | None) -> str:
+    """Compact operational-state display for tables ("BEACONING" -> "BEACON")."""
+    if v is None:
+        return "—"
+    return _OP_STATE_SHORT.get(str(v).lower(), str(v).upper())
+
+
+@dataclass
+class TerminalLiveState:
+    """One terminal's live snapshot for the dashboard (all fields optional).
+
+    ``None`` renders as "—". Lists in DashboardState are plain dicts so the
+    presentation layer stays Qt-free and trivially testable.
+    """
+
+    terminal_id: str | None = None
+    power_on: bool | None = None
+    beacon_on: bool | None = None
+    op_state: str | None = None
+    power_w: float | None = None
+    wavelength_nm: float | None = None
+    pos_x_m: float | None = None
+    pos_y_m: float | None = None
+    vel_x_mps: float | None = None
+    vel_y_mps: float | None = None
+    los_deg: float | None = None
+    beam_deg: float | None = None
+    pointing_err_deg: float | None = None
+    range_m: float | None = None
+    beam_diameter_m: float | None = None
+    emitting: bool | None = None
+    beacon_seq: int | None = None
+    nav_timestamp_ms: int | None = None
+
+
 @dataclass
 class DashboardState:
     # Simulator runtime & performance
@@ -87,3 +155,10 @@ class DashboardState:
     link_state: str = "—"
     beacon_state: str = "—"
     frame_id: int = 0
+
+    # Remote-terminal live sections (dashboard LIVE STATE / TERMINALS / COMM STATUS).
+    terminal_count: int = 0
+    emitting_count: int = 0
+    sim_time_s: float = 0.0
+    live_terminal: TerminalLiveState | None = None
+    terminals: tuple = ()

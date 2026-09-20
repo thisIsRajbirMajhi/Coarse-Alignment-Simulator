@@ -132,6 +132,8 @@ class RemoteTerminal:
         return {
             "id": r.terminal_id,
             "operational_state": r.operational_state.value,
+            "power_on": bool(self.config.power_enabled),
+            "beacon_on": bool(self.config.beacon_enabled),
             "emitting": bool(r.effective_emission_enabled),
             "position_m": r.position_m.as_tuple(),
             "velocity_mps": r.velocity_mps.as_tuple(),
@@ -142,6 +144,7 @@ class RemoteTerminal:
             "beam_width_rad": r.beam_width_rad,
             "beam_diameter_m": r.beam_diameter_m,
             "instantaneous_power_w": r.instantaneous_power_w,
+            "optical_power_w": float(self.config.optical_power_w),
             "wavelength_nm": self.config.wavelength_nm,
             "modulation": self.config.modulation.value,
             "beacon_sequence": r.beacon_sequence,

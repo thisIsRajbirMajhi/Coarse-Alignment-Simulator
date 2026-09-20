@@ -16,6 +16,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPushButton,
     QSpinBox,
     QVBoxLayout,
 )
@@ -24,6 +25,7 @@ from gui.panels.base import BaseConfigPanel
 from remote_terminal.config import (
     FIELD_METADATA,
     FORMATION_SHAPE_LABELS,
+    MAX_TERMINALS,
     MODULATION_LABELS,
     MOTION_PROFILE_LABELS,
     OPERATIONAL_STATE_LABELS,
@@ -39,6 +41,9 @@ from remote_terminal.config import (
 )
 
 log = logging.getLogger(__name__)
+
+# Wavelength choices for randomization (supported near-infrared FSOC bands).
+_RANDOM_WAVELENGTHS = (850.0, 980.0, 1064.0, 1310.0, 1550.0)
 
 
 def _meta(key: str) -> dict:
@@ -80,7 +85,16 @@ class RemoteTerminalPanel(BaseConfigPanel):
 
         title = QLabel("REMOTE TERMINAL SCENARIO")
         title.setStyleSheet("font-size:15px; font-weight:700;")
-        root.addWidget(title)
+        header_row = QHBoxLayout()
+        header_row.addWidget(title)
+        header_row.addStretch(1)
+        self.btn_randomize_terminals = QPushButton("🎲 Randomize Terminals")
+        self.btn_randomize_terminals.setMinimumHeight(28)
+        self.btn_randomize_terminals.setToolTip(
+            "Randomize formation, motion and every terminal's parameters")
+        self.btn_randomize_terminals.clicked.connect(lambda: self.randomize(emit=True))
+        header_row.addWidget(self.btn_randomize_terminals)
+        root.addLayout(header_row)
         desc = QLabel("Formation, motion, per-terminal optical setup and live telemetry")
         desc.setStyleSheet("color:#8F9CAB; font-size:11px;")
         root.addWidget(desc)
@@ -281,6 +295,43 @@ class RemoteTerminalPanel(BaseConfigPanel):
             self._updating = False
         if emit:
             self._emit_config()
+
+    def randomize(self, emit: bool = True) -> RemoteScenarioConfig:
+        """Randomize formation, motion and every terminal's parameters.
+
+        Returns the validated scenario. Shape/count stay consistent (SINGLE
+        only with count 1) and IDs stay unique.
+        """
+        import random as _random
+
+        count = _random.randint(1, MAX_TERMINALS)
+        shapes = [s for s in FormationShape if s != FormationShape.SINGLE]
+        shape = FormationShape.SINGLE if count == 1 else _random.choice(shapes)
+        formation = RemoteFormationConfig(
+            terminal_count=count,
+            formation_shape=shape,
+            motion_profile=_random.choice(list(MotionProfile)),
+            terminal_spacing_m=round(_random.uniform(10.0, 500.0), 1),
+            speed_mps=round(_random.uniform(0.0, 100.0), 1),
+            heading_deg=round(_random.uniform(-180.0, 180.0), 1),
+        )
+        terminals = [
+            RemoteTerminalConfig(
+                terminal_id=f"RT-{i + 1:03d}",
+                power_enabled=_random.random() < 0.8,
+                beacon_enabled=_random.random() < 0.8,
+                operational_state=_random.choice(list(OperationalState)),
+                optical_power_w=round(_random.uniform(0.1, 2.0), 2),
+                wavelength_nm=float(_random.choice(_RANDOM_WAVELENGTHS)),
+                modulation=_random.choice(list(ModulationType)),
+                spot_size_mrad=round(_random.uniform(0.2, 5.0), 2),
+            )
+            for i in range(count)
+        ]
+        cfg = RemoteScenarioConfig(formation=formation, terminals=terminals).validate()
+        self._selected = 0
+        self.set_config(cfg, emit=emit)
+        return cfg
 
     def update_telemetry(self, telemetry: dict) -> None:
         """Render read-only runtime values (§56); never raises."""

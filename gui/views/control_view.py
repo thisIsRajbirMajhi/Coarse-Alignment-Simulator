@@ -39,10 +39,7 @@ class ControlView(QWidget):
         self.btn_dashboard.setObjectName("settingsButton")
         self.btn_fullscreen = QPushButton("Full Screen")
         self.btn_fullscreen.setObjectName("settingsButton")
-        self.btn_theme = QPushButton("◐ Dark")
-        self.btn_theme.setObjectName("settingsButton")
-        self.btn_theme.setToolTip("Toggle dark console theme (persists)")
-        for b in (self.btn_start, self.btn_stop, self.btn_pause, self.btn_reset, self.btn_dashboard, self.btn_fullscreen, self.btn_theme, self.btn_settings):
+        for b in (self.btn_start, self.btn_stop, self.btn_pause, self.btn_reset, self.btn_dashboard, self.btn_fullscreen, self.btn_settings):
             layout.addWidget(b)
 
     def apply_button_states(self, states: dict) -> None:

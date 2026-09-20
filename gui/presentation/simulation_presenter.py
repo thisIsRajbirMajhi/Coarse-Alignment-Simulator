@@ -5,7 +5,37 @@ import logging
 
 log = logging.getLogger(__name__)
 
-from gui.presentation.view_state import DashboardState
+from gui.presentation.view_state import DashboardState, TerminalLiveState
+
+
+def _terminal_state(t: dict) -> TerminalLiveState:
+    """Best-effort conversion of one manager telemetry dict (never raises)."""
+    try:
+        pos = t.get("position_m") or (None, None)
+        vel = t.get("velocity_mps") or (None, None)
+        nav = t.get("beacon_navigation") or {}
+        return TerminalLiveState(
+            terminal_id=str(t.get("id")) if t.get("id") is not None else None,
+            power_on=bool(t["power_on"]) if "power_on" in t else None,
+            beacon_on=bool(t["beacon_on"]) if "beacon_on" in t else None,
+            op_state=str(t.get("operational_state")) if t.get("operational_state") else None,
+            power_w=float(t["optical_power_w"]) if t.get("optical_power_w") is not None else None,
+            wavelength_nm=float(t["wavelength_nm"]) if t.get("wavelength_nm") is not None else None,
+            pos_x_m=float(pos[0]) if pos[0] is not None else None,
+            pos_y_m=float(pos[1]) if pos[1] is not None else None,
+            vel_x_mps=float(vel[0]) if vel[0] is not None else None,
+            vel_y_mps=float(vel[1]) if vel[1] is not None else None,
+            los_deg=float(t["los_angle_deg"]) if t.get("los_angle_deg") is not None else None,
+            beam_deg=float(t["beam_angle_deg"]) if t.get("beam_angle_deg") is not None else None,
+            pointing_err_deg=float(t["pointing_error_deg"]) if t.get("pointing_error_deg") is not None else None,
+            range_m=float(t["range_m"]) if t.get("range_m") is not None else None,
+            beam_diameter_m=float(t["beam_diameter_m"]) if t.get("beam_diameter_m") is not None else None,
+            emitting=bool(t["emitting"]) if "emitting" in t else None,
+            beacon_seq=int(t["beacon_sequence"]) if t.get("beacon_sequence") is not None else None,
+            nav_timestamp_ms=int(nav["timestamp_ms"]) if nav.get("timestamp_ms") is not None else None,
+        )
+    except (AttributeError, TypeError, ValueError, IndexError, KeyError):
+        return TerminalLiveState()
 
 
 class SimulationPresenter:
@@ -73,17 +103,31 @@ class SimulationPresenter:
         # Diagnostics strip fields (best-effort; stay "—" when unknown).
         source_id, target_id, link_state, beacon_state = "—", "—", "—", "—"
         frame_id = 0
+        terminal_count = 0
+        emitting_count = 0
+        sim_time_s = 0.0
+        live_terminal: TerminalLiveState | None = None
+        terminal_rows: tuple = ()
         try:
             if snapshot is not None:
                 frame_id = int(getattr(snapshot, "frame_id", 0) or 0)
             terms = getattr(snapshot, "terminals", None) if snapshot else None
             if isinstance(terms, dict):
                 term_list = terms.get("terminals", []) or []
+                terminal_count = int(terms.get("terminal_count", len(term_list)) or 0)
+                try:
+                    sim_time_s = float(terms.get("simulation_time_s", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    sim_time_s = 0.0
+                rows = [_terminal_state(t) for t in term_list if isinstance(t, dict)]
+                terminal_rows = tuple(rows)
                 emitting = [t for t in term_list
                             if isinstance(t, dict) and t.get("emitting")]
+                emitting_count = len(emitting)
                 if emitting:
                     beacon_state = "EMITTING"
                     target_id = str(emitting[0].get("id", "—"))
+                    live_terminal = _terminal_state(emitting[0])
                     states = {str(t.get("operational_state", "")) for t in emitting}
                     if "linked" in states:
                         link_state = "LINKED"
@@ -93,6 +137,7 @@ class SimulationPresenter:
                         link_state = "EMITTING"
                 elif term_list and isinstance(term_list[0], dict):
                     target_id = str(term_list[0].get("id", "—"))
+                    live_terminal = _terminal_state(term_list[0])
                     link_state = str(term_list[0].get("operational_state", "—")).upper()
         except (AttributeError, TypeError, ValueError):
             pass
@@ -135,4 +180,9 @@ class SimulationPresenter:
             link_state=link_state,
             beacon_state=beacon_state,
             frame_id=frame_id,
+            terminal_count=terminal_count,
+            emitting_count=emitting_count,
+            sim_time_s=sim_time_s,
+            live_terminal=live_terminal,
+            terminals=terminal_rows,
         )

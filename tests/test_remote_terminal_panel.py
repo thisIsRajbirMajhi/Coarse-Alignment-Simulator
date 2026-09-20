@@ -197,3 +197,124 @@ def test_presenter_reports_remote_diagnostics():
     assert state.target_id == "RT-001"
     assert state.beacon_state == "EMITTING"
     assert state.link_state in ("BEACONING", "LINKED", "EMITTING")
+
+
+def test_panel_randomize_terminals_button(qapp):
+    from gui.panels.remote_terminal_panel import RemoteTerminalPanel
+    from remote_terminal.config import FormationShape, RemoteScenarioConfig
+
+    panel = RemoteTerminalPanel()
+    emitted = []
+    panel.configChanged.connect(emitted.append)
+    panel.btn_randomize_terminals.click()
+    assert len(emitted) == 1  # exactly one validated config emitted
+    cfg = emitted[0]
+    assert isinstance(cfg, RemoteScenarioConfig)
+    cfg.validate()  # valid by construction
+    assert 1 <= cfg.formation.terminal_count <= 8
+    if cfg.formation.terminal_count == 1:
+        assert cfg.formation.formation_shape == FormationShape.SINGLE
+    else:
+        assert cfg.formation.formation_shape != FormationShape.SINGLE
+    assert 0.0 <= cfg.formation.speed_mps <= 100.0
+    assert -180.0 <= cfg.formation.heading_deg <= 180.0
+    assert 10.0 <= cfg.formation.terminal_spacing_m <= 500.0
+    ids = [t.terminal_id for t in cfg.terminals]
+    assert len(set(ids)) == len(ids)  # unique
+    for t in cfg.terminals:
+        assert t.optical_power_w >= 0.1
+        assert t.wavelength_nm in (850.0, 980.0, 1064.0, 1310.0, 1550.0)
+        assert t.spot_size_mrad > 0
+    # Widgets reflect the randomized config.
+    assert panel.spin_count.value() == cfg.formation.terminal_count
+    panel.close()
+
+
+def test_panel_randomize_method_quiet(qapp):
+    from gui.panels.remote_terminal_panel import RemoteTerminalPanel
+
+    panel = RemoteTerminalPanel()
+    emitted = []
+    panel.configChanged.connect(emitted.append)
+    cfg = panel.randomize(emit=False)
+    cfg.validate()
+    assert emitted == []
+    assert panel.spin_count.value() == cfg.formation.terminal_count
+    panel.close()
+
+
+def _make_deck(qapp):
+    from gui.application.session import SimulationSession
+    from gui.views.settings_dialog import SettingsDialog
+    session = SimulationSession()
+    session.ensure_built()
+    return session, SettingsDialog(session)
+
+
+def test_dialog_randomize_all_covers_remote(qapp):
+    session, dlg = _make_deck(qapp)
+    try:
+        remote, env, dist = [], [], []
+        dlg.remoteTerminalChanged.connect(remote.append)
+        dlg.environmentChanged.connect(env.append)
+        dlg.disturbancesChanged.connect(dist.append)
+        dlg.btn_randomize.click()
+        assert len(remote) == 1
+        assert len(env) == 1
+        assert len(dist) == 1
+        remote[0].validate()
+    finally:
+        dlg.close()
+
+
+def test_dialog_scope_menu_randomizes_remote_only(qapp):
+    session, dlg = _make_deck(qapp)
+    try:
+        remote, env, dist = [], [], []
+        dlg.remoteTerminalChanged.connect(remote.append)
+        dlg.environmentChanged.connect(env.append)
+        dlg.disturbancesChanged.connect(dist.append)
+        actions = {a.text(): a for a in dlg.btn_randomize_scope.menu().actions()}
+        assert "Remote Terminal" in actions
+        actions["Remote Terminal"].trigger()
+        assert len(remote) == 1
+        assert env == [] and dist == []
+    finally:
+        dlg.close()
+
+
+def test_dialog_reset_defaults_restores_all_panels(qapp):
+    session, dlg = _make_deck(qapp)
+    try:
+        # Dirty every panel first.
+        _set_shape(dlg.remote_panel, "line")
+        dlg.remote_panel.spin_count.setValue(3)
+        dlg.env_panel.slider_seed.setValue(123456)
+        dlg.dist_panel.slider_turbulence.setValue(5)
+        remote, env, dist = [], [], []
+        dlg.remoteTerminalChanged.connect(remote.append)
+        dlg.environmentChanged.connect(env.append)
+        dlg.disturbancesChanged.connect(dist.append)
+        dlg.btn_reset_defaults.click()
+        assert len(remote) == 1 and len(env) == 1 and len(dist) == 1
+        assert dlg.remote_panel.spin_count.value() == 1
+        assert dlg.remote_panel.combo_shape.currentData() == "single"
+        assert dlg.remote_panel.collect_config().formation.terminal_count == 1
+        assert dlg.env_panel.slider_seed.value() == 42
+        assert dlg.dist_panel.slider_turbulence.value() == 0
+    finally:
+        dlg.close()
+
+
+def test_no_theme_toggle_button(qapp):
+    from PyQt5.QtWidgets import QApplication
+    from gui.main_window import MainWindow
+    import gui.theme as theme_mod
+
+    assert not hasattr(theme_mod, "toggle_theme")
+    assert not hasattr(theme_mod, "current_theme")
+    w = MainWindow()
+    try:
+        assert not hasattr(w.controls, "btn_theme")
+    finally:
+        w.close()

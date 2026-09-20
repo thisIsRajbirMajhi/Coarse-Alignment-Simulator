@@ -78,6 +78,51 @@ def test_dashboard_renders_known_state(window):
     assert pills["Jitter (ms)"] == "12"
 
 
+def test_dashboard_live_terminal_sections(window):
+    from remote_terminal import FormationShape, make_default_scenario
+    cfg = make_default_scenario(2)
+    cfg.formation.formation_shape = FormationShape.LINE
+    cfg.validate()
+    window.session.apply_remote_config(cfg)
+    window.controller.start()
+    for _ in range(5):
+        window.controller.step()
+    snap = window.controller._last_snapshot
+    assert snap is not None and snap.terminals is not None
+    state = window.presenter.update(snap, window.session, window.controller)
+    assert state.terminal_count == 2
+    assert state.emitting_count == 2
+    assert state.live_terminal is not None
+    assert state.live_terminal.terminal_id == "RT-001"
+    assert len(state.terminals) == 2
+    window.dashboard.render(state)
+    dash = window.dashboard
+    assert dash.live_id_label.text() == "RT-001"
+    assert "m" in dash._live_labels["position"].text()
+    assert "m/s" in dash._live_labels["velocity"].text()
+    assert dash._live_labels["emission"].text() == "ACTIVE"
+    assert dash.terminals_table.rowCount() == 2
+    row0 = [dash.terminals_table.item(0, c).text() for c in range(6)]
+    assert row0[0] == "RT-001" and row0[1] == "ON" and row0[2] == "ON"
+    assert row0[3] == "BEACON" and row0[4] == "0.50" and row0[5] == "1550"
+    assert dash._comm_labels["fleet"].text() == "2/2 emitting"
+    assert dash._comm_labels["target"].text() == "RT-001"
+    assert dash._comm_labels["link"].text() in ("BEACONING", "LINKED", "EMITTING")
+    window.controller.stop()
+
+
+def test_dashboard_terminal_sections_empty_when_stopped(window):
+    state = window.presenter.update(None, window.session, window.controller)
+    assert state.live_terminal is None
+    assert state.terminals == ()
+    window.dashboard.render(state)
+    dash = window.dashboard
+    assert dash.live_id_label.text() == "—"
+    assert dash._live_labels["position"].text() == "—"
+    assert dash.terminals_table.rowCount() == 0
+    assert dash._comm_labels["fleet"].text() == "—"
+
+
 def test_dashboard_renders_tracking_metrics(window):
     from gui.presentation.view_state import DashboardState
     st = DashboardState(
