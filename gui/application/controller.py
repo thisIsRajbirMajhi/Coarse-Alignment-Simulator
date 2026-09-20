@@ -119,8 +119,6 @@ class ApplicationController(QObject):
                 self.session.apply_environment_config(cmd.config)
             elif cmd.section == "disturbances":
                 self.session.apply_disturbance_config(cmd.config)
-            elif cmd.section in ("terminal", "remote_terminal"):
-                self.session.apply_terminal_config(cmd.config)
             else:
                 raise ValueError(f"unknown config section: {cmd.section}")
         except Exception as e:

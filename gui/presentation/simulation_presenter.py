@@ -76,20 +76,6 @@ class SimulationPresenter:
         try:
             if snapshot is not None:
                 frame_id = int(getattr(snapshot, "frame_id", 0) or 0)
-            terms = getattr(snapshot, "terminals", None) if snapshot else None
-            if isinstance(terms, dict):
-                link_state = str(terms.get("best_link", "—"))
-                try:
-                    emitting = int(terms.get("emitting_count", 0) or 0)
-                    beacon_state = "EMITTING" if emitting > 0 else "—"
-                except (TypeError, ValueError):
-                    pass
-                try:
-                    term_list = terms.get("terminals", []) or []
-                    if term_list and isinstance(term_list[0], dict):
-                        target_id = str(term_list[0].get("id", "—"))
-                except (TypeError, ValueError, AttributeError, IndexError):
-                    pass
         except Exception:
             pass
 

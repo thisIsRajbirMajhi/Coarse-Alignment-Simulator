@@ -54,7 +54,6 @@ class WindowManager:
         from gui.views.settings_dialog import SettingsDialog
         if self._settings is None:
             self._settings = SettingsDialog(session, self._parent)
-            self._settings.terminalChanged.connect(self._parent._on_terminal_config)
             self._settings.environmentChanged.connect(self._parent._on_environment_config)
             self._settings.disturbancesChanged.connect(self._parent._on_disturbances_config)
         try:

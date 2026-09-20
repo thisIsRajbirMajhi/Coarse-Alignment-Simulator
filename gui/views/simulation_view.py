@@ -14,7 +14,7 @@ log = logging.getLogger(__name__)
 
 
 class SimulationView(QWidget):
-    """Single unified simulation viewport showing the world scene with remote optical beacons."""
+    """Single unified simulation viewport showing the world scene."""
 
     def __init__(self, parent=None):
         super().__init__(parent)

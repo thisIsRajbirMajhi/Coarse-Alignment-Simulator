@@ -225,10 +225,7 @@ class MainWindow(QMainWindow):
             if getattr(self.windows, "_settings", None) is not None:
                 if self.windows._settings.isVisible():
                     try:
-                        telemetry_packet = {}
-                        if getattr(snap, "terminals", None) is not None:
-                            telemetry_packet["terminals"] = snap.terminals
-                        self.windows._settings.update_telemetry(telemetry_packet)
+                        self.windows._settings.update_telemetry({})
                     except Exception as e:
                         log.debug("dialog telemetry update skipped: %s", e)
 
@@ -345,10 +342,6 @@ class MainWindow(QMainWindow):
     def _on_disturbances_config(self, cfg) -> None:
         self._schedule_config("disturbances", lambda: self.controller.apply_config(
             ApplyConfigCommand(section="disturbances", config=cfg)))
-
-    def _on_terminal_config(self, cfg) -> None:
-        self._schedule_config("terminal", lambda: self.controller.apply_config(
-            ApplyConfigCommand(section="terminal", config=cfg)))
 
     # -- compat adapters --------------------------------------------
     def closeEvent(self, event) -> None:  # noqa: N802

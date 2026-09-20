@@ -14,10 +14,9 @@ log = logging.getLogger(__name__)
 class FrameSnapshot:
     """Immutable per-step output for presenters/views."""
     frame_id: int
-    world_frame: Any  # np.ndarray BGR, full scene with beacons & disturbances
+    world_frame: Any  # np.ndarray BGR, full scene with disturbances
     world_size: tuple[int, int]
     dt: float = 1 / 30
-    terminals: dict | None = None
 
     @property
     def fov_frame(self) -> Any:
@@ -25,20 +24,18 @@ class FrameSnapshot:
 
 
 class SimulationSession:
-    """Owns Scene/Disturbance/Scenario.
+    """Owns Scene/Disturbance.
 
     GUI talks to this; widgets never touch sim objects directly.
     """
 
-    def __init__(self, env_config=None, disturbance_config=None, scenario_config=None, seed: int = 42, **kwargs):
+    def __init__(self, env_config=None, disturbance_config=None, seed: int = 42, **kwargs):
         from disturbance.core.config import DisturbanceConfig
         from environment.config import EnvironmentConfig
-        from remote_terminal import RemoteTerminalScenarioConfig
 
         self.seed = int(seed)
         self.env_config = (env_config or EnvironmentConfig()).validate()
         self.disturbance_config = (disturbance_config or DisturbanceConfig()).validate()
-        self.scenario_config = (scenario_config or kwargs.get("terminal_config") or RemoteTerminalScenarioConfig()).validate()
         self._built = False
         self._frame_id = 0
         self._last_dt = 1 / 30
@@ -47,7 +44,6 @@ class SimulationSession:
     def build(self) -> None:
         from common.rng import get_rng, seed_global
         from environment.scene import Scene
-        from remote_terminal import RemoteTerminalScenario
 
         cfg = self.env_config.validate()
         seed_global(int(cfg.seed) if cfg.seed is not None else self.seed)
@@ -60,11 +56,7 @@ class SimulationSession:
         except Exception as e:
             log.debug("disturbance reset skipped: %s", e)
 
-        scene_w, scene_h = int(cfg.world_width), int(cfg.world_height)
-
         self.scene = Scene(config=cfg)
-        self.terminal_scenario = RemoteTerminalScenario(self.scenario_config, bounds=(scene_w, scene_h), rng=self.rng)
-
         self._disturbance_pipeline = None
         self._built = True
         self._frame_id = 0
@@ -111,11 +103,6 @@ class SimulationSession:
         self.ensure_built()
         self.disturbance_config = config.validate()
 
-    def apply_terminal_config(self, config) -> None:
-        self.ensure_built()
-        self.scenario_config = config.validate()
-        self.terminal_scenario.apply_config(self.scenario_config)
-
     # -- stepping ------------------------------------------------------
     def _disturbance_pipeline_for(self, dt: float):
         from disturbance.core import DisturbanceContext, DisturbancePipeline
@@ -134,23 +121,10 @@ class SimulationSession:
         dt_eff = float(np.clip(dt, 1e-4, 0.1))
         self._last_dt = dt_eff
         self.scene.update(dt_eff)
-        if getattr(self, "terminal_scenario", None) is not None:
-            try:
-                self.terminal_scenario.update(dt_eff)
-            except Exception as e:
-                log.debug("terminal scenario update skipped: %s", e)
 
         pipe = self._disturbance_pipeline_for(dt_eff)
 
         world_frame = self.scene.get_frame()
-
-        if getattr(self, "terminal_scenario", None) is not None:
-            try:
-                world_frame = self.terminal_scenario.render_beacons(
-                    world_frame, pipeline=pipe, rng=self.rng, dt=dt_eff,
-                )
-            except Exception as e:
-                log.debug("world beacon render skipped: %s", e)
 
         try:
             vig = float(getattr(self.env_config, "vignetting_pct", 0)) / 100.0
@@ -169,6 +143,5 @@ class SimulationSession:
             world_frame=world_frame,
             world_size=(int(self.env_config.world_width), int(self.env_config.world_height)),
             dt=dt_eff,
-            terminals=self.terminal_scenario.get_telemetry() if getattr(self, "terminal_scenario", None) is not None else None,
         )
 

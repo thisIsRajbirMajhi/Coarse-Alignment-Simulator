@@ -1,6 +1,6 @@
 """Canonical disturbance ordering per DisturbanceModel.txt §13.
 
-Remote Terminal → Ideal Beam → Propagation Channel → Received Signal →
+Optical source → Ideal Beam → Propagation Channel → Received Signal →
 Local Terminal/Camera (+ Platform Motion) → Image Formation →
 Sensor Effects → Observed Frame → Detection/Tracking.
 """
@@ -39,7 +39,7 @@ class DisturbancePipeline:
         self.optical.config = self.context.config
         self.sensor.config = self.context.config
 
-    # ---- Beam-state stage: Remote Terminal → Propagation Channel ----
+    # ---- Beam-state stage: Optical source → Propagation Channel ----
     def propagate_beam(self, beam, distance_m: float | None = None, dt: float | None = None):
         """Ideal OpticalBeamState → ReceivedOpticalState (deterministic)."""
         self._sync_config()

@@ -2,7 +2,7 @@
 
 Authoritative data flow per DisturbanceModel.txt::
 
-    Remote Terminal → Ideal Optical Beam → Propagation Channel →
+    Optical source → Ideal Optical Beam → Propagation Channel →
     Received Optical Signal → Local Terminal/PTZ Camera → Image Formation →
     Sensor Disturbance → Observed Frame → Detection/Centroid → Tracking
 
@@ -116,7 +116,7 @@ class ChannelState:
 
 @dataclass
 class OpticalBeamState:
-    """Ideal beam emitted by the Remote Terminal (before the channel)."""
+    """Ideal beam emitted by the optical source (before the channel)."""
 
     emittedIntensity: float = 1.0  # 0..~1.5 incl. temporal modulation
     position: tuple[float, float] = (0.0, 0.0)  # world px (geometric)

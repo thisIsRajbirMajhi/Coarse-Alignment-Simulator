@@ -137,8 +137,6 @@ def test_dashboard_live_metrics_accumulate(window):
 def test_config_panels_produce_validated_configs(window):
     from gui.views.settings_dialog import SettingsDialog
     dlg = SettingsDialog(window.session, window)
-    cfg_term = dlg.terminal_panel.collect_config()
-    assert cfg_term.terminal_count >= 1
     cfg_env = dlg.env_panel.collect_config()
     assert cfg_env.world_width >= 2000
     cfg_dist = dlg.dist_panel.collect_config()
@@ -178,7 +176,7 @@ def test_headless_unaffected():
 
 def test_no_sim_imports_qt():
     import subprocess, sys
-    code = "import simulation.headless, disturbance, remote_terminal; print('ok')"
+    code = "import simulation.headless, disturbance; print('ok')"
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert "PyQt" not in r.stdout + r.stderr or "ok" in r.stdout
 
@@ -281,7 +279,7 @@ def test_settings_deck_matches_console_chrome(window):
     assert dlg.windowTitle() == "Settings"
     assert dlg.btn_close is not None and dlg.btn_close.text() == "Close"
     tabs = dlg.findChild(QTabWidget)
-    assert tabs is not None and tabs.count() == 3  # RemoteTerminal/Environment/Disturbances
+    assert tabs is not None and tabs.count() == 2  # Environment/Disturbances
     dlg.close()
 
 
