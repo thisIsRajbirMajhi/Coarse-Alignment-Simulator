@@ -1,290 +1,197 @@
-# local_terminal/tracker.py - Image-plane track manager (Plan.md Stages 1-2).
+# local_terminal/tracker.py - V2 2D constant-velocity Kalman tracker (Plan V2 §12).
 #
-# Associates per-frame detections into a track that sources the PID error —
-# closing the control loop through the disturbed image instead of ground truth.
-# Stage 2 adds the α-β motion model (§7.3): association gates on the prediction,
-# coasting drives toward the predicted position, uncertainty grows to the
-# ±30 px search cap. Validation (§5.3-5.5) arrives in Stage 3; until then the
-# brightest candidate seeds the track. Deterministic: no RNG.
+# State x = [x, y, vx, vy]^T in FOV pixels. Deterministic, numpy-based.
+# R adapts to SNR (§12.3); Mahalanobis gate drives association (§11.4).
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from local_terminal.detector import Detection
-from local_terminal.motion import AlphaBetaFilter2D
+import numpy as np
 
 
 @dataclass
-class TrackerConfig:
-    """Association and loss rules (Stage 1 subset of Plan.md §7).
+class KalmanConfig:
+    process_noise_q: float = 8.0
+    measurement_noise_r_base: float = 4.0
+    r_scale_low_snr: float = 6.0
+    r_scale_high_snr: float = 0.5
+    coast_growth_px_per_frame: float = 2.0
+    coast_margin_cap_px: float = 30.0
 
-    loss_after_misses spans a full beacon period (336 ms): OOK blink plus
-    the header's long zero-runs (version/type/length bytes) hide the spot
-    for several consecutive camera frames on real frames. Counting every
-    dark frame as a tracking miss would flap lock on clean air. Chip-aware
-    miss gating (decode knows the chip phase) tightens this in Stage 3.
-    """
-
-    associate_gate_px: float = 60.0  # max jump from last centroid to associate
-    loss_after_misses: int = 10      # ≈333 ms ≈ one 336-chip beacon period
-    max_no_detection_time_s: float = 0.333  # time-based loss threshold (Fixes.md §5.5)
-
-    def validate(self) -> "TrackerConfig":
-        self.associate_gate_px = float(max(1.0, self.associate_gate_px))
-        self.loss_after_misses = int(max(1, self.loss_after_misses))
-        self.max_no_detection_time_s = float(max(0.05, self.max_no_detection_time_s))
+    def validate(self) -> "KalmanConfig":
+        self.process_noise_q = float(max(1e-6, self.process_noise_q))
+        self.measurement_noise_r_base = float(max(1e-6, self.measurement_noise_r_base))
+        self.r_scale_low_snr = float(max(1.0, self.r_scale_low_snr))
+        self.r_scale_high_snr = float(min(1.0, max(1e-3, self.r_scale_high_snr)))
+        self.coast_growth_px_per_frame = float(max(0.0, self.coast_growth_px_per_frame))
+        self.coast_margin_cap_px = float(max(1.0, self.coast_margin_cap_px))
         return self
 
 
-@dataclass
-class TrackSnapshot:
-    """Immutable per-frame track output for sim snapshots and GUI."""
-
-    locked: bool = False
-    fov_x: float = 0.0
-    fov_y: float = 0.0
-    misses: int = 0
-    frames_since_detection: int = 0
-    first_lock_time_s: float | None = None
-    loss_count: int = 0
-    detection: Detection | None = None
-    terminal_id: str | None = None
-    warning_state: bool = False
-    recheck_failed: bool = False
+def r_for_snr(snr_db: float, cfg: KalmanConfig) -> float:
+    s = float(snr_db)
+    lo, hi = 6.0, 25.0
+    if s <= lo:
+        scale = cfg.r_scale_low_snr
+    elif s >= hi:
+        scale = cfg.r_scale_high_snr
+    else:
+        frac = (s - lo) / (hi - lo)
+        scale = cfg.r_scale_low_snr + frac * (cfg.r_scale_high_snr - cfg.r_scale_low_snr)
+    return float(cfg.measurement_noise_r_base * scale)
 
 
-class ImageTracker:
-    """Nearest-neighbour image tracker sourcing PID error from detections."""
-
-    def __init__(self, config: TrackerConfig | None = None):
-        self.config = (config or TrackerConfig()).validate()
-        self.model = AlphaBetaFilter2D()
-        self._locked = False
-        self._cx = 0.0
-        self._cy = 0.0
-        self._misses = 0
-        self._since_det = 0
-        self._first_lock: float | None = None
-        self._losses = 0
-        self._last_det: Detection | None = None
-        self._prev_meas: tuple[float, float] | None = None
-        self._seeded = False
-        self._sim_time = 0.0
-        self._last_dt = 1.0 / 30.0
-        self._time_since_det: float = 0.0
-        self.active_terminal_id: str | None = None
-        self.warning_state: bool = False
-        self.recheck_failed: bool = False
-        self._recheck_counter: int = 0
-        self._last_verified_seq: int | None = None
+class KalmanFilter2D:
+    def __init__(self, config: KalmanConfig | None = None):
+        self.config = (config or KalmanConfig()).validate()
+        self.x = np.zeros((4, 1), dtype=float)
+        self.P = np.eye(4, dtype=float) * 100.0
+        self._initialised = False
 
     def reset(self) -> None:
-        self.model.reset()
-        self._locked = False
-        self._cx = self._cy = 0.0
-        self._misses = 0
-        self._since_det = 0
-        self._time_since_det = 0.0
-        self._first_lock = None
-        self._losses = 0
-        self._last_det = None
-        self._prev_meas = None
-        self._seeded = False
-        self._sim_time = 0.0
-        self.active_terminal_id = None
-        self.warning_state = False
-        self.recheck_failed = False
-        self._recheck_counter = 0
-        self._last_verified_seq = None
+        self.x = np.zeros((4, 1), dtype=float)
+        self.P = np.eye(4, dtype=float) * 100.0
+        self._initialised = False
 
-    def reset_measurement_lock(self) -> None:
-        """Reset measurement lock while PRESERVING motion model velocity/uncertainty (Fixes.md §3.3)."""
-        self._locked = False
-        self._misses = 0
-        self._since_det = 0
-        self._time_since_det = 0.0
-        self._last_det = None
-        self._prev_meas = None
-        self._seeded = False
-        self.warning_state = False
-        self.recheck_failed = False
+    def initialise(self, x: float, y: float) -> None:
+        self.x = np.array([[float(x)], [float(y)], [0.0], [0.0]], dtype=float)
+        self.P = np.diag([4.0, 4.0, 25.0, 25.0])
+        self._initialised = True
 
-    def lock_target(self, terminal_id: str, fov_x: float, fov_y: float, sim_time_s: float) -> None:
-        """Lock target identity and initialize tracker (Plan.md §6)."""
-        self.active_terminal_id = str(terminal_id)
-        self._cx = float(fov_x)
-        self._cy = float(fov_y)
-        self.model.reset()
-        self.model.update(self._cx, self._cy, self._last_dt)
-        self._prev_meas = (self._cx, self._cy)
-        self._locked = True
-        self._misses = 0
-        self._since_det = 0
-        self._time_since_det = 0.0
-        self._seeded = False
-        self.recheck_failed = False
-        self._recheck_counter = 0
-        self._last_verified_seq = None
-        if self._first_lock is None:
-            self._first_lock = float(sim_time_s)
+    def shift(self, dx: float, dy: float) -> None:
+        self.x[0, 0] += float(dx)
+        self.x[1, 0] += float(dy)
 
-    def check_signature(self, seq: int | None, tid: str | None) -> bool:
-        """In-track signature re-check every 30 frames (Plan.md §7.4)."""
-        if not self._locked or self.active_terminal_id is None:
-            return True
-        from common.protocol.beacon.navigation import sequence_is_newer
-        if tid is not None and str(tid) != self.active_terminal_id:
-            self.recheck_failed = True
-            self._locked = False
-            self._losses += 1
-            return False
-        if seq is not None and self._last_verified_seq is not None:
-            if not sequence_is_newer(int(seq), int(self._last_verified_seq)):
-                self.recheck_failed = True
-                self._locked = False
-                self._losses += 1
-                return False
-        if seq is not None:
-            self._last_verified_seq = int(seq)
-        self.recheck_failed = False
-        return True
+    def _matrices(self, dt: float):
+        dt = max(float(dt), 1e-6)
+        F = np.array([[1, 0, dt, 0], [0, 1, 0, dt], [0, 0, 1, 0], [0, 0, 0, 1]], dtype=float)
+        q = self.config.process_noise_q
+        dt2 = dt * dt
+        dt3 = dt2 * dt
+        dt4 = dt2 * dt2
+        Q = q * np.array([[dt4 / 4, 0, dt3 / 2, 0], [0, dt4 / 4, 0, dt3 / 2], [dt3 / 2, 0, dt2, 0], [0, dt3 / 2, 0, dt2]], dtype=float)
+        H = np.array([[1, 0, 0, 0], [0, 1, 0, 0]], dtype=float)
+        return F, Q, H
 
-    def update(self, detections: list[Detection], dt: float, sim_time_s: float,
-               fov_w: int = 640, fov_h: int = 480,
-               origin_shift: tuple[float, float] = (0.0, 0.0)) -> TrackSnapshot:
-        """Associate one frame of detections; advance lock/miss counters."""
-        self._sim_time = float(sim_time_s)
-        self._last_dt = max(float(dt), 1e-6)
-        if self._locked:
-            self._recheck_counter += 1
-        # Translate prior against camera motion, then predict to this frame.
-        self.model.shift(-float(origin_shift[0]), -float(origin_shift[1]))
-        pred_x, pred_y = self.model.predict(self._last_dt)
-        gate = self.config.associate_gate_px + self.model.uncertainty_px
-        pick: Detection | None = None
-        if detections:
-            if self._locked:
-                gated = [d for d in detections
-                         if ((d.fov_x - pred_x) ** 2 + (d.fov_y - pred_y) ** 2) ** 0.5 <= gate]
-                if gated:
-                    pick = max(gated, key=lambda d: d.peak)
-            else:
-                pick = max(detections, key=lambda d: d.peak)
-        if pick is not None:
-            self._cx, self._cy = float(pick.fov_x), float(pick.fov_y)
-            # Centroid error check for warning state (§7.2)
-            c_err = ((self._cx - pred_x) ** 2 + (self._cy - pred_y) ** 2) ** 0.5
-            if c_err > 10.0:
-                self.warning_state = True
-                self.model.ax.config.alpha = 0.6
-                self.model.ay.config.alpha = 0.6
-            else:
-                self.warning_state = False
-                self.model.ax.config.alpha = 0.4
-                self.model.ay.config.alpha = 0.4
+    def predict(self, dt: float) -> tuple[float, float]:
+        F, Q, _ = self._matrices(dt)
+        self.x = F @ self.x
+        self.P = F @ self.P @ F.T + Q
+        return float(self.x[0, 0]), float(self.x[1, 0])
 
-            if not self._seeded and self._misses == 0 and self._prev_meas is not None:
-                self.model.initialise(self._prev_meas[0], self._prev_meas[1],
-                                      self._cx, self._cy, self._last_dt)
-                self._seeded = True
-            else:
-                self.model.update(self._cx, self._cy, self._last_dt)
-            self._prev_meas = (self._cx, self._cy)
-            self._misses = 0
-            self._since_det = 0
-            self._time_since_det = 0.0
-            self._last_det = pick
-            if not self._locked:
-                self._locked = True
-                if self._first_lock is None:
-                    self._first_lock = float(sim_time_s)
-        else:
-            self._prev_meas = None
-            self.model.coast(self._last_dt)
-            self._misses += 1
-            self._since_det += 1
-            self._time_since_det += self._last_dt
-            if self._locked and (self._misses > self.config.loss_after_misses or self._time_since_det > self.config.max_no_detection_time_s):
-                self._locked = False
-                self._losses += 1
-        return self.snapshot()
+    def update(self, zx: float, zy: float, r_var: float) -> tuple[float, float]:
+        _, _, H = self._matrices(1.0 / 30.0)
+        R = np.eye(2) * max(float(r_var), 1e-6)
+        z = np.array([[float(zx)], [float(zy)]], dtype=float)
+        y = z - H @ self.x
+        S = H @ self.P @ H.T + R
+        try:
+            K = self.P @ H.T @ np.linalg.inv(S)
+        except np.linalg.LinAlgError:
+            K = self.P @ H.T / (np.trace(S) / 2.0 + 1e-6)
+        self.x = self.x + K @ y
+        I = np.eye(4)
+        self.P = (I - K @ H) @ self.P
+        self._initialised = True
+        return float(self.x[0, 0]), float(self.x[1, 0])
 
-    def snapshot(self) -> TrackSnapshot:
-        return TrackSnapshot(
-            locked=self._locked,
-            fov_x=self._cx,
-            fov_y=self._cy,
-            misses=self._misses,
-            frames_since_detection=self._since_det,
-            first_lock_time_s=self._first_lock,
-            loss_count=self._losses,
-            detection=self._last_det if self._misses == 0 else None,
-            terminal_id=self.active_terminal_id,
-            warning_state=self.warning_state,
-            recheck_failed=self.recheck_failed,
-        )
+    def gate_var(self, r_var: float) -> float:
+        return float(max(self.P[0, 0], self.P[1, 1]) + max(float(r_var), 1e-6))
 
-    def error_px(self, fov_w: int = 640, fov_h: int = 480) -> tuple[float, float] | None:
-        """Pixel error (target − boresight) for the PID, or None when lost.
-
-        Fresh detection → measured centroid error. Coasting (misses within
-        the loss horizon) → predicted-position error, so the camera slews to
-        the predicted location instead of holding blindly (Plan §7.1).
-        """
-        if not self._locked:
-            return None
-        if self._misses == 0:
-            return (self._cx - fov_w / 2.0, self._cy - fov_h / 2.0)
-        if self._misses <= self.config.loss_after_misses:
-            # Coast state already holds this frame's prediction (update() ran
-            # model.coast); steer toward it without double-propagating.
-            ex, ey = self.model.estimate
-            return (ex - fov_w / 2.0, ey - fov_h / 2.0)
-        return None
+    def mahalanobis_d2(self, zx: float, zy: float, r_var: float) -> float:
+        dx = float(zx) - float(self.x[0, 0])
+        dy = float(zy) - float(self.x[1, 0])
+        return (dx * dx + dy * dy) / self.gate_var(r_var)
 
     @property
-    def predicted_fov(self) -> tuple[float, float]:
-        return self.model.predict(self._last_dt)
+    def position(self) -> tuple[float, float]:
+        return float(self.x[0, 0]), float(self.x[1, 0])
 
-    def photometric_confidence(self) -> float:
-        """Pre-validation confidence from photometry only (Stage 3 replaces this)."""
-        det = self._last_det
-        if det is None or self._misses > 0:
-            return 0.0
-        snr_term = max(0.0, min(1.0, (det.snr_db - 6.0) / 12.0))
-        return float(0.5 * snr_term + 0.5 * det.compactness_r2)
+    @property
+    def velocity(self) -> tuple[float, float]:
+        return float(self.x[2, 0]), float(self.x[3, 0])
+
+    @property
+    def uncertainty_px(self) -> float:
+        return float(max(0.0, (max(self.P[0, 0], 0.0) + max(self.P[1, 1], 0.0)) ** 0.5))
+
+
+class KalmanTracker:
+    def __init__(self, config: KalmanConfig | None = None):
+        self.config = (config or KalmanConfig()).validate()
+        self.kf = KalmanFilter2D(self.config)
+        self.active_tid: str | None = None
+        self.misses: int = 0
+        self.last_meas_t: float = 0.0
+        self.last_beacon_t: float | None = None
+        self.p_rx_w: float = 0.0
+        self.status: str = "LOST"
+        self._dt: float = 1.0 / 30.0
+
+    def reset(self) -> None:
+        self.kf.reset()
+        self.active_tid = None
+        self.misses = 0
+        self.p_rx_w = 0.0
+        self.status = "LOST"
+        self.last_beacon_t = None
+
+    def lock(self, tid: str, x: float, y: float, t: float, p_rx_w: float = 0.0) -> None:
+        self.active_tid = str(tid)
+        self.kf.initialise(float(x), float(y))
+        self.misses = 0
+        self.last_meas_t = float(t)
+        self.p_rx_w = float(p_rx_w)
+        self.status = "TRACKING"
+
+    def step(self, obs, dt: float, t: float, origin_shift: tuple[float, float] = (0.0, 0.0)):
+        from local_terminal.models import TargetTrack as _TT
+        self._dt = max(float(dt), 1e-6)
+        self.kf.shift(-float(origin_shift[0]), -float(origin_shift[1]))
+        if obs is not None:
+            r = r_for_snr(float(getattr(obs, "snr_db", 6.0)), self.config)
+            self.kf.predict(self._dt)
+            self.kf.update(float(obs.fov_x), float(obs.fov_y), r)
+            self.misses = 0
+            self.last_meas_t = float(t)
+            self.p_rx_w = float(getattr(obs, "p_rx_w", 0.0) or 0.0)
+            if getattr(obs, "timestamp_s", 0.0):
+                self.last_beacon_t = float(obs.timestamp_s)
+            self.status = "TRACKING"
+        else:
+            self.kf.predict(self._dt)
+            self.misses += 1
+            self.status = "COASTING"
+        margin = min(float(self.misses) * self.config.coast_growth_px_per_frame, self.config.coast_margin_cap_px)
+        unc = float(self.kf.uncertainty_px) + (margin if self.misses else 0.0)
+        x, y = self.kf.position
+        vx, vy = self.kf.velocity
+        return _TT(terminal_id=self.active_tid or "", x=float(x), y=float(y), vx=float(vx), vy=float(vy), uncertainty_px=float(unc), last_measurement_time_s=float(self.last_meas_t), last_beacon_time_s=self.last_beacon_t, p_rx_w=float(self.p_rx_w), misses=int(self.misses), status=self.status).validate()
+
+    def effective_uncertainty_px(self) -> float:
+        margin = min(float(self.misses) * self.config.coast_growth_px_per_frame, self.config.coast_margin_cap_px)
+        return float(self.kf.uncertainty_px) + (margin if self.misses else 0.0)
+
+    def gate_pred_var(self) -> float:
+        margin = min(float(self.misses) * self.config.coast_growth_px_per_frame, self.config.coast_margin_cap_px)
+        return float(max(self.kf.P[0, 0], self.kf.P[1, 1]) + margin * margin)
+
+    def error_px(self, fov_w: float = 640.0, fov_h: float = 480.0):
+        if self.active_tid is None or self.status == "LOST":
+            return None
+        x, y = self.kf.position
+        return (float(x) - fov_w / 2.0, float(y) - fov_h / 2.0)
+
+    def snapshot(self):
+        from types import SimpleNamespace
+        return SimpleNamespace(locked=bool(self.status == "TRACKING" and self.active_tid is not None), misses=int(self.misses), fov_x=float(self.kf.position[0]), fov_y=float(self.kf.position[1]), terminal_id=self.active_tid, loss_count=0)
 
     def autonomy_telemetry(self) -> dict:
-        """Renderer-compatible autonomy schema (gui/core/renderer.py §1)."""
-        snap = self.snapshot()
-        cands = []
-        if snap.detection is not None:
-            cands.append({
-                "terminal_id": "TRACK",
-                "fov_x": float(snap.fov_x),
-                "fov_y": float(snap.fov_y),
-                "confidence": round(self.photometric_confidence(), 3),
-                "confirmed": bool(snap.locked),
-            })
-        vx, vy = self.model.velocity
-        px, py = self.predicted_fov
-        return {
-            "autonomy": {
-                "state": "LOCKED" if snap.locked else "SEARCHING",
-                "active_target_id": "TRACK" if snap.locked else None,
-                "candidates": cands,
-            },
-            "locked": bool(snap.locked),
-            "misses": int(snap.misses),
-            "frames_since_detection": int(snap.frames_since_detection),
-            "acquisition_time_s": snap.first_lock_time_s,
-            "target_loss_count": int(snap.loss_count),
-            "detection_rate_pct": 100.0 if snap.locked else 0.0,
-            "velocity_px_s": [round(float(vx), 3), round(float(vy), 3)],
-            "uncertainty_px": round(float(self.model.uncertainty_px), 3),
-            "predicted_fov": [round(float(px), 2), round(float(py), 2)],
-        }
+        x, y = self.kf.position
+        vx, vy = self.kf.velocity
+        locked = self.status == "TRACKING" and self.active_tid is not None
+        return {"autonomy": {"state": "LOCKED" if locked else "SEARCHING", "active_target_id": self.active_tid, "candidates": []}, "locked": bool(locked), "misses": int(self.misses), "target_loss_count": 0, "velocity_px_s": [round(float(vx), 3), round(float(vy), 3)], "uncertainty_px": round(float(self.effective_uncertainty_px()), 3), "predicted_fov": [round(float(x), 2), round(float(y), 2)]}
 
 
-__all__ = ["ImageTracker", "TrackerConfig", "TrackSnapshot"]
+__all__ = ["KalmanConfig", "KalmanFilter2D", "KalmanTracker", "r_for_snr"]

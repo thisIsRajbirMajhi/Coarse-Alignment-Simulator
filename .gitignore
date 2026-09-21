@@ -19,10 +19,10 @@ env/
 Thumbs.db
 *.log
 
-# PyInstaller
+# PyInstaller (keep main.spec)
 build/
 dist/
-*.spec
+# *.spec  # keep main.spec tracked
 
 # Generated data (no longer logged)
 *.csv

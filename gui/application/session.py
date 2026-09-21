@@ -1,4 +1,4 @@
-# gui/application/session.py - SimulationSession: Qt-free owner of simulation.
+# gui/application/session.py - V2 SimulationSession (Plan V2)
 from __future__ import annotations
 
 import logging
@@ -12,9 +12,8 @@ log = logging.getLogger(__name__)
 
 @dataclass
 class FrameSnapshot:
-    """Immutable per-step output for presenters/views."""
     frame_id: int
-    world_frame: Any  # np.ndarray BGR, full scene with beacons & disturbances
+    world_frame: Any
     world_size: tuple[int, int]
     fov_frame: Any = None
     camera_telemetry: dict | None = None
@@ -24,17 +23,18 @@ class FrameSnapshot:
     pan: float = 0.0
     tilt: float = 0.0
     fov_size: tuple[int, int] = (640, 480)
-    tracker_telemetry: dict | None = None  # Plan Stage 1: image-tracker state
+    tracker_telemetry: dict | None = None
+    # Disturbed (actual) FOV geometry — where the sensor really looked after jitter/platform.
+    # God screen must use these, not the true gimbal center, to align FOV box with FOV content.
+    fov_center_disturbed: tuple[float, float] | None = None
+    fov_rect_disturbed: tuple[float, float, float, float] | None = None
 
 
 class SimulationSession:
-    """Owns Scene/Disturbance/Remote-terminal/PTZ-Camera/PID-Controller scenario.
-
-    GUI talks to this; widgets never touch sim objects directly.
-    """
+    """V2 session — Scene/Disturbance/Remote/Camera/PID/V2 FSM."""
 
     def __init__(self, env_config=None, disturbance_config=None, scenario_config=None,
-                  camera_config=None, pid_config=None, seed: int = 42, **kwargs):
+                 camera_config=None, pid_config=None, seed: int = 42, **kwargs):
         from camera.config import CameraConfig, PIDConfig
         from disturbance.core.config import DisturbanceConfig
         from environment.config import EnvironmentConfig
@@ -47,16 +47,21 @@ class SimulationSession:
         self.scenario_config = (scenario_config or make_default_scenario()).validate()
         self.camera_config = (camera_config or CameraConfig()).validate()
         self.pid_config = (pid_config or PIDConfig()).validate()
-        local_config = kwargs.get("local_terminal_config") or kwargs.get("local_config")
-        if local_config is None:
-            from local_terminal.config import make_default_local_terminal
-            local_config = make_default_local_terminal()
-        self.local_terminal_config = local_config.validate()
+        # V2 single source: AutonomyConfig (§19.2)
+        autonomy_cfg = kwargs.get("autonomy_config") or kwargs.get("local_terminal_config") or kwargs.get("local_config")
+        if autonomy_cfg is None:
+            from local_terminal.models import AutonomyConfig
+            autonomy_cfg = AutonomyConfig()
+        try:
+            autonomy_cfg = autonomy_cfg.validate()
+        except AttributeError:
+            from local_terminal.models import AutonomyConfig
+            autonomy_cfg = AutonomyConfig().validate()
+        self.autonomy_config = autonomy_cfg
         self._built = False
         self._frame_id = 0
         self._last_dt = 1 / 30
 
-    # -- construction -------------------------------------------------
     def build(self) -> None:
         from camera.pid_controller import PIDController
         from camera.ptz import PTZCamera
@@ -88,22 +93,21 @@ class SimulationSession:
             rng=self.rng,
         )
         self.controller = PIDController(config=self.pid_config)
-        from local_terminal import AutonomySupervisor, SignatureRegistry
-        self.supervisor = AutonomySupervisor(
+        from local_terminal import SignatureRegistry
+        from local_terminal.supervisor import SupervisorV2
+        self.supervisor = SupervisorV2(
             registry=SignatureRegistry.from_scenario(self.scenario_config),
-            local_config=self.local_terminal_config,
+            autonomy=self.autonomy_config,
         )
-        self._apply_expected_payload_to_registry()
         self._apply_scan_start_index()
         self.tracker = self.supervisor.tracker
-        self.comm_rx = self.supervisor.comm_rx
-        self.validator = self.supervisor.validator
+        self.comm_rx = self.supervisor.comm
+        self.validator = self.supervisor.identity
         self._pending_track_error: tuple[float, float] | None = None
         self._pending_pid_active: bool = False
         self._pending_target_angles: tuple[float, float] | None = None
         self._pending_target_vel: tuple[float, float] | None = None
         self._last_disturbed_center: tuple[float, float] | None = None
-        self._last_val_snr_db = 6.0
         self._sim_time_s = 0.0
         self._disturbance_pipeline = None
         self._built = True
@@ -113,7 +117,6 @@ class SimulationSession:
         if not self._built:
             self.build()
 
-    # -- lifecycle ----------------------------------------------------
     def reset(self, seed: int | None = None) -> None:
         if seed is not None:
             self.seed = int(seed)
@@ -127,44 +130,19 @@ class SimulationSession:
         if hasattr(self, "controller") and self.controller is not None:
             self.controller.reset()
 
-    # -- config application (validated, explicit) ----------------------
-    def _apply_expected_payload_to_registry(self) -> None:
-        """Push camera-control Expected Payload overrides into the registry."""
-        try:
-            sup = getattr(self, "supervisor", None)
-            reg = getattr(sup, "registry", None) if sup is not None else None
-            if reg is None:
-                return
-            cam = getattr(self, "camera_config", None)
-            if cam is None:
-                return
-            reg.apply_expected_overrides(
-                expected_tid=str(getattr(cam, "expected_tid", "RT-001") or ""),
-                expected_wavelength_nm=float(getattr(cam, "expected_wavelength_nm", 1550.0)),
-                wl_tolerance_nm=float(getattr(cam, "expected_wl_tolerance_nm", 50.0)),
-                require_nav=bool(getattr(cam, "expected_require_nav", False)),
-                local_id=str(getattr(cam, "local_id", "") or ""),
-            )
-            try:
-                sup.validator.set_registry(reg)
-            except (AttributeError, TypeError):
-                pass
-        except Exception as e:
-            log.debug("expected payload override skipped: %s", e)
-
     def _apply_scan_start_index(self) -> None:
-        """Jump the local-terminal scan schedule to the configured start cell."""
         try:
-            sup = getattr(self, "supervisor", None)
-            scan = getattr(sup, "scan_ctrl", None) if sup is not None else None
+            scan = getattr(self.supervisor, "scan_ctrl", None)
             if scan is None:
                 return
-            idx = int(getattr(self.camera_config, "scan_start_index", 0) or 0)
+            # Prefer AutonomyConfig (new), fallback to CameraConfig (legacy)
+            idx = int(getattr(self.autonomy_config, "search_start_index", 0) or 0)
+            if not idx:
+                idx = int(getattr(self.camera_config, "scan_start_index", 0) or 0)
             sched = list(getattr(scan, "_schedule", []) or [])
             if not sched:
                 return
             idx = max(0, min(idx, len(sched) - 1))
-            # Map grid-cell index -> position inside the current schedule order.
             try:
                 ptr = sched.index(idx)
             except ValueError:
@@ -180,11 +158,22 @@ class SimulationSession:
 
     def apply_camera_config(self, config=None) -> None:
         if config is not None:
-            old_idx = int(getattr(self.camera_config, "scan_start_index", 0) or 0)
+            old = self.camera_config
+            old_idx = int(getattr(old, "scan_start_index", 0) or 0)
+            old_use = bool(getattr(old, "use_custom_start", False))
+            old_sp = float(getattr(old, "start_pan_deg", 0.0))
+            old_st = float(getattr(old, "start_tilt_deg", 0.0))
             self.camera_config = config.validate()
             if hasattr(self, "camera") and self.camera is not None:
                 self.camera.apply_config(self.camera_config)
-            self._apply_expected_payload_to_registry()
+                # If start pose changed (preset far start), jump camera to new start.
+                if (bool(self.camera_config.use_custom_start) != old_use or
+                    abs(float(self.camera_config.start_pan_deg) - old_sp) > 1e-6 or
+                    abs(float(self.camera_config.start_tilt_deg) - old_st) > 1e-6):
+                    try:
+                        self.camera.reset()
+                    except Exception as e:
+                        log.debug("camera reset to start pose skipped: %s", e)
             new_idx = int(getattr(self.camera_config, "scan_start_index", 0) or 0)
             if new_idx != old_idx or not getattr(self, "_built", False):
                 self._apply_scan_start_index()
@@ -203,13 +192,11 @@ class SimulationSession:
         new_w, new_h = int(new_cfg.world_width), int(new_cfg.world_height)
         self.env_config = new_cfg
         if self._built and new_w == old_w and new_h == old_h:
-            # Fast path: same world size — regenerate sky in place.
             try:
                 self.scene.regenerate_from_config(new_cfg)
             except Exception:
                 self.build()
             return
-        # World-size change requires full rebuild.
         self.build()
 
     def apply_disturbance_config(self, config) -> None:
@@ -220,21 +207,50 @@ class SimulationSession:
         self.ensure_built()
         self.scenario_config = config.validate()
         self.remote.apply_config(self.scenario_config)
-        # New mission file = new expectations: fresh registry in supervisor (documented).
         from local_terminal import SignatureRegistry
-        self.supervisor.set_registry(SignatureRegistry.from_scenario(self.scenario_config))
-        self._apply_expected_payload_to_registry()
-        self.validator = self.supervisor.validator
+        try:
+            self.supervisor.set_registry(SignatureRegistry.from_scenario(self.scenario_config))
+        except (AttributeError, TypeError):
+            pass
+        self.validator = getattr(self.supervisor, "validator", getattr(self.supervisor, "identity", None))
 
     def apply_local_terminal_config(self, config) -> None:
         self.ensure_built()
-        self.local_terminal_config = config.validate()
-        self.supervisor.apply_local_config(self.local_terminal_config)
+        # Accept AutonomyConfig (V2) or legacy LocalTerminalConfig shim
+        try:
+            cfg = config.validate()
+        except AttributeError:
+            from local_terminal.models import AutonomyConfig
+            cfg = AutonomyConfig().validate()
+        # If legacy LocalTerminalConfig, ignore old fields and use AutonomyConfig
+        if hasattr(cfg, "detector"):
+            from local_terminal.models import AutonomyConfig
+            cfg = AutonomyConfig().validate()
+        self.autonomy_config = cfg
+        try:
+            self.supervisor.apply_local_config(cfg)
+        except (AttributeError, TypeError):
+            try:
+                self.supervisor.cfg = cfg
+                self.supervisor.cfg.validate()
+            except (AttributeError, TypeError):
+                pass
+        # Sync scan start index if changed
+        try:
+            self._apply_scan_start_index()
+        except Exception:
+            pass
+        # Sync mission priority list to supervisor
+        try:
+            prio = list(getattr(cfg, "mission_priority", []) or [])
+            if prio:
+                self.supervisor.mission_priority = list(prio)
+        except (AttributeError, TypeError):
+            pass
         self.tracker = self.supervisor.tracker
-        self.comm_rx = self.supervisor.comm_rx
-        self.validator = self.supervisor.validator
+        self.comm_rx = getattr(self.supervisor, "comm_rx", getattr(self.supervisor, "comm", None))
+        self.validator = getattr(self.supervisor, "validator", getattr(self.supervisor, "identity", None))
 
-    # -- stepping ------------------------------------------------------
     def _disturbance_pipeline_for(self, dt: float):
         from disturbance.core import DisturbanceContext, DisturbancePipeline
         if self._disturbance_pipeline is None:
@@ -257,16 +273,12 @@ class SimulationSession:
             self.remote.update(dt_eff)
         except Exception as e:
             log.debug("remote terminal update skipped: %s", e)
-
         pipe = self._disturbance_pipeline_for(dt_eff)
-
         world_frame = self.scene.get_frame()
-
         try:
             world_frame = self.remote.render_spots(world_frame)
         except Exception as e:
             log.debug("remote beacon render skipped: %s", e)
-
         try:
             vig = float(getattr(self.env_config, "vignetting_pct", 0)) / 100.0
             if vig > 1e-3:
@@ -274,21 +286,16 @@ class SimulationSession:
                 world_frame = apply_vignetting(world_frame, vig)
         except Exception as e:
             log.debug("vignetting skipped: %s", e)
-
-        # -- Autonomous camera control & tracking (Plan.md Stages 1-4) --
         terms = self._safe_remote_telemetry()
         cmd_pan, cmd_tilt = 0.0, 0.0
         if self.controller.config.mode == "AUTO" and self._pending_pid_active and self._pending_track_error is not None:
             ex, ey = self._pending_track_error
             tvx, tvy = self._pending_target_vel or (0.0, 0.0)
             cmd_pan, cmd_tilt = self.controller.compute_from_pixels(
-                error_x_px=ex,
-                error_y_px=ey,
+                error_x_px=ex, error_y_px=ey,
                 deg_per_px_h=self.camera.config.deg_per_px_h,
                 deg_per_px_v=self.camera.config.deg_per_px_v,
-                dt=dt_eff,
-                target_vel_x_px_s=float(tvx),
-                target_vel_y_px_s=float(tvy),
+                dt=dt_eff, target_vel_x_px_s=float(tvx), target_vel_y_px_s=float(tvy),
             )
             self.camera.update(dt_eff, cmd_pan_vel=cmd_pan, cmd_tilt_vel=cmd_tilt)
         elif self.controller.config.mode == "AUTO" and self._pending_target_angles is not None:
@@ -296,12 +303,6 @@ class SimulationSession:
             self.camera.update(dt_eff)
         else:
             self.camera.update(dt_eff, cmd_pan_vel=0.0, cmd_tilt_vel=0.0)
-
-        # Camera pose disturbances (jitter/vibration/platform/drift) shift
-        # where the camera looks. Disturb the post-update pose so the FOV
-        # matches the fresh gimbal position; disturb_camera_pose advances
-        # pipeline time once, so the optical/sensor stages must NOT advance
-        # again. True gimbal state stays clean (observation noise, not motion).
         from simulation.fov_pipeline import apply_jitter as _apply_pose
         from simulation.fov_pipeline import apply_post_noise as _apply_post
         fb = bool(getattr(self.camera_config, "use_measured_feedback", False))
@@ -311,23 +312,24 @@ class SimulationSession:
         except Exception as e:
             log.debug("camera pose disturbance skipped: %s", e)
             dcx, dcy = cx, cy
-            world_frame = pipe.apply_frame(world_frame, advance=True)
-        else:
-            world_frame = _apply_post(
-                world_frame, self.disturbance_config, dt_eff, self.rng, pipe, advance=False,
-            )
-
-        # Extract FOV viewport at the disturbed pose.
+            # Advance pipeline time even if pose failed (keep OU state consistent)
+            try:
+                pipe.context.advance(dt_eff)
+            except Exception:
+                pass
+        # FOV extracted first — heavy image disturbances run on 640×480 (0.3M) not 2000×2000 (4M) → 13× speedup.
+        # World_frame stays clean for God screen; FOV shows the disturbed view.
         fov_frame = self.camera.extract_fov_at(world_frame, dcx, dcy)
-
-        # Origin shift for motion model
+        try:
+            # Apply optical+sensor post on FOV only (advance=False — pose already advanced)
+            fov_frame = _apply_post(fov_frame, self.disturbance_config, dt_eff, self.rng, pipe, advance=False)
+        except Exception as e:
+            log.debug("fov post noise skipped: %s", e)
         if self._last_disturbed_center is None:
             shift = (0.0, 0.0)
         else:
             shift = (dcx - self._last_disturbed_center[0], dcy - self._last_disturbed_center[1])
         self._last_disturbed_center = (dcx, dcy)
-
-        # Autonomy Supervisor cycle (Plan.md §9)
         from local_terminal import CommSource
         sources = []
         for term in getattr(self.remote, "terminals", []):
@@ -336,11 +338,6 @@ class SimulationSession:
                 sources.append(CommSource(
                     position=(float(term.position_m.x), float(term.position_m.y)),
                     emitting=bool(rt.effective_emission_enabled),
-                    # TX high-chip source power BEFORE link losses (Fixes.md
-                    # 3.5): the receiver applies pointing/aperture/filter
-                    # coupling itself. runtime.instantaneous_power_w already
-                    # includes pointing coupling + chip extinction, so it
-                    # must NOT be passed as P_tx (double-count).
                     power_w=float(term.config.optical_power_w),
                     chip_at=term.generator.chip_at,
                     pointing_error_deg=float(rt.pointing_error_deg),
@@ -350,25 +347,17 @@ class SimulationSession:
                 ))
             except (AttributeError, TypeError, ValueError):
                 continue
-
         sup_out = self.supervisor.step(
-            fov_frame=fov_frame,
-            dt=dt_eff,
-            sim_time_s=self._sim_time_s,
-            comm_sources=sources,
-            boresight_world=(float(dcx), float(dcy)),
+            fov_frame=fov_frame, dt=dt_eff, sim_time_s=self._sim_time_s,
+            comm_sources=sources, boresight_world=(float(dcx), float(dcy)),
             cam_home=self.camera.get_home(),
             px_per_deg=(self.camera.config.px_per_deg_h, self.camera.config.px_per_deg_v),
-            origin_shift=shift,
-            fov_size=(int(self.camera.fov_width), int(self.camera.fov_height)),
+            origin_shift=shift, fov_size=(int(self.camera.fov_width), int(self.camera.fov_height)),
         )
-
         self._pending_pid_active = sup_out.pid_active
         self._pending_track_error = sup_out.track_error_px
         self._pending_target_angles = sup_out.camera_target_angles
         self._pending_target_vel = getattr(sup_out, "target_vel_px_s", None)
-        # Explicit PTZ homing on full reset (Fixes.md C-04): synchronous
-        # reset to configured home/start with zero rate/accel.
         if bool(getattr(sup_out, "camera_reset_requested", False)):
             try:
                 self.camera.reset()
@@ -378,23 +367,24 @@ class SimulationSession:
             self._pending_pid_active = False
             self._pending_target_angles = None
             self._pending_target_vel = None
-
+        # Disturbed FOV rect for God screen overlay — must match extract_fov_at center.
+        try:
+            hw, hh = float(self.camera.fov_width) / 2.0, float(self.camera.fov_height) / 2.0
+            fov_rect_disturbed = (float(dcx - hw), float(dcy - hh), float(dcx + hw), float(dcy + hh))
+        except Exception:
+            fov_rect_disturbed = None
         self._frame_id += 1
         cam_st = self.camera.get_state()
-
         return FrameSnapshot(
-            frame_id=self._frame_id,
-            world_frame=world_frame,
+            frame_id=self._frame_id, world_frame=world_frame,
             world_size=(int(self.env_config.world_width), int(self.env_config.world_height)),
-            fov_frame=fov_frame,
-            camera_telemetry=self.camera.get_telemetry(),
-            pid_telemetry=self.controller.get_telemetry(),
-            dt=dt_eff,
-            terminals=terms,
-            pan=cam_st.pan_deg,
-            tilt=cam_st.tilt_deg,
+            fov_frame=fov_frame, camera_telemetry=self.camera.get_telemetry(),
+            pid_telemetry=self.controller.get_telemetry(), dt=dt_eff,
+            terminals=terms, pan=cam_st.pan_deg, tilt=cam_st.tilt_deg,
             fov_size=(self.camera.fov_width, self.camera.fov_height),
             tracker_telemetry=sup_out.telemetry,
+            fov_center_disturbed=(float(dcx), float(dcy)),
+            fov_rect_disturbed=fov_rect_disturbed,
         )
 
     def _safe_remote_telemetry(self) -> dict | None:
@@ -403,4 +393,3 @@ class SimulationSession:
         except Exception as e:
             log.debug("remote telemetry skipped: %s", e)
             return None
-

@@ -1,10 +1,4 @@
-# gui/panels/local_terminal_panel.py - Local Terminal autonomy tunables.
-#
-# Grid-format groups for every local-terminal stage that was previously an
-# internal default: detection gates (§5.1), validation policy (§5.3-5.5),
-# image-tracker association (§7.1), α-β motion model (§7.3), scan schedule
-# (§4), re-acquisition ladder (§8), and supervisor/standby policy (§6, §9).
-# Emits a validated LocalTerminalConfig; never touches simulation directly.
+# gui/panels/local_terminal_panel.py - V2 autonomy tunables (Redesign: Primary + Advanced tiers).
 from __future__ import annotations
 
 import copy
@@ -12,22 +6,31 @@ import logging
 
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QSpinBox,
     QVBoxLayout,
+    QWidget,
 )
 
 from gui.panels.base import BaseConfigPanel
-from local_terminal.config import LocalTerminalConfig, make_default_local_terminal
+from local_terminal.models import AutonomyConfig
 
 log = logging.getLogger(__name__)
 
+_REACQ_PRESETS: dict[str, list[float]] = {
+    "Default (50→800)": [50.0, 100.0, 200.0, 400.0, 800.0],
+    "Narrow (50→200)": [50.0, 100.0, 200.0],
+    "Wide (100→800)": [100.0, 200.0, 400.0, 800.0],
+    "Agile (25→400)": [25.0, 50.0, 100.0, 200.0, 400.0],
+}
 
-def _dspin(minv: float, maxv: float, step: float, suffix: str = "",
-           decimals: int = 2, tooltip: str = "") -> QDoubleSpinBox:
+
+def _dspin(minv: float, maxv: float, step: float, suffix: str = "", decimals: int = 2, tooltip: str = "") -> QDoubleSpinBox:
     w = QDoubleSpinBox()
     w.setRange(float(minv), float(maxv))
     w.setSingleStep(float(step))
@@ -48,326 +51,310 @@ def _ispin(minv: int, maxv: int, tooltip: str = "") -> QSpinBox:
 
 
 class LocalTerminalPanel(BaseConfigPanel):
-    """Local-terminal autonomy editor (detection → validation → track)."""
+    """V2 autonomy editor — Primary (operator) + Advanced (collapsed) tiers."""
 
     configChanged = pyqtSignal(object)
 
-    def __init__(self, initial: LocalTerminalConfig | None = None, parent=None):
+    def __init__(self, initial: AutonomyConfig | None = None, parent=None):
         super().__init__(parent)
         try:
-            self._config = (initial or make_default_local_terminal()).validate()
+            self._config = (initial or AutonomyConfig()).validate()
         except ValueError:
-            self._config = make_default_local_terminal()
+            self._config = AutonomyConfig().validate()
         self._updating = False
         self._build_ui()
         self.set_config(self._config, emit=False)
 
-    # -- UI (grid format) ------------------------------------------
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(10)
 
-        title = QLabel("LOCAL TERMINAL AUTONOMY")
+        title = QLabel("AUTONOMY — Tracking & Acquisition")
         title.setStyleSheet("font-size:15px; font-weight:700;")
         header_row = QHBoxLayout()
         header_row.addWidget(title)
         header_row.addStretch(1)
-        self.btn_reset = self._make_reset_button("Reset Local")
-        self.btn_reset.setToolTip("Reset all local-terminal tunables to defaults")
+        self.btn_reset = self._make_reset_button("Reset")
         self.btn_reset.clicked.connect(self.reset_to_defaults)
         header_row.addWidget(self.btn_reset)
         root.addLayout(header_row)
-        desc = QLabel("Detection gates, validation, tracking, scan, re-acquisition, supervisor")
-        desc.setStyleSheet("color:#8F9CAB; font-size:11px;")
-        root.addWidget(desc)
+        hint = QLabel("Primary: SNR · P_rx · Lost · Reacq · Policy  ·  Advanced: Kalman, gating, dwell")
+        hint.setStyleSheet("color:#64748b; font-size:11px;")
+        root.addWidget(hint)
 
-        # 1. DETECTION (photometric gates, §5.1).
-        det_box, det_grid = self._make_group("DETECTION — photometric gates")
-        self.spin_peak = _dspin(1.0, 255.0, 1.0, decimals=1,
-            tooltip="Peak pixel intensity floor (/255)")
-        self.spin_sigma = _dspin(0.5, 50.0, 0.1, suffix=" px",
-            tooltip="Spot sigma floor (px)")
-        self.spin_r2 = _dspin(0.0, 1.0, 0.01,
-            tooltip="Gaussian-fit compactness floor")
-        self.spin_snr = _dspin(0.0, 40.0, 0.5, suffix=" dB", decimals=1,
-            tooltip="SNR above local background floor")
-        self.spin_isolation = _dspin(1.0, 100.0, 1.0, suffix=" px", decimals=1,
-            tooltip="Merge candidates closer than this")
-        self.spin_bg = _ispin(1, 32, "Background ring width around region (px)")
-        self.spin_maxcand = _ispin(1, 64, "Candidate cap, brightest-first")
-        det_grid.addWidget(self._label("Peak Min"), 0, 0)
-        det_grid.addWidget(self.spin_peak, 0, 1)
-        det_grid.addWidget(self._label("Sigma Min"), 1, 0)
-        det_grid.addWidget(self.spin_sigma, 1, 1)
-        det_grid.addWidget(self._label("Compactness R² Min"), 2, 0)
-        det_grid.addWidget(self.spin_r2, 2, 1)
-        det_grid.addWidget(self._label("SNR Min"), 3, 0)
-        det_grid.addWidget(self.spin_snr, 3, 1)
-        det_grid.addWidget(self._label("Isolation"), 4, 0)
-        det_grid.addWidget(self.spin_isolation, 4, 1)
-        det_grid.addWidget(self._label("BG Annulus"), 5, 0)
-        det_grid.addWidget(self.spin_bg, 5, 1)
-        det_grid.addWidget(self._label("Max Candidates"), 6, 0)
-        det_grid.addWidget(self.spin_maxcand, 6, 1)
-        root.addWidget(det_box)
+        # ========== PRIMARY: SEARCH & DETECTION ==========
+        s_box, s_grid = self._make_group("SEARCH & DETECTION — Primary")
+        self.combo_search = QComboBox()
+        self.combo_search.addItems(["systematic", "last_known", "predicted"])
+        self.combo_search.setToolTip("Search priority: systematic raster / last-known / Kalman predicted")
+        self.spin_snr = _dspin(0.0, 40.0, 0.5, suffix=" dB", decimals=1, tooltip="Min SNR gate (6dB default)")
+        self.spin_confirm = _ispin(1, 5, tooltip="Confirm frames — reject 1-frame hot pixel")
+        # NEW: P_rx floor (mW for UI, stored as W) + Scan start cell (migrated from Camera)
+        self.spin_p_rx = _dspin(0.0, 100.0, 0.5, suffix=" mW", decimals=2, tooltip="P_rx floor — signal-strength gate (0=disabled)")
+        self.spin_scan_start = _ispin(0, 19, tooltip="Scan grid start cell (0..19)")
+        s_grid.addWidget(self._label("Search Pattern"), 0, 0)
+        s_grid.addWidget(self.combo_search, 0, 1)
+        s_grid.addWidget(self._label("Scan Start"), 0, 2)
+        s_grid.addWidget(self.spin_scan_start, 0, 3)
+        s_grid.addWidget(self._label("Min SNR"), 1, 0)
+        s_grid.addWidget(self.spin_snr, 1, 1)
+        s_grid.addWidget(self._label("Confirm Frames"), 1, 2)
+        s_grid.addWidget(self.spin_confirm, 1, 3)
+        s_grid.addWidget(self._label("P_rx Floor"), 2, 0)
+        s_grid.addWidget(self.spin_p_rx, 2, 1)
+        s_grid.addWidget(self._hint("P_rx=0 disables power gate; SNR is primary gate."), 2, 2, 1, 2)
+        root.addWidget(s_box)
 
-        # 2. VALIDATION (lifecycle + scoring, §5.3-5.5).
-        val_box, val_grid = self._make_group("VALIDATION — lifecycle & scoring")
-        self.spin_score = _dspin(0.0, 1.0, 0.01,
-            tooltip="Composite score floor for SELECTED")
-        self.spin_strikes = _ispin(1, 10, "Strikes before blacklist")
-        self.spin_strikewin = _dspin(1.0, 300.0, 1.0, suffix=" s", decimals=1,
-            tooltip="Strike memory window")
-        self.spin_decodeto = _dspin(0.05, 5.0, 0.01, suffix=" s", decimals=3,
-            tooltip="No-decode watchdog before the track is dropped")
-        self.spin_hist = _ispin(2, 50, "Photometry history length")
-        val_grid.addWidget(self._label("Score Min"), 0, 0)
-        val_grid.addWidget(self.spin_score, 0, 1)
-        val_grid.addWidget(self._label("Strikes → Blacklist"), 1, 0)
-        val_grid.addWidget(self.spin_strikes, 1, 1)
-        val_grid.addWidget(self._label("Strike Window"), 2, 0)
-        val_grid.addWidget(self.spin_strikewin, 2, 1)
-        val_grid.addWidget(self._label("Decode Timeout"), 3, 0)
-        val_grid.addWidget(self.spin_decodeto, 3, 1)
-        val_grid.addWidget(self._label("History N"), 4, 0)
-        val_grid.addWidget(self.spin_hist, 4, 1)
-        root.addWidget(val_box)
+        # ========== PRIMARY: LOST & REACQ ==========
+        lr_box, lr_grid = self._make_group("LOST & REACQUISITION — Primary")
+        self.spin_lost_unc = _dspin(1.0, 100.0, 1.0, suffix=" px", decimals=1, tooltip="Lost if uncertainty > this")
+        self.spin_lost_t = _dspin(0.05, 5.0, 0.05, suffix=" s", decimals=2, tooltip="Lost if time since meas > this (AND with uncertainty)")
+        self.combo_reacq = QComboBox()
+        self.combo_reacq.addItems(list(_REACQ_PRESETS.keys()) + ["Custom"])
+        self.combo_reacq.setToolTip("Escalation ladder radii (px)")
+        self.chk_full_scan = QCheckBox("Full-scan fallback")
+        self.chk_full_scan.setToolTip("After ladder, fall back to 20-cell raster")
+        self.chk_full_scan.setStyleSheet("color:#374151; font-size:11px;")
+        self.edit_reacq = QLineEdit("50, 100, 200, 400, 800")
+        self.edit_reacq.setPlaceholderText("50, 100, 200, 400, 800")
+        self.edit_reacq.setToolTip("Custom radii csv (px) — pick 'Custom' to edit")
+        lr_grid.addWidget(self._label("Lost Unc"), 0, 0)
+        lr_grid.addWidget(self.spin_lost_unc, 0, 1)
+        lr_grid.addWidget(self._label("Lost Time"), 0, 2)
+        lr_grid.addWidget(self.spin_lost_t, 0, 3)
+        lr_grid.addWidget(self._label("Reacq Ladder"), 1, 0)
+        lr_grid.addWidget(self.combo_reacq, 1, 1)
+        lr_grid.addWidget(self.chk_full_scan, 1, 2, 1, 2)
+        lr_grid.addWidget(self.edit_reacq, 2, 0, 1, 4)
+        root.addWidget(lr_box)
 
-        # 3. TRACKING (association + loss, §7.1).
-        trk_box, trk_grid = self._make_group("TRACKING — association & loss")
-        self.spin_gate = _dspin(1.0, 200.0, 1.0, suffix=" px", decimals=1,
-            tooltip="Max jump from last centroid to associate")
-        self.spin_losses = _ispin(1, 50, "Consecutive misses before track loss")
-        self.spin_nodet = _dspin(0.05, 2.0, 0.01, suffix=" s", decimals=3,
-            tooltip="Time-based loss threshold")
-        trk_grid.addWidget(self._label("Associate Gate"), 0, 0)
-        trk_grid.addWidget(self.spin_gate, 0, 1)
-        trk_grid.addWidget(self._label("Loss After Misses"), 1, 0)
-        trk_grid.addWidget(self.spin_losses, 1, 1)
-        trk_grid.addWidget(self._label("Max No-Detection Time"), 2, 0)
-        trk_grid.addWidget(self.spin_nodet, 2, 1)
-        root.addWidget(trk_box)
+        # ========== PRIMARY: SELECTOR ==========
+        sel_box, sel_grid = self._make_group("SELECTOR — Primary")
+        self.combo_policy = QComboBox()
+        self.combo_policy.addItems(["priority", "strongest_prx", "highest_snr"])
+        self.combo_policy.setToolTip("Active target policy")
+        self.edit_priority = QLineEdit("")
+        self.edit_priority.setPlaceholderText("Priority TID order: RT-001, RT-002, … (empty = formation order)")
+        self.edit_priority.setToolTip("Mission priority list (comma-separated TID, index 0 = highest)")
+        sel_grid.addWidget(self._label("Policy"), 0, 0)
+        sel_grid.addWidget(self.combo_policy, 0, 1)
+        sel_grid.addWidget(self._label("Priority Order"), 1, 0)
+        sel_grid.addWidget(self.edit_priority, 1, 1)
+        root.addWidget(sel_box)
 
-        # 4. MOTION MODEL (α-β filter, §7.3).
-        mot_box, mot_grid = self._make_group("MOTION MODEL — α-β filter")
-        self.spin_alpha = _dspin(0.0, 1.0, 0.01, tooltip="Position gain α")
-        self.spin_beta = _dspin(0.0, 1.0, 0.01, tooltip="Velocity gain β")
-        self.spin_growth = _dspin(0.0, 20.0, 0.1, suffix=" px", decimals=1,
-            tooltip="Uncertainty growth per coasted frame")
-        self.spin_cap = _dspin(1.0, 100.0, 1.0, suffix=" px", decimals=1,
-            tooltip="Uncertainty cap (prediction search cap)")
-        mot_grid.addWidget(self._label("Alpha"), 0, 0)
-        mot_grid.addWidget(self.spin_alpha, 0, 1)
-        mot_grid.addWidget(self._label("Beta"), 1, 0)
-        mot_grid.addWidget(self.spin_beta, 1, 1)
-        mot_grid.addWidget(self._label("Uncertainty Growth"), 2, 0)
-        mot_grid.addWidget(self.spin_growth, 2, 1)
-        mot_grid.addWidget(self._label("Uncertainty Cap"), 3, 0)
-        mot_grid.addWidget(self.spin_cap, 3, 1)
-        root.addWidget(mot_box)
+        # ========== ADVANCED (collapsed) ==========
+        self.chk_advanced = QCheckBox("Show advanced (Kalman · gating · dwell · R scales)")
+        self.chk_advanced.setStyleSheet("color:#4b5563; font-size:11px; font-weight:600;")
+        root.addWidget(self.chk_advanced)
+        self.advanced_widget = QWidget()
+        adv = QVBoxLayout(self.advanced_widget)
+        adv.setContentsMargins(0, 0, 0, 0)
+        adv.setSpacing(10)
 
-        # 5. SCAN (schedule, §4).
-        scn_box, scn_grid = self._make_group("SCAN — search schedule")
-        self.spin_dwell = _ispin(1, 30, "Frames per cell for photometry")
-        self.spin_decdwell = _ispin(1, 30, "Extended dwell on decoding candidate")
-        self.combo_pattern = QComboBox()
-        self.combo_pattern.addItems(["RASTER", "SPIRAL", "SECTOR"])
-        self.combo_pattern.setToolTip("Systematic sweep order (§4.2)")
-        scn_grid.addWidget(self._label("Dwell Frames"), 0, 0)
-        scn_grid.addWidget(self.spin_dwell, 0, 1)
-        scn_grid.addWidget(self._label("Decoding Dwell"), 1, 0)
-        scn_grid.addWidget(self.spin_decdwell, 1, 1)
-        scn_grid.addWidget(self._label("Pattern"), 2, 0)
-        scn_grid.addWidget(self.combo_pattern, 2, 1)
-        scn_grid.addWidget(
-            self._hint("Scan start cell lives under Camera & PTZ → Starting Positions."),
-            3, 0, 1, 2,
-        )
-        root.addWidget(scn_box)
+        # Advanced: dwell + peak/area
+        adv_s_box, adv_s_grid = self._make_group("SEARCH — Advanced")
+        self.spin_dwell = _ispin(1, 10, tooltip="Frames per cell")
+        self.spin_ext_dwell = _ispin(1, 30, tooltip="Extended dwell on P_rx candidate")
+        self.spin_margin = _dspin(0.0, 50.0, 1.0, decimals=1, tooltip="Peak above background (threshold = bg + margin)")
+        self.spin_min_area = _ispin(1, 100, tooltip="Min spot area")
+        self.spin_max_area = _ispin(10, 10000, tooltip="Max spot area")
+        adv_s_grid.addWidget(self._label("Dwell"), 0, 0)
+        adv_s_grid.addWidget(self.spin_dwell, 0, 1)
+        adv_s_grid.addWidget(self._label("Ext Dwell"), 0, 2)
+        adv_s_grid.addWidget(self.spin_ext_dwell, 0, 3)
+        adv_s_grid.addWidget(self._label("Peak Margin"), 1, 0)
+        adv_s_grid.addWidget(self.spin_margin, 1, 1)
+        adv_s_grid.addWidget(self._label("Min Area"), 1, 2)
+        adv_s_grid.addWidget(self.spin_min_area, 1, 3)
+        adv_s_grid.addWidget(self._label("Max Area"), 2, 0)
+        adv_s_grid.addWidget(self.spin_max_area, 2, 1)
+        adv.addWidget(adv_s_box)
 
-        # 6. RE-ACQUISITION (escalation ladder, §8).
-        rea_box, rea_grid = self._make_group("RE-ACQUISITION — escalation ladder")
-        self.spin_initr = _dspin(10.0, 500.0, 5.0, suffix=" px", decimals=0,
-            tooltip="Initial search radius around prediction")
-        self.spin_stepr = _dspin(1.0, 200.0, 1.0, suffix=" px", decimals=0,
-            tooltip="Radius growth per frame")
-        self.spin_maxr = _dspin(50.0, 1500.0, 10.0, suffix=" px", decimals=0,
-            tooltip="Radius cap before standby-pool escalation")
-        self.spin_conftime = _dspin(0.1, 5.0, 0.01, suffix=" s", decimals=3,
-            tooltip="Provisional-confirm watchdog (2 beacon periods)")
-        self.spin_maxstandby = _ispin(1, 10, "Standby candidates tried before priority scan")
-        rea_grid.addWidget(self._label("Initial Radius"), 0, 0)
-        rea_grid.addWidget(self.spin_initr, 0, 1)
-        rea_grid.addWidget(self._label("Radius Step"), 1, 0)
-        rea_grid.addWidget(self.spin_stepr, 1, 1)
-        rea_grid.addWidget(self._label("Max Radius"), 2, 0)
-        rea_grid.addWidget(self.spin_maxr, 2, 1)
-        rea_grid.addWidget(self._label("Confirm Timeout"), 3, 0)
-        rea_grid.addWidget(self.spin_conftime, 3, 1)
-        rea_grid.addWidget(self._label("Max Standby Attempts"), 4, 0)
-        rea_grid.addWidget(self.spin_maxstandby, 4, 1)
-        root.addWidget(rea_box)
+        # Advanced: Kalman & gating
+        k_box, k_grid = self._make_group("TRACKING — Kalman & Association — Advanced")
+        self.spin_q = _dspin(1e-6, 100.0, 1.0, decimals=2, tooltip="Process noise Q")
+        self.spin_r = _dspin(1e-6, 100.0, 1.0, decimals=2, tooltip="R base")
+        self.spin_r_low = _dspin(1.0, 20.0, 0.5, decimals=2, tooltip="R scale when SNR poor (×)")
+        self.spin_r_high = _dspin(0.05, 1.0, 0.05, decimals=2, tooltip="R scale when SNR high (×, <1)")
+        self.spin_gate_px = _dspin(1.0, 200.0, 1.0, suffix=" px", decimals=1, tooltip="Fixed gate (acquisition only) — Mahalanobis is tracking gate")
+        self.spin_mahal = _dspin(0.5, 20.0, 0.5, decimals=2, tooltip="Mahal d² threshold (9.21 = χ² 99% 2-dof)")
+        k_grid.addWidget(self._label("Process Q"), 0, 0)
+        k_grid.addWidget(self.spin_q, 0, 1)
+        k_grid.addWidget(self._label("Meas R Base"), 0, 2)
+        k_grid.addWidget(self.spin_r, 0, 3)
+        k_grid.addWidget(self._label("R scale Low SNR"), 1, 0)
+        k_grid.addWidget(self.spin_r_low, 1, 1)
+        k_grid.addWidget(self._label("R scale High SNR"), 1, 2)
+        k_grid.addWidget(self.spin_r_high, 1, 3)
+        k_grid.addWidget(self._label("Fixed Gate"), 2, 0)
+        k_grid.addWidget(self.spin_gate_px, 2, 1)
+        k_grid.addWidget(self._label("Mahal Thresh"), 2, 2)
+        k_grid.addWidget(self.spin_mahal, 2, 3)
+        adv.addWidget(k_box)
 
-        # 7. AUTONOMY SUPERVISOR + STANDBY POOL (§6, §9).
-        sup_box, sup_grid = self._make_group("AUTONOMY — supervisor & standby")
-        self.spin_maxreset = _ispin(1, 10, "Full resets allowed per window")
-        self.spin_resetwin = _dspin(10.0, 3600.0, 10.0, suffix=" s", decimals=0,
-            tooltip="Reset rate-limit window")
-        self.spin_watchdog = _dspin(0.1, 5.0, 0.01, suffix=" s", decimals=3,
-            tooltip="Decoding watchdog (2 beacon periods)")
-        self.spin_recheck = _ispin(1, 300, "Frames between in-track signature re-checks")
-        self.spin_sb_age = _dspin(1.0, 120.0, 1.0, suffix=" s", decimals=0,
-            tooltip="Standby candidate retention")
-        self.spin_sb_size = _ispin(1, 64, "Standby pool cap (best-by-score kept)")
-        sup_grid.addWidget(self._label("Max Resets / Window"), 0, 0)
-        sup_grid.addWidget(self.spin_maxreset, 0, 1)
-        sup_grid.addWidget(self._label("Reset Window"), 1, 0)
-        sup_grid.addWidget(self.spin_resetwin, 1, 1)
-        sup_grid.addWidget(self._label("Decoding Watchdog"), 2, 0)
-        sup_grid.addWidget(self.spin_watchdog, 2, 1)
-        sup_grid.addWidget(self._label("In-Track Recheck"), 3, 0)
-        sup_grid.addWidget(self.spin_recheck, 3, 1)
-        sup_grid.addWidget(self._label("Standby Max Age"), 4, 0)
-        sup_grid.addWidget(self.spin_sb_age, 4, 1)
-        sup_grid.addWidget(self._label("Standby Max Size"), 5, 0)
-        sup_grid.addWidget(self.spin_sb_size, 5, 1)
-        root.addWidget(sup_box)
+        # Advanced: Coast (legacy, consolidated with Lost in Primary)
+        c_box, c_grid = self._make_group("COAST — Advanced (legacy)")
+        self.spin_coast_unc = _dspin(1.0, 100.0, 1.0, suffix=" px", decimals=1)
+        self.spin_coast_t = _dspin(0.05, 5.0, 0.05, suffix=" s", decimals=2)
+        c_grid.addWidget(self._label("Coast Unc"), 0, 0)
+        c_grid.addWidget(self.spin_coast_unc, 0, 1)
+        c_grid.addWidget(self._label("Coast Time"), 0, 2)
+        c_grid.addWidget(self.spin_coast_t, 0, 3)
+        c_grid.addWidget(self._hint("Coast is internal; Lost (Primary) is the operator gate (AND)."), 1, 0, 1, 4)
+        adv.addWidget(c_box)
+
+        self.advanced_widget.setVisible(False)
+        adv.addStretch(1)
+        root.addWidget(self.advanced_widget)
+        self.chk_advanced.toggled.connect(self.advanced_widget.setVisible)
+
         root.addStretch(1)
 
         for w in self._watched_widgets():
             if isinstance(w, QComboBox):
                 w.currentIndexChanged.connect(self._on_changed)
+            elif isinstance(w, QCheckBox):
+                w.toggled.connect(self._on_changed)
+            elif isinstance(w, QLineEdit):
+                w.editingFinished.connect(self._on_changed)
             else:
                 try:
                     w.valueChanged.connect(self._on_changed)
                 except AttributeError:
                     pass
+        self.combo_reacq.currentIndexChanged.connect(self._on_reacq_preset)
+        self.edit_priority.editingFinished.connect(self._on_changed)
 
     def _watched_widgets(self):
-        return [
-            self.spin_peak, self.spin_sigma, self.spin_r2, self.spin_snr,
-            self.spin_isolation, self.spin_bg, self.spin_maxcand,
-            self.spin_score, self.spin_strikes, self.spin_strikewin,
-            self.spin_decodeto, self.spin_hist,
-            self.spin_gate, self.spin_losses, self.spin_nodet,
-            self.spin_alpha, self.spin_beta, self.spin_growth, self.spin_cap,
-            self.spin_dwell, self.spin_decdwell, self.combo_pattern,
-            self.spin_initr, self.spin_stepr, self.spin_maxr,
-            self.spin_conftime, self.spin_maxstandby,
-            self.spin_maxreset, self.spin_resetwin, self.spin_watchdog,
-            self.spin_recheck, self.spin_sb_age, self.spin_sb_size,
+        # Include every config-bound widget for wiring + blockSignals
+        base = [
+            self.combo_search, self.spin_scan_start,
+            self.spin_snr, self.spin_confirm, self.spin_p_rx,
+            self.spin_lost_unc, self.spin_lost_t, self.combo_reacq, self.chk_full_scan, self.edit_reacq,
+            self.combo_policy, self.edit_priority,
+            # advanced
+            self.spin_dwell, self.spin_ext_dwell, self.spin_margin, self.spin_min_area, self.spin_max_area,
+            self.spin_q, self.spin_r, self.spin_r_low, self.spin_r_high, self.spin_gate_px, self.spin_mahal,
+            self.spin_coast_unc, self.spin_coast_t,
         ]
+        return base
 
-    # -- config ------------------------------------------------------
-    def collect_config(self) -> LocalTerminalConfig:
-        from local_terminal.detector import DetectorConfig
-        from local_terminal.motion import AlphaBetaConfig
-        from local_terminal.reacquisition import ReacquisitionConfig
-        from local_terminal.scan import ScanConfig
-        from local_terminal.supervisor import SupervisorConfig
-        from local_terminal.tracker import TrackerConfig
-        from local_terminal.validator import ValidationConfig
+    def _on_reacq_preset(self, idx: int):
+        if self._updating:
+            return
+        name = self.combo_reacq.currentText()
+        if name in _REACQ_PRESETS:
+            self.edit_reacq.setText(", ".join(str(int(v)) for v in _REACQ_PRESETS[name]))
+            self.edit_reacq.setEnabled(False)
+        else:
+            self.edit_reacq.setEnabled(True)
+        self._on_changed()
 
-        cfg = LocalTerminalConfig(
-            detector=DetectorConfig(
-                peak_min=float(self.spin_peak.value()),
-                sigma_min_px=float(self.spin_sigma.value()),
-                r2_min=float(self.spin_r2.value()),
-                snr_min_db=float(self.spin_snr.value()),
-                isolation_px=float(self.spin_isolation.value()),
-                bg_annulus_px=int(self.spin_bg.value()),
-                max_candidates=int(self.spin_maxcand.value()),
-            ),
-            tracker=TrackerConfig(
-                associate_gate_px=float(self.spin_gate.value()),
-                loss_after_misses=int(self.spin_losses.value()),
-                max_no_detection_time_s=float(self.spin_nodet.value()),
-            ),
-            motion=AlphaBetaConfig(
-                alpha=float(self.spin_alpha.value()),
-                beta=float(self.spin_beta.value()),
-                uncertainty_growth_px=float(self.spin_growth.value()),
-                uncertainty_cap_px=float(self.spin_cap.value()),
-            ),
-            validation=ValidationConfig(
-                score_min=float(self.spin_score.value()),
-                strikes_to_blacklist=int(self.spin_strikes.value()),
-                strike_window_s=float(self.spin_strikewin.value()),
-                decode_timeout_s=float(self.spin_decodeto.value()),
-                history_n=int(self.spin_hist.value()),
-            ),
-            scan=ScanConfig(
-                default_dwell_frames=int(self.spin_dwell.value()),
-                decoding_dwell_frames=int(self.spin_decdwell.value()),
-                pattern=str(self.combo_pattern.currentText()),
-            ),
-            reacquisition=ReacquisitionConfig(
-                initial_radius_px=float(self.spin_initr.value()),
-                radius_step_px=float(self.spin_stepr.value()),
-                max_radius_px=float(self.spin_maxr.value()),
-                confirm_timeout_s=float(self.spin_conftime.value()),
-                max_standby_attempts=int(self.spin_maxstandby.value()),
-            ),
-            supervisor=SupervisorConfig(
-                max_resets_per_window=int(self.spin_maxreset.value()),
-                reset_window_s=float(self.spin_resetwin.value()),
-                decoding_watchdog_s=float(self.spin_watchdog.value()),
-                in_track_recheck_interval=int(self.spin_recheck.value()),
-            ),
-            standby_max_age_s=float(self.spin_sb_age.value()),
-            standby_max_size=int(self.spin_sb_size.value()),
+    def collect_config(self) -> AutonomyConfig:
+        # Reacq radii: preset or custom csv
+        name = self.combo_reacq.currentText()
+        if name in _REACQ_PRESETS:
+            radii = list(_REACQ_PRESETS[name])
+        else:
+            try:
+                radii = [float(x.strip()) for x in self.edit_reacq.text().split(",") if x.strip()]
+                if not radii:
+                    radii = [50.0, 100.0, 200.0, 400.0, 800.0]
+            except (TypeError, ValueError):
+                radii = [50.0, 100.0, 200.0, 400.0, 800.0]
+        # p_rx displayed as mW
+        # priority csv -> list
+        prio = [x.strip() for x in self.edit_priority.text().split(",") if x.strip()]
+        cfg = AutonomyConfig(
+            search_pattern=str(self.combo_search.currentText()),
+            search_dwell_frames=int(self.spin_dwell.value()),
+            search_extended_dwell_frames=int(self.spin_ext_dwell.value()),
+            search_start_index=int(self.spin_scan_start.value()),
+            candidate_min_snr_db=float(self.spin_snr.value()),
+            candidate_peak_margin=float(self.spin_margin.value()),
+            candidate_confirm_frames=int(self.spin_confirm.value()),
+            candidate_min_area_px=int(self.spin_min_area.value()),
+            candidate_max_area_px=int(self.spin_max_area.value()),
+            association_gate_px=float(self.spin_gate_px.value()),
+            association_mahal_threshold=float(self.spin_mahal.value()),
+            kalman_process_noise_q=float(self.spin_q.value()),
+            kalman_measurement_noise_r_base=float(self.spin_r.value()),
+            kalman_r_scale_low_snr=float(self.spin_r_low.value()),
+            kalman_r_scale_high_snr=float(self.spin_r_high.value()),
+            coast_max_uncertainty_px=float(self.spin_coast_unc.value()),
+            coast_timeout_s=float(self.spin_coast_t.value()),
+            lost_uncertainty_threshold_px=float(self.spin_lost_unc.value()),
+            lost_timeout_s=float(self.spin_lost_t.value()),
+            reacq_radii_px=radii,
+            reacq_full_scan_enabled=bool(self.chk_full_scan.isChecked()),
+            active_target_policy=str(self.combo_policy.currentText()),
+            mission_priority=prio,
+            p_rx_threshold_w=float(self.spin_p_rx.value()) / 1000.0,
         )
         return cfg.validate()
 
-    def set_config(self, cfg: LocalTerminalConfig, emit: bool = False) -> None:
-        cfg = cfg.validate()
+    def set_config(self, cfg, emit: bool = False) -> None:
+        try:
+            if hasattr(cfg, "detector"):
+                from local_terminal.models import AutonomyConfig as _AC
+                cfg = _AC().validate()
+            else:
+                cfg = cfg.validate()
+        except Exception:
+            from local_terminal.models import AutonomyConfig as _AC
+            cfg = _AC().validate()
         self._config = copy.deepcopy(cfg)
         self._updating = True
         try:
             for w in self._watched_widgets():
                 w.blockSignals(True)
-            d = cfg.detector
-            self.spin_peak.setValue(float(d.peak_min))
-            self.spin_sigma.setValue(float(d.sigma_min_px))
-            self.spin_r2.setValue(float(d.r2_min))
-            self.spin_snr.setValue(float(d.snr_min_db))
-            self.spin_isolation.setValue(float(d.isolation_px))
-            self.spin_bg.setValue(int(d.bg_annulus_px))
-            self.spin_maxcand.setValue(int(d.max_candidates))
-            v = cfg.validation
-            self.spin_score.setValue(float(v.score_min))
-            self.spin_strikes.setValue(int(v.strikes_to_blacklist))
-            self.spin_strikewin.setValue(float(v.strike_window_s))
-            self.spin_decodeto.setValue(float(v.decode_timeout_s))
-            self.spin_hist.setValue(int(v.history_n))
-            t = cfg.tracker
-            self.spin_gate.setValue(float(t.associate_gate_px))
-            self.spin_losses.setValue(int(t.loss_after_misses))
-            self.spin_nodet.setValue(float(t.max_no_detection_time_s))
-            m = cfg.motion
-            self.spin_alpha.setValue(float(m.alpha))
-            self.spin_beta.setValue(float(m.beta))
-            self.spin_growth.setValue(float(m.uncertainty_growth_px))
-            self.spin_cap.setValue(float(m.uncertainty_cap_px))
-            s = cfg.scan
-            self.spin_dwell.setValue(int(s.default_dwell_frames))
-            self.spin_decdwell.setValue(int(s.decoding_dwell_frames))
-            idx = self.combo_pattern.findText(str(s.pattern).upper())
-            self.combo_pattern.setCurrentIndex(max(0, idx))
-            r = cfg.reacquisition
-            self.spin_initr.setValue(float(r.initial_radius_px))
-            self.spin_stepr.setValue(float(r.radius_step_px))
-            self.spin_maxr.setValue(float(r.max_radius_px))
-            self.spin_conftime.setValue(float(r.confirm_timeout_s))
-            self.spin_maxstandby.setValue(int(r.max_standby_attempts))
-            sup = cfg.supervisor
-            self.spin_maxreset.setValue(int(sup.max_resets_per_window))
-            self.spin_resetwin.setValue(float(sup.reset_window_s))
-            self.spin_watchdog.setValue(float(sup.decoding_watchdog_s))
-            self.spin_recheck.setValue(int(sup.in_track_recheck_interval))
-            self.spin_sb_age.setValue(float(cfg.standby_max_age_s))
-            self.spin_sb_size.setValue(int(cfg.standby_max_size))
+            self.spin_dwell.setValue(int(cfg.search_dwell_frames))
+            self.spin_ext_dwell.setValue(int(cfg.search_extended_dwell_frames))
+            self.spin_scan_start.setValue(int(getattr(cfg, "search_start_index", 0)))
+            idx = self.combo_search.findText(str(cfg.search_pattern))
+            self.combo_search.setCurrentIndex(max(0, idx))
+            self.spin_snr.setValue(float(cfg.candidate_min_snr_db))
+            self.spin_margin.setValue(float(cfg.candidate_peak_margin))
+            self.spin_confirm.setValue(int(cfg.candidate_confirm_frames))
+            self.spin_min_area.setValue(int(cfg.candidate_min_area_px))
+            self.spin_max_area.setValue(int(cfg.candidate_max_area_px))
+            self.spin_q.setValue(float(cfg.kalman_process_noise_q))
+            self.spin_r.setValue(float(cfg.kalman_measurement_noise_r_base))
+            self.spin_r_low.setValue(float(getattr(cfg, "kalman_r_scale_low_snr", 6.0)))
+            self.spin_r_high.setValue(float(getattr(cfg, "kalman_r_scale_high_snr", 0.5)))
+            self.spin_gate_px.setValue(float(cfg.association_gate_px))
+            self.spin_mahal.setValue(float(cfg.association_mahal_threshold))
+            self.spin_coast_unc.setValue(float(cfg.coast_max_uncertainty_px))
+            self.spin_coast_t.setValue(float(cfg.coast_timeout_s))
+            self.spin_lost_unc.setValue(float(cfg.lost_uncertainty_threshold_px))
+            self.spin_lost_t.setValue(float(cfg.lost_timeout_s))
+            # reacq preset or custom
+            radii = list(cfg.reacq_radii_px or [50.0, 100.0, 200.0, 400.0, 800.0])
+            matched = None
+            for k, v in _REACQ_PRESETS.items():
+                if radii == v:
+                    matched = k
+                    break
+            if matched is not None:
+                self.combo_reacq.setCurrentText(matched)
+                self.edit_reacq.setText(", ".join(str(int(v)) for v in radii))
+                self.edit_reacq.setEnabled(False)
+            else:
+                idx = self.combo_reacq.findText("Custom")
+                if idx >= 0:
+                    self.combo_reacq.setCurrentIndex(idx)
+                self.edit_reacq.setText(", ".join(str(int(v)) for v in radii))
+                self.edit_reacq.setEnabled(True)
+            self.chk_full_scan.setChecked(bool(cfg.reacq_full_scan_enabled))
+            self.spin_p_rx.setValue(float(cfg.p_rx_threshold_w) * 1000.0)
+            idx2 = self.combo_policy.findText(str(cfg.active_target_policy))
+            self.combo_policy.setCurrentIndex(max(0, idx2))
+            try:
+                prio = getattr(cfg, "mission_priority", []) or []
+                self.edit_priority.setText(", ".join(str(x) for x in prio))
+            except Exception:
+                pass
         finally:
             for w in self._watched_widgets():
                 w.blockSignals(False)
@@ -376,9 +363,9 @@ class LocalTerminalPanel(BaseConfigPanel):
             self._emit_config()
 
     def reset_to_defaults(self) -> None:
-        self.set_config(make_default_local_terminal(), emit=True)
+        from local_terminal.models import AutonomyConfig
+        self.set_config(AutonomyConfig().validate(), emit=True)
 
-    # -- internals ---------------------------------------------------
     def _on_changed(self) -> None:
         if self._updating:
             return

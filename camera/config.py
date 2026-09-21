@@ -50,16 +50,6 @@ class CameraConfig(BaseValidatedConfig):
                                          # (quantized+noisy) angles instead of
                                          # true angles (Plan Stage 2)
 
-    # Expected Payload (local-terminal beacon expectations, Plan §3.1).
-    # Configures which remote-terminal beacon payload the local terminal
-    # accepts: TID allow-list seed, carrier wavelength + tolerance, nav
-    # requirement, and self-ID for loopback-fault detection.
-    expected_tid: str = "RT-001"
-    expected_wavelength_nm: float = 1550.0
-    expected_wl_tolerance_nm: float = 50.0
-    expected_require_nav: bool = False
-    local_id: str = ""                   # Self-ID; empty = loopback check disabled
-
     # Custom Starting Positions (all agents).
     # Camera gimbal start pose + local-terminal scan-grid start cell.
     # (Remote-terminal formation start offsets live on RemoteFormationConfig.)
@@ -103,12 +93,15 @@ class CameraConfig(BaseValidatedConfig):
         self.start_pan_deg = max(p_min, min(float(self.start_pan_deg), p_max))
         self.start_tilt_deg = max(t_min, min(float(self.start_tilt_deg), t_max))
         self.scan_start_index = int(max(0, min(int(self.scan_start_index), 19)))
-        # Sanitize expected-payload strings.
-        self.expected_tid = str(self.expected_tid or "").strip() or "RT-001"
-        self.local_id = str(self.local_id or "").strip()
         self.use_custom_start = bool(self.use_custom_start)
-        self.expected_require_nav = bool(self.expected_require_nav)
         return self
+
+    def __getattr__(self, name: str):
+        # Backward compat: expected_* moved to mission registry (§19.1)
+        if name in ("expected_tid", "expected_wavelength_nm", "expected_wl_tolerance_nm", "expected_require_nav", "local_id"):
+            defaults = {"expected_tid": "RT-001", "expected_wavelength_nm": 1550.0, "expected_wl_tolerance_nm": 50.0, "expected_require_nav": False, "local_id": ""}
+            return defaults[name]
+        raise AttributeError(name)
 
     def get_initial_pose(self) -> tuple[float, float]:
         """Gimbal pose used on init/reset: custom start or home."""

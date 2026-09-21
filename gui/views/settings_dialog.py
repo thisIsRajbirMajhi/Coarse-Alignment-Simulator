@@ -65,7 +65,7 @@ class SettingsDialog(QDialog):
         title.setStyleSheet("font-size:16px; font-weight:700; color:#ffffff;")
         title_block.addWidget(title)
 
-        sub = QLabel("Remote Terminal • Local Terminal • Environment • Disturbances", header)
+        sub = QLabel("Presets • Remote Terminal • Local Terminal • Environment • Disturbances", header)
         sub.setStyleSheet("font-size:11px; color:#e2e8f0;")
         sub.setWordWrap(True)
         sub.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -151,7 +151,11 @@ class SettingsDialog(QDialog):
         from gui.panels.disturbances_panel import DisturbancesPanel
         from gui.panels.environment_panel import EnvironmentPanel
         from gui.panels.local_terminal_panel import LocalTerminalPanel
+        from gui.panels.presets_panel import PresetsPanel, apply_preset_to_session
         from gui.panels.remote_terminal_panel import RemoteTerminalPanel
+
+        # 0. Presets Panel (testing bundles — collapsible, Apply loads session)
+        self.presets_panel = PresetsPanel()
 
         # 1. Camera & PTZ Panel
         self.camera_panel = CameraPanel(initial=getattr(session, "camera_config", None))
@@ -162,9 +166,9 @@ class SettingsDialog(QDialog):
         # 3. Remote Terminal Panel
         self.remote_panel = RemoteTerminalPanel(initial=session.scenario_config)
 
-        # 4. Local Terminal Panel
+        # 4. Local Terminal Panel (V2 AutonomyConfig)
         self.local_panel = LocalTerminalPanel(
-            initial=getattr(session, "local_terminal_config", None))
+            initial=getattr(session, "autonomy_config", getattr(session, "local_terminal_config", None)))
 
         # 5. Environment Panel
         self.env_panel = EnvironmentPanel(initial=session.env_config)
@@ -173,12 +177,17 @@ class SettingsDialog(QDialog):
         self.dist_panel = DisturbancesPanel(initial=session.disturbance_config)
 
         # Wrap each panel in a scroll area with custom clean background
+        self._add_scrolled_tab(self.presets_panel, "Presets")
         self._add_scrolled_tab(self.remote_panel, "Remote Terminal")
         self._add_scrolled_tab(self.local_panel, "Local Terminal")
         self._add_scrolled_tab(self.env_panel, "Environment")
         self._add_scrolled_tab(self.dist_panel, "Disturbances")
         self._add_scrolled_tab(self.camera_panel, "Camera & PTZ")
         self._add_scrolled_tab(self.controller_panel, "PID Controller")
+
+        # Store helper for apply (session provided at init, may be stale after reset — caller syncs via apply_preset)
+        self._preset_helper = apply_preset_to_session
+        self._preset_session = session
 
         # Connect signals
         self.camera_panel.configChanged.connect(self.cameraChanged.emit)
@@ -187,6 +196,7 @@ class SettingsDialog(QDialog):
         self.local_panel.configChanged.connect(self.localTerminalChanged.emit)
         self.env_panel.configChanged.connect(self.environmentChanged.emit)
         self.dist_panel.configChanged.connect(self.disturbancesChanged.emit)
+        self.presets_panel.applyRequested.connect(self._on_preset_apply)
 
     def _add_scrolled_tab(self, widget: QWidget, title: str) -> None:
         scroll = QScrollArea(self)
@@ -231,8 +241,8 @@ class SettingsDialog(QDialog):
         except Exception as e:
             log.debug("camera/controller reset skipped: %s", e)
         try:
-            from local_terminal.config import make_default_local_terminal
-            self.local_panel.set_config(make_default_local_terminal(), emit=True)
+            from local_terminal.models import AutonomyConfig
+            self.local_panel.set_config(AutonomyConfig().validate(), emit=True)
         except Exception as e:
             log.debug("local terminal reset skipped: %s", e)
         try:
@@ -301,8 +311,40 @@ class SettingsDialog(QDialog):
         """Push current world size into panels (call after world resize)."""
         pass
 
+    def _on_preset_apply(self, preset_id: str) -> None:
+        """Apply preset bundle — via MainWindow bulk (stop→defaults→preset→start) when available."""
+        try:
+            from PyQt5.QtWidgets import QApplication as _QA
+            app = _QA.instance()
+            if app is not None:
+                for w in app.topLevelWidgets():
+                    if hasattr(w, "session") and hasattr(w, "controller") and hasattr(w, "_apply_preset_bulk"):
+                        try:
+                            w._apply_preset_bulk(preset_id)
+                        except Exception as e:
+                            log.warning("preset bulk apply failed: %s", e)
+                        # Bulk swapped in a fresh session — refresh to the live one.
+                        try:
+                            self.sync_from_session(w.session)
+                        except Exception:
+                            pass
+                        return
+        except Exception:
+            pass
+        # Headless/test fallback — no MainWindow bulk, just apply bundle to the dialog's session.
+        sess = getattr(self, "_preset_session", None)
+        if sess is None:
+            log.warning("preset %s not applied: no session", preset_id)
+            return
+        try:
+            self._preset_helper(sess, preset_id)
+            self.sync_from_session(sess)
+        except Exception as e:
+            log.warning("preset %s apply failed: %s", preset_id, e)
+
     def sync_from_session(self, session) -> None:
         """Pull clamped session values back into widgets (no emit, no loops)."""
+        self._preset_session = session
         self.sync_world_bounds(session)
         try:
             if hasattr(session, "camera_config"):
@@ -316,8 +358,9 @@ class SettingsDialog(QDialog):
         except Exception as e:
             log.debug("remote terminal sync skipped: %s", e)
         try:
-            if hasattr(session, "local_terminal_config"):
-                self.local_panel.set_config(session.local_terminal_config, emit=False)
+            cfg = getattr(session, "autonomy_config", getattr(session, "local_terminal_config", None))
+            if cfg is not None:
+                self.local_panel.set_config(cfg, emit=False)
         except Exception as e:
             log.debug("local terminal sync skipped: %s", e)
         try:

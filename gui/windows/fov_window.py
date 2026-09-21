@@ -145,11 +145,12 @@ class FOVWindow(QMainWindow):
 
         if fov_frame is not None:
             try:
-                # Render reticle, tactical target markers, and HUD overlays
+                # Prefer tracker estimate (fov_x/y) like main FOV view; fall back to ground truth only if no tracker.
+                fov_tel = getattr(snapshot, "tracker_telemetry", None) or getattr(snapshot, "terminals", None)
                 overlayed = Renderer.render_viewport(
                     fov_frame,
                     camera=getattr(session, "camera", None),
-                    telemetry=getattr(snapshot, "terminals", None),
+                    telemetry=fov_tel,
                     camera_telemetry=getattr(snapshot, "camera_telemetry", None),
                     pid_telemetry=getattr(snapshot, "pid_telemetry", None),
                 )

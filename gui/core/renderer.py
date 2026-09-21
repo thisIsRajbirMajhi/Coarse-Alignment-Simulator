@@ -189,8 +189,18 @@ class Renderer:
                         color = (74, 222, 128) if is_em else (148, 163, 184)
                         tid = str(active_t.get("id", "RT"))
                         label = f"TRUTH {tid} (ACTIVE)" if is_em else f"TRUTH {tid}"
-                        heading_rad = float(active_t.get("heading_rad", 0.0)) if "heading_rad" in active_t else None
-                        speed = float(active_t.get("velocity_m_s", 0.0)) if "velocity_m_s" in active_t else None
+                        # velocity_mps is (vx, vy) tuple in telemetry; derive heading/speed
+                        vel = active_t.get("velocity_mps")
+                        if isinstance(vel, (list, tuple)) and len(vel) == 2:
+                            try:
+                                vx, vy = float(vel[0]), float(vel[1])
+                                speed = math.hypot(vx, vy)
+                                heading_rad = math.atan2(vy, vx) if speed > 1e-6 else None
+                            except Exception:
+                                heading_rad, speed = None, None
+                        else:
+                            heading_rad = float(active_t.get("heading_rad", 0.0)) if "heading_rad" in active_t else None
+                            speed = float(active_t.get("velocity_m_s", 0.0)) if "velocity_m_s" in active_t else None
                         return (fx, fy, color, label, heading_rad, speed)
 
             return None

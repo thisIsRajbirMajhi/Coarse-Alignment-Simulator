@@ -1,7 +1,6 @@
-# simulation/headless.py - Headless FSOC simulation (no Qt, deterministic, gym-compatible)
+# simulation/headless.py - Headless V2 FSOC simulation (deterministic, V2 FSM only)
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,7 +20,6 @@ from remote_terminal import RemoteTerminalManager, RemoteScenarioConfig, make_de
 
 @dataclass
 class HeadlessConfig:
-    """Aggregated config for HeadlessSimulation - all validated, single source."""
     seed: int = 42
     env: EnvironmentConfig | None = None
     disturbance: DisturbanceConfig | None = None
@@ -34,12 +32,7 @@ class HeadlessConfig:
 
 
 class HeadlessSimulation:
-    """
-    Headless FSOC simulator — deterministic, no Qt.
-
-    Pipeline:
-      scene.update → remote terminals → disturbances → camera FOV capture → PID tracking
-    """
+    """Headless V2 simulator — scene → terminals → disturbances → camera → V2 FSM → PID."""
 
     def __init__(
         self,
@@ -75,11 +68,16 @@ class HeadlessSimulation:
         self.scenario_config = (scenario_config or make_default_scenario()).validate()
         self.camera_config = (camera_config or CameraConfig()).validate()
         self.pid_config = (pid_config or PIDConfig()).validate()
-        local_config = kwargs.get("local_terminal_config") or kwargs.get("local_config")
-        if local_config is None:
-            from local_terminal.config import make_default_local_terminal
-            local_config = make_default_local_terminal()
-        self.local_terminal_config = local_config.validate()
+        autonomy_cfg = kwargs.get("autonomy_config", None)
+        from local_terminal.models import AutonomyConfig as _AC
+        if autonomy_cfg is None:
+            autonomy_cfg = _AC()
+        else:
+            try:
+                autonomy_cfg = autonomy_cfg.validate()
+            except AttributeError:
+                pass
+        self.autonomy_config = autonomy_cfg
 
         self._last_frame: np.ndarray | None = None
         self._last_fov: np.ndarray | None = None
@@ -93,14 +91,21 @@ class HeadlessSimulation:
             DisturbanceContext(self.disturbance_config, rng=self.rng, dt=self.dt),
             bounds=self._scene_size,
         )
-        from local_terminal import AutonomySupervisor, SignatureRegistry
-        self.supervisor = AutonomySupervisor(
+        from local_terminal import SignatureRegistry
+        from local_terminal.supervisor import SupervisorV2
+        self.supervisor = SupervisorV2(
             registry=SignatureRegistry.from_scenario(self.scenario_config),
-            local_config=self.local_terminal_config,
+            autonomy=self.autonomy_config,
         )
+        try:
+            self.supervisor.mission_priority = [
+                str(getattr(t, "terminal_id", "")) for t in
+                getattr(self.scenario_config, "terminals", [])]
+        except (AttributeError, TypeError, ValueError):
+            pass
         self.tracker = self.supervisor.tracker
-        self.comm_rx = self.supervisor.comm_rx
-        self.validator = self.supervisor.validator
+        self.comm_rx = self.supervisor.comm
+        self.validator = self.supervisor.identity
         self._pending_pid_active = False
         self._pending_target_angles = None
 
@@ -108,7 +113,6 @@ class HeadlessSimulation:
         cfg = self.env_config.validate()
         self._scene_size = (int(cfg.world_width), int(cfg.world_height))
         self.scene = Scene(config=cfg)
-
         scene_seed = int(cfg.seed) if cfg.seed is not None else self.seed
         self.remote = RemoteTerminalManager(
             self.scenario_config, bounds=self._scene_size, seed=scene_seed,
@@ -127,14 +131,11 @@ class HeadlessSimulation:
         self._disturbance_pipeline.context.config = dc
         self._disturbance_pipeline.context.rng = self.rng
         self._disturbance_pipeline.context.dt = dt_eff
-
         frame = self.scene.get_frame()
-
         try:
             frame = self.remote.render_spots(frame)
         except (AttributeError, TypeError, ValueError, RuntimeError):
             pass
-
         vig = float(getattr(self.env_config, "vignetting_pct", 0)) / 100.0
         if vig > 1e-3:
             try:
@@ -142,19 +143,13 @@ class HeadlessSimulation:
                 frame = apply_vignetting(frame, vig)
             except (AttributeError, TypeError, ValueError):
                 pass
-
         try:
             from simulation.fov_pipeline import apply_post_noise as _post
-            frame = _post(
-                frame, dc, dt_eff, self.rng, self._disturbance_pipeline,
-                advance=advance,
-            )
+            frame = _post(frame, dc, dt_eff, self.rng, self._disturbance_pipeline, advance=advance)
         except (AttributeError, TypeError, ValueError, RuntimeError):
             frame = dist.apply_turbulence(frame, int(getattr(dc, "turbulence", 0)), dt=dt_eff, rng=self.rng)
-
         return frame
 
-    # Backward compatibility alias
     _capture_fov_frame = _capture_frame
 
     def reset(self, seed: int | None = None) -> dict:
@@ -171,18 +166,25 @@ class HeadlessSimulation:
         self._pending_target_angles = None
         self._pending_target_vel = None
         self._last_disturbed_center = None
-        self._last_val_snr_db = 6.0
-        try:
-            from local_terminal import AutonomySupervisor, SignatureRegistry
-            self.supervisor = AutonomySupervisor(
-                registry=SignatureRegistry.from_scenario(self.scenario_config),
-                local_config=getattr(self, "local_terminal_config", None),
-            )
-            self.tracker = self.supervisor.tracker
-            self.comm_rx = self.supervisor.comm_rx
-            self.validator = self.supervisor.validator
-        except Exception:
-            pass
+        _prev_priority = list(getattr(getattr(self, "supervisor", None), "mission_priority", []) or [])
+        from local_terminal import SignatureRegistry
+        from local_terminal.supervisor import SupervisorV2
+        self.supervisor = SupervisorV2(
+            registry=SignatureRegistry.from_scenario(self.scenario_config),
+            autonomy=getattr(self, "autonomy_config", None),
+        )
+        if _prev_priority:
+            self.supervisor.mission_priority = list(_prev_priority)
+        else:
+            try:
+                self.supervisor.mission_priority = [
+                    str(getattr(t, "terminal_id", "")) for t in
+                    getattr(self.scenario_config, "terminals", [])]
+            except (AttributeError, TypeError, ValueError):
+                pass
+        self.tracker = self.supervisor.tracker
+        self.comm_rx = self.supervisor.comm
+        self.validator = self.supervisor.identity
         try:
             from disturbance.core.state import reset_disturbance_state
             reset_disturbance_state()
@@ -224,7 +226,6 @@ class HeadlessSimulation:
         dt = float(dt if dt is not None else self.dt)
         dt_eff = float(np.clip(dt * self.sim_speed, 1e-4, 0.1))
         self._sim_time_s += dt_eff
-
         try:
             self.scene.update(dt_eff)
         except Exception:
@@ -233,9 +234,6 @@ class HeadlessSimulation:
             self.remote.update(dt_eff)
         except Exception:
             pass
-
-        # -- Camera tracking from the detected image centroid (Plan Stage 1) --
-        # -- Camera tracking from Autonomy Supervisor (Plan.md Stages 1-4) --
         cmd_pan, cmd_tilt = 0.0, 0.0
         if action is not None and len(action) >= 2:
             cmd_pan, cmd_tilt = float(action[0]), float(action[1])
@@ -244,13 +242,10 @@ class HeadlessSimulation:
             ex, ey = self._pending_track_error
             tvx, tvy = self._pending_target_vel or (0.0, 0.0)
             cmd_pan, cmd_tilt = self.controller.compute_from_pixels(
-                error_x_px=ex,
-                error_y_px=ey,
+                error_x_px=ex, error_y_px=ey,
                 deg_per_px_h=self.camera.config.deg_per_px_h,
                 deg_per_px_v=self.camera.config.deg_per_px_v,
-                dt=dt_eff,
-                target_vel_x_px_s=float(tvx),
-                target_vel_y_px_s=float(tvy),
+                dt=dt_eff, target_vel_x_px_s=float(tvx), target_vel_y_px_s=float(tvy),
             )
             self.camera.update(dt_eff, cmd_pan_vel=cmd_pan, cmd_tilt_vel=cmd_tilt)
         elif self._pending_target_angles is not None:
@@ -258,35 +253,40 @@ class HeadlessSimulation:
             self.camera.update(dt_eff)
         else:
             self.camera.update(dt_eff, cmd_pan_vel=0.0, cmd_tilt_vel=0.0)
-
-        # Camera pose disturbances (jitter/vibration/platform/drift) shift
-        # where the camera looks. Disturb the post-update pose so the FOV
-        # matches the fresh gimbal position; this advances pipeline time
-        # once, so the optical/sensor stages below must NOT advance again.
-        # True gimbal state stays clean (observation noise, not motion).
         from simulation.fov_pipeline import apply_jitter as _apply_pose
+        from simulation.fov_pipeline import apply_post_noise as _apply_post
         pipe = self._disturbance_pipeline
         pipe.context.config = self.disturbance_config
         pipe.context.rng = self.rng
         fb = bool(getattr(self.camera_config, "use_measured_feedback", False))
         cx, cy = self.camera.get_fov_center_world(use_measured=fb)
         dcx, dcy = _apply_pose(cx, cy, self.disturbance_config, dt_eff, self.rng, pipeline=pipe)
-
-        frame = self._capture_frame(dt_eff, advance=False)
+        # Capture clean world (no post) — heavy post runs on 640×480 FOV only for real-time.
+        frame_clean = self.scene.get_frame()
+        try:
+            frame_clean = self.remote.render_spots(frame_clean)
+        except Exception:
+            pass
+        try:
+            vig = float(getattr(self.env_config, "vignetting_pct", 0)) / 100.0
+            if vig > 1e-3:
+                from environment.vignetting import apply_vignetting
+                frame_clean = apply_vignetting(frame_clean, vig)
+        except Exception:
+            pass
+        frame = frame_clean
         self._last_frame = frame
-
-        # Render at the disturbed pose.
         fov_frame = self.camera.extract_fov_at(frame, dcx, dcy)
+        try:
+            fov_frame = _apply_post(fov_frame, self.disturbance_config, dt_eff, self.rng, pipe, advance=False)
+        except Exception:
+            pass
         self._last_fov = fov_frame
-
-        # Origin shift for motion model
         if self._last_disturbed_center is None:
             shift = (0.0, 0.0)
         else:
             shift = (dcx - self._last_disturbed_center[0], dcy - self._last_disturbed_center[1])
         self._last_disturbed_center = (dcx, dcy)
-
-        # Autonomy Supervisor cycle (Plan.md §9)
         from local_terminal import CommSource
         sources = []
         for term in getattr(self.remote, "terminals", []):
@@ -295,8 +295,6 @@ class HeadlessSimulation:
                 sources.append(CommSource(
                     position=(float(term.position_m.x), float(term.position_m.y)),
                     emitting=bool(rt.effective_emission_enabled),
-                    # TX high-chip source power BEFORE link losses (Fixes.md
-                    # 3.5) — see gui/application/session.py for rationale.
                     power_w=float(term.config.optical_power_w),
                     chip_at=term.generator.chip_at,
                     pointing_error_deg=float(rt.pointing_error_deg),
@@ -306,24 +304,17 @@ class HeadlessSimulation:
                 ))
             except (AttributeError, TypeError, ValueError):
                 continue
-
         sup_out = self.supervisor.step(
-            fov_frame=fov_frame,
-            dt=dt_eff,
-            sim_time_s=self._sim_time_s,
-            comm_sources=sources,
-            boresight_world=(float(dcx), float(dcy)),
+            fov_frame=fov_frame, dt=dt_eff, sim_time_s=self._sim_time_s,
+            comm_sources=sources, boresight_world=(float(dcx), float(dcy)),
             cam_home=self.camera.get_home(),
             px_per_deg=(self.camera.config.px_per_deg_h, self.camera.config.px_per_deg_v),
-            origin_shift=shift,
-            fov_size=(int(self.camera.fov_width), int(self.camera.fov_height)),
+            origin_shift=shift, fov_size=(int(self.camera.fov_width), int(self.camera.fov_height)),
         )
-
         self._pending_pid_active = sup_out.pid_active
         self._pending_track_error = sup_out.track_error_px
         self._pending_target_angles = sup_out.camera_target_angles
         self._pending_target_vel = getattr(sup_out, "target_vel_px_s", None)
-        # Explicit PTZ homing on full reset (Fixes.md C-04).
         if bool(getattr(sup_out, "camera_reset_requested", False)):
             try:
                 self.camera.reset()
@@ -333,17 +324,14 @@ class HeadlessSimulation:
             self._pending_pid_active = False
             self._pending_target_angles = None
             self._pending_target_vel = None
-
         self.step_count += 1
         reward = 0.0
         terminated = False
         truncated = self.step_count >= self.max_steps
-
         obs = self.get_observation()
         obs["frame"] = frame
         obs["fov_frame"] = fov_frame
         obs["tracker"] = sup_out.telemetry
-
         info = {
             "step_count": self.step_count,
             "camera": self.camera.get_telemetry(),
@@ -357,9 +345,7 @@ class HeadlessSimulation:
     @property
     def observation_space(self):
         w, h = self._scene_size
-        return {
-            "frame": (h, w, 3),
-        }
+        return {"frame": (h, w, 3)}
 
     @property
     def action_space(self):

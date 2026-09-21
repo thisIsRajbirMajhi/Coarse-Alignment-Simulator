@@ -1,4 +1,5 @@
-# gui/panels/camera_panel.py - Camera & PTZ Mechanism Control Deck panel.
+# gui/panels/camera_panel.py - Camera & PTZ Mechanism Control Deck panel (Redesign).
+# Primary = PDF-mandated (FOV + slew rate + presets). Advanced = tuning/debug (collapsible).
 from __future__ import annotations
 
 import logging
@@ -15,6 +16,8 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QSpinBox,
     QVBoxLayout,
+    QWidget,
+    QSlider,
 )
 
 from camera.config import CameraConfig
@@ -26,13 +29,11 @@ log = logging.getLogger(__name__)
 
 class CameraPanel(BaseConfigPanel):
     """
-    Configuration panel for virtual Camera Optics and PTZ Gimbal Mechanism.
-    
-    Provides controls for:
-    - Optical FOV (degrees) and Sensor resolution (fixed 640x480)
-    - Gimbal kinematics: max pan/tilt speeds, accelerations, and limits
-    - Mechanical dynamics: damping, inertia, backlash hysteresis, and encoder noise
-    - Industry standard PAT presets
+    Configuration panel for virtual Camera Optics and PTZ Gimbal.
+    Primary (always visible): FOV, linked slew rate, presets, 640×480 badge.
+    Advanced (collapsed by default): accel, travel limits, damping/backlash/noise,
+                                     measured-feedback, home/start/scan-start, update-rate.
+    All 19 legacy sliders/attrs are retained (hidden) for backward compat & tests.
     """
 
     configChanged = pyqtSignal(object)
@@ -40,6 +41,7 @@ class CameraPanel(BaseConfigPanel):
     def __init__(self, parent=None, initial: CameraConfig | None = None):
         super().__init__(parent)
         self._initial = (initial or CameraConfig()).validate()
+        self._updating_link = False
         self._build_ui()
         self.set_config(self._initial, emit=False)
 
@@ -56,7 +58,6 @@ class CameraPanel(BaseConfigPanel):
         header_row.addWidget(title)
         header_row.addStretch(1)
 
-        # Preset Selector
         preset_lbl = QLabel("Preset:")
         preset_lbl.setStyleSheet("font-size:11px; font-weight:600; color:#4b5563;")
         header_row.addWidget(preset_lbl)
@@ -73,264 +74,272 @@ class CameraPanel(BaseConfigPanel):
         header_row.addWidget(self.btn_reset)
         root.addLayout(header_row)
 
-        desc = QLabel("Virtual PTZ Camera optics, gimbal rate limits, and mechanical dynamics")
+        desc = QLabel("Primary: optics & slew rate  ·  Advanced: dynamics & test knobs")
         desc.setStyleSheet("color:#64748b; font-size:11px;")
         root.addWidget(desc)
 
-        # --- 1. Optics & Viewport Group ---
-        optics_box, optics_grid = self._make_group("CAMERA OPTICS & VIEWPORT")
-        
-        # Horizontal FOV (0.5 .. 30.0 deg)
+        # ========== PRIMARY: OPTICS ==========
+        optics_box, optics_grid = self._make_group("OPTICS — Primary")
         self.slider_fov_h, self.lbl_fov_h, self.factor_fov_h = self._make_float_slider(
-            0.5, 30.0, 4.0, decimals=1, suffix="°", tooltip="Horizontal Field of View (PDF default 4.0°)"
+            0.5, 30.0, 4.0, decimals=1, suffix="°", tooltip="Horizontal FOV (PDF default 4.0°)"
         )
         optics_grid.addWidget(self._label("Horizontal FOV"), 0, 0)
         optics_grid.addWidget(self.slider_fov_h, 0, 1)
         optics_grid.addWidget(self.lbl_fov_h, 0, 2)
 
-        # Vertical FOV (0.5 .. 30.0 deg)
         self.slider_fov_v, self.lbl_fov_v, self.factor_fov_v = self._make_float_slider(
-            0.5, 30.0, 3.0, decimals=1, suffix="°", tooltip="Vertical Field of View (PDF default 3.0°)"
+            0.5, 30.0, 3.0, decimals=1, suffix="°", tooltip="Vertical FOV (PDF default 3.0°)"
         )
         optics_grid.addWidget(self._label("Vertical FOV"), 1, 0)
         optics_grid.addWidget(self.slider_fov_v, 1, 1)
         optics_grid.addWidget(self.lbl_fov_v, 1, 2)
 
-        # Resolution (Fixed 640x480 per requirements)
-        res_label = QLabel("640 × 480 px (Fixed Monochrome)")
+        # Link toggle keeps 4:3 aspect unless expert unlinks.
+        self.chk_fov_link = QCheckBox("🔗 4:3")
+        self.chk_fov_link.setChecked(True)
+        self.chk_fov_link.setToolTip("Link H/V to 4:3 aspect (uncheck for independent)")
+        self.chk_fov_link.setStyleSheet("color:#374151; font-size:11px;")
+        optics_grid.addWidget(self.chk_fov_link, 2, 0, 1, 1)
+        res_label = QLabel("640 × 480 px  ·  Monochrome  ·  30 Hz (fixed)")
         res_label.setStyleSheet("color:#111827; font-weight:700; font-size:11px; padding:2px;")
-        optics_grid.addWidget(self._label("Resolution"), 2, 0)
-        optics_grid.addWidget(res_label, 2, 1)
+        optics_grid.addWidget(res_label, 2, 1, 1, 2)
 
-        # Update Rate (Hz)
+        # Keep update-rate slider for back-compat but HIDE it from Primary;
+        # it lives in Advanced. Create it here so attribute exists for tests.
         self.slider_rate, self.lbl_rate = self._make_int_slider(
-            10, 120, 30, tooltip="Camera capture update rate (≥30 Hz per PDF)"
+            10, 120, 30, tooltip="Camera update rate (fixed 30Hz in Primary)"
         )
-        optics_grid.addWidget(self._label("Update Rate"), 3, 0)
-        optics_grid.addWidget(self.slider_rate, 3, 1)
-        optics_grid.addWidget(self.lbl_rate, 3, 2)
-
+        # not added to optics_grid — will be added to advanced
         root.addWidget(optics_box)
 
-        # --- 2. PTZ Gimbal Kinematics Group ---
-        kin_box, kin_grid = self._make_group("GIMBAL KINEMATICS & LIMITS")
-
-        # Max Pan Speed (0.5 .. 30.0 °/s, PDF default 5.0)
-        self.slider_pan_speed, self.lbl_pan_speed, self.factor_pan_speed = self._make_float_slider(
-            0.5, 30.0, 5.0, decimals=1, suffix=" °/s", tooltip="Maximum pan slewing rate (PDF: 5-10 °/s)"
+        # ========== PRIMARY: GIMBAL ==========
+        gimbal_box, gimbal_grid = self._make_group("GIMBAL — Primary")
+        # Single linked slew rate (drives both pan/tilt); Advanced allows split.
+        self.slider_slew, self.lbl_slew, self.factor_slew = self._make_float_slider(
+            0.5, 30.0, 5.0, decimals=1, suffix=" °/s", tooltip="Slew rate (pan + tilt, PDF 5-10°/s)"
         )
+        self.chk_slew_link = QCheckBox("🔗 Pan/Tilt")
+        self.chk_slew_link.setChecked(True)
+        self.chk_slew_link.setToolTip("Link pan & tilt max speeds (uncheck to tune separately in Advanced)")
+        self.chk_slew_link.setStyleSheet("color:#374151; font-size:11px;")
+        gimbal_grid.addWidget(self._label("Slew Rate"), 0, 0)
+        gimbal_grid.addWidget(self.slider_slew, 0, 1)
+        gimbal_grid.addWidget(self.lbl_slew, 0, 2)
+        gimbal_grid.addWidget(self.chk_slew_link, 1, 0, 1, 3)
+
+        # Keep legacy pan/tilt sliders for back-compat — hide in Advanced later
+        self.slider_pan_speed, self.lbl_pan_speed, self.factor_pan_speed = self._make_float_slider(
+            0.5, 30.0, 5.0, decimals=1, suffix=" °/s", tooltip="Max pan rate"
+        )
+        self.slider_tilt_speed, self.lbl_tilt_speed, self.factor_tilt_speed = self._make_float_slider(
+            0.5, 30.0, 5.0, decimals=1, suffix=" °/s", tooltip="Max tilt rate"
+        )
+        self.slider_pan_accel, self.lbl_pan_accel, self.factor_pan_accel = self._make_float_slider(
+            1.0, 100.0, 25.0, decimals=0, suffix=" °/s²", tooltip="Max pan accel"
+        )
+        self.slider_tilt_accel, self.lbl_tilt_accel, self.factor_tilt_accel = self._make_float_slider(
+            1.0, 100.0, 25.0, decimals=0, suffix=" °/s²", tooltip="Max tilt accel"
+        )
+        self.slider_pan_range, self.lbl_pan_range = self._make_int_slider(10, 180, 90)
+        self.slider_tilt_range, self.lbl_tilt_range = self._make_int_slider(5, 90, 45)
+        root.addWidget(gimbal_box)
+
+        # ========== ADVANCED (collapsed) ==========
+        self.chk_advanced = QCheckBox("Show advanced tuning & test knobs")
+        self.chk_advanced.setStyleSheet("color:#4b5563; font-size:11px; font-weight:600;")
+        root.addWidget(self.chk_advanced)
+
+        self.advanced_widget = QWidget()
+        adv = QVBoxLayout(self.advanced_widget)
+        adv.setContentsMargins(0, 0, 0, 0)
+        adv.setSpacing(10)
+
+        # Accel + Limits (Advanced)
+        kin_box, kin_grid = self._make_group("GIMBAL — Advanced (accel & travel)")
         kin_grid.addWidget(self._label("Max Pan Speed"), 0, 0)
         kin_grid.addWidget(self.slider_pan_speed, 0, 1)
         kin_grid.addWidget(self.lbl_pan_speed, 0, 2)
-
-        # Max Tilt Speed (0.5 .. 30.0 °/s, PDF default 5.0)
-        self.slider_tilt_speed, self.lbl_tilt_speed, self.factor_tilt_speed = self._make_float_slider(
-            0.5, 30.0, 5.0, decimals=1, suffix=" °/s", tooltip="Maximum tilt slewing rate (PDF: 5-10 °/s)"
-        )
         kin_grid.addWidget(self._label("Max Tilt Speed"), 1, 0)
         kin_grid.addWidget(self.slider_tilt_speed, 1, 1)
         kin_grid.addWidget(self.lbl_tilt_speed, 1, 2)
-
-        # Max Pan Accel (1.0 .. 100.0 °/s²)
-        self.slider_pan_accel, self.lbl_pan_accel, self.factor_pan_accel = self._make_float_slider(
-            1.0, 100.0, 25.0, decimals=0, suffix=" °/s²", tooltip="Maximum pan angular acceleration"
-        )
         kin_grid.addWidget(self._label("Max Pan Accel"), 2, 0)
         kin_grid.addWidget(self.slider_pan_accel, 2, 1)
         kin_grid.addWidget(self.lbl_pan_accel, 2, 2)
-
-        # Max Tilt Accel (1.0 .. 100.0 °/s²)
-        self.slider_tilt_accel, self.lbl_tilt_accel, self.factor_tilt_accel = self._make_float_slider(
-            1.0, 100.0, 25.0, decimals=0, suffix=" °/s²", tooltip="Maximum tilt angular acceleration"
-        )
         kin_grid.addWidget(self._label("Max Tilt Accel"), 3, 0)
         kin_grid.addWidget(self.slider_tilt_accel, 3, 1)
         kin_grid.addWidget(self.lbl_tilt_accel, 3, 2)
-
-        # Pan Travel Range (±180°)
-        self.slider_pan_range, self.lbl_pan_range = self._make_int_slider(
-            10, 180, 90, tooltip="Pan travel range (±deg from center)"
-        )
         kin_grid.addWidget(self._label("Pan Range (±)"), 4, 0)
         kin_grid.addWidget(self.slider_pan_range, 4, 1)
         kin_grid.addWidget(self.lbl_pan_range, 4, 2)
-
-        # Tilt Travel Range (±90°)
-        self.slider_tilt_range, self.lbl_tilt_range = self._make_int_slider(
-            5, 90, 45, tooltip="Tilt travel range (±deg from center)"
-        )
         kin_grid.addWidget(self._label("Tilt Range (±)"), 5, 0)
         kin_grid.addWidget(self.slider_tilt_range, 5, 1)
         kin_grid.addWidget(self.lbl_tilt_range, 5, 2)
+        kin_grid.addWidget(self._label("Update Rate"), 6, 0)
+        kin_grid.addWidget(self.slider_rate, 6, 1)
+        kin_grid.addWidget(self.lbl_rate, 6, 2)
+        kin_grid.addWidget(self._hint("Update rate is 30Hz fixed — change only for stress testing."), 7, 0, 1, 3)
+        adv.addWidget(kin_box)
 
-        root.addWidget(kin_box)
-
-        # --- 3. Mechanical Dynamics & Encoders Group ---
-        mech_box, mech_grid = self._make_group("MECHANICAL DYNAMICS & ENCODERS")
-
-        # Backlash (0.0 .. 0.1 deg)
+        # Mechanical
+        mech_box, mech_grid = self._make_group("MECHANICS — Advanced")
         self.slider_backlash, self.lbl_backlash, self.factor_backlash = self._make_float_slider(
-            0.0, 0.1, 0.005, decimals=3, suffix="°", tooltip="Gimbal gear backlash / hysteresis"
+            0.0, 0.1, 0.005, decimals=3, suffix="°", tooltip="Backlash"
         )
         mech_grid.addWidget(self._label("Gear Backlash"), 0, 0)
         mech_grid.addWidget(self.slider_backlash, 0, 1)
         mech_grid.addWidget(self.lbl_backlash, 0, 2)
-
-        # Damping Ratio (0.1 .. 2.0)
         self.slider_damping, self.lbl_damping, self.factor_damping = self._make_float_slider(
-            0.1, 2.0, 0.71, decimals=2, suffix="", tooltip="Damping ratio zeta (1.0 = critical; 0.707 = Butterworth)"
+            0.1, 2.0, 0.71, decimals=2, suffix="", tooltip="Damping ratio"
         )
         mech_grid.addWidget(self._label("Damping Ratio"), 1, 0)
         mech_grid.addWidget(self.slider_damping, 1, 1)
         mech_grid.addWidget(self.lbl_damping, 1, 2)
-
-        # Encoder Noise (0.0 .. 0.02 deg)
         self.slider_noise, self.lbl_noise, self.factor_noise = self._make_float_slider(
-            0.0, 0.02, 0.001, decimals=4, suffix="°", tooltip="Optical encoder 1-sigma angular noise"
+            0.0, 0.02, 0.001, decimals=4, suffix="°", tooltip="Encoder noise"
         )
         mech_grid.addWidget(self._label("Encoder Noise"), 2, 0)
         mech_grid.addWidget(self.slider_noise, 2, 1)
         mech_grid.addWidget(self.lbl_noise, 2, 2)
-
-        # Measured feedback (Plan Stage 2): disturb-pose input from
-        # encoder-measured angles (quantized + noisy) instead of truth.
         self.chk_measured_feedback = QCheckBox("Measured feedback")
-        self.chk_measured_feedback.setToolTip(
-            "Disturb the encoder-measured pose instead of the true pose")
+        self.chk_measured_feedback.setToolTip("Disturb encoder-measured pose instead of truth")
         self.chk_measured_feedback.setStyleSheet("color:#374151; font-size:11px;")
         mech_grid.addWidget(self.chk_measured_feedback, 3, 0, 1, 3)
+        adv.addWidget(mech_box)
 
-        root.addWidget(mech_box)
-
-        # --- 4. Expected Payload (Beacon) Group ---
-        pay_box, pay_grid = self._make_group("EXPECTED PAYLOAD (BEACON)")
-
-        self.edit_expected_tid = QLineEdit("RT-001")
-        self.edit_expected_tid.setToolTip(
-            "Expected beacon Terminal ID — seeded into the local-terminal "
-            "signature registry when the mission file lacks it")
-        pay_grid.addWidget(self._label("Expected TID"), 0, 0)
-        pay_grid.addWidget(self.edit_expected_tid, 0, 1)
-
-        self.spin_expected_wl = QDoubleSpinBox()
-        self.spin_expected_wl.setRange(800.0, 1700.0)
-        self.spin_expected_wl.setSingleStep(1.0)
-        self.spin_expected_wl.setDecimals(0)
-        self.spin_expected_wl.setSuffix(" nm")
-        self.spin_expected_wl.setToolTip(
-            "Expected beacon carrier wavelength (local-terminal registry override)")
-        pay_grid.addWidget(self._label("Expected Wavelength"), 1, 0)
-        pay_grid.addWidget(self.spin_expected_wl, 1, 1)
-
-        self.slider_expected_tol, self.lbl_expected_tol, self.factor_expected_tol = self._make_float_slider(
-            1.0, 200.0, 50.0, decimals=0, suffix=" nm",
-            tooltip="Wavelength match tolerance for validation scoring",
-        )
-        pay_grid.addWidget(self._label("Wavelength Tolerance"), 2, 0)
-        pay_grid.addWidget(self.slider_expected_tol, 2, 1)
-        pay_grid.addWidget(self.lbl_expected_tol, 2, 2)
-
-        self.chk_require_nav = QCheckBox("Require NAV extension")
-        self.chk_require_nav.setToolTip(
-            "Require the 12-byte navigation extension on expected beacons")
-        self.chk_require_nav.setStyleSheet("color:#374151; font-size:11px;")
-        pay_grid.addWidget(self.chk_require_nav, 3, 0, 1, 2)
-
-        self.edit_local_id = QLineEdit("")
-        self.edit_local_id.setPlaceholderText("e.g. LT-001 (empty = disabled)")
-        self.edit_local_id.setToolTip(
-            "Local self-ID for loopback-fault detection (empty disables the check)")
-        pay_grid.addWidget(self._label("Local Self-ID"), 4, 0)
-        pay_grid.addWidget(self.edit_local_id, 4, 1)
-
-        pay_grid.addWidget(
-            self._hint("Seeds/overrides the signature registry built from the mission file."),
-            5, 0, 1, 3,
-        )
-        root.addWidget(pay_box)
-
-        # --- 5. Starting Positions (Camera + Local Terminal) Group ---
-        start_box, start_grid = self._make_group("STARTING POSITIONS (CAMERA + LOCAL)")
-
+        # Starting Positions (Advanced — test harness)
+        start_box, start_grid = self._make_group("STARTING POSITIONS — Advanced (test harness)")
         self.slider_home_pan, self.lbl_home_pan, self.factor_home_pan = self._make_float_slider(
-            -180.0, 180.0, 0.0, decimals=1, suffix="°",
-            tooltip="Gimbal home pan angle (reset reference)",
+            -180.0, 180.0, 0.0, decimals=1, suffix="°", tooltip="Home pan"
         )
         start_grid.addWidget(self._label("Home Pan"), 0, 0)
         start_grid.addWidget(self.slider_home_pan, 0, 1)
         start_grid.addWidget(self.lbl_home_pan, 0, 2)
-
         self.slider_home_tilt, self.lbl_home_tilt, self.factor_home_tilt = self._make_float_slider(
-            -90.0, 90.0, 0.0, decimals=1, suffix="°",
-            tooltip="Gimbal home tilt angle (reset reference)",
+            -90.0, 90.0, 0.0, decimals=1, suffix="°", tooltip="Home tilt"
         )
         start_grid.addWidget(self._label("Home Tilt"), 1, 0)
         start_grid.addWidget(self.slider_home_tilt, 1, 1)
         start_grid.addWidget(self.lbl_home_tilt, 1, 2)
-
         self.slider_start_pan, self.lbl_start_pan, self.factor_start_pan = self._make_float_slider(
-            -180.0, 180.0, 0.0, decimals=1, suffix="°",
-            tooltip="Custom gimbal start pan (used on init/reset when enabled)",
+            -180.0, 180.0, 0.0, decimals=1, suffix="°", tooltip="Start pan"
         )
         start_grid.addWidget(self._label("Start Pan"), 2, 0)
         start_grid.addWidget(self.slider_start_pan, 2, 1)
         start_grid.addWidget(self.lbl_start_pan, 2, 2)
-
         self.slider_start_tilt, self.lbl_start_tilt, self.factor_start_tilt = self._make_float_slider(
-            -90.0, 90.0, 0.0, decimals=1, suffix="°",
-            tooltip="Custom gimbal start tilt (used on init/reset when enabled)",
+            -90.0, 90.0, 0.0, decimals=1, suffix="°", tooltip="Start tilt"
         )
         start_grid.addWidget(self._label("Start Tilt"), 3, 0)
         start_grid.addWidget(self.slider_start_tilt, 3, 1)
         start_grid.addWidget(self.lbl_start_tilt, 3, 2)
-
         self.chk_custom_start = QCheckBox("Use custom start pose on init/reset")
-        self.chk_custom_start.setToolTip(
-            "When checked, the camera starts at Start Pan/Tilt instead of Home")
         self.chk_custom_start.setStyleSheet("color:#374151; font-size:11px;")
         start_grid.addWidget(self.chk_custom_start, 4, 0, 1, 3)
-
-        self.slider_scan_start, self.lbl_scan_start = self._make_int_slider(
-            0, 19, 0, tooltip="Local-terminal scan grid start cell (0..19)"
-        )
+        self.slider_scan_start, self.lbl_scan_start = self._make_int_slider(0, 19, 0)
         start_grid.addWidget(self._label("Scan Start Cell"), 5, 0)
         start_grid.addWidget(self.slider_scan_start, 5, 1)
         start_grid.addWidget(self.lbl_scan_start, 5, 2)
-
         start_grid.addWidget(
-            self._hint("Remote-terminal formation start offsets live under Remote Terminal → Starting Position."),
+            self._hint("Scan start is also in Local Terminal → Search. Camera copy kept for back-compat."),
             6, 0, 1, 3,
         )
-        root.addWidget(start_box)
+        adv.addWidget(start_box)
+
+        self.advanced_widget.setVisible(False)
+        root.addWidget(self.advanced_widget)
+        self.chk_advanced.toggled.connect(self.advanced_widget.setVisible)
+
         root.addStretch(1)
 
-        # Connect change signals — release-gated: valueChanged updates the
-        # pill label (cheap, wired in BaseConfigPanel); the config emits on
-        # sliderReleased or for non-drag changes so a drag coalesces into
-        # one hot-reload apply instead of one per tick.
-        sliders = [
-            self.slider_fov_h, self.slider_fov_v, self.slider_rate,
-            self.slider_pan_speed, self.slider_tilt_speed,
+        # Connect signals — primary + advanced
+        primary_sliders = [self.slider_fov_h, self.slider_fov_v, self.slider_slew]
+        advanced_sliders = [
+            self.slider_rate, self.slider_pan_speed, self.slider_tilt_speed,
             self.slider_pan_accel, self.slider_tilt_accel,
             self.slider_pan_range, self.slider_tilt_range,
             self.slider_backlash, self.slider_damping, self.slider_noise,
-            self.slider_expected_tol,
             self.slider_home_pan, self.slider_home_tilt,
             self.slider_start_pan, self.slider_start_tilt,
             self.slider_scan_start,
         ]
-        for s in sliders:
+        for s in primary_sliders + advanced_sliders:
             s.valueChanged.connect(self._on_control_changed)
             s.sliderReleased.connect(self._on_control_changed)
         self.chk_measured_feedback.toggled.connect(self._on_control_changed)
-        self.chk_require_nav.toggled.connect(self._on_control_changed)
         self.chk_custom_start.toggled.connect(self._on_control_changed)
-        self.spin_expected_wl.valueChanged.connect(self._on_control_changed)
-        self.edit_expected_tid.editingFinished.connect(self._on_control_changed)
-        self.edit_local_id.editingFinished.connect(self._on_control_changed)
+        self.chk_fov_link.toggled.connect(self._on_control_changed)
+        self.chk_slew_link.toggled.connect(self._on_slew_link_toggled)
+        # Link behaviours
+        self.slider_fov_h.valueChanged.connect(self._on_fov_h_changed)
+        self.slider_fov_v.valueChanged.connect(self._on_fov_v_changed)
+        self.slider_slew.valueChanged.connect(self._on_slew_changed)
+        self.slider_pan_speed.valueChanged.connect(self._on_pan_speed_changed)
+        self.slider_tilt_speed.valueChanged.connect(self._on_tilt_speed_changed)
+
+    # --- link handlers ---
+    def _on_fov_h_changed(self, v: int):
+        if self._updating_link or not self.chk_fov_link.isChecked():
+            return
+        # keep 4:3: v_v = v_h * 3/4  (factor same 10)
+        try:
+            v_h = float(v) / self.factor_fov_h
+            target_v = int(round(v_h * 0.75 * self.factor_fov_v))
+            self._updating_link = True
+            self.slider_fov_v.setValue(target_v)
+        finally:
+            self._updating_link = False
+
+    def _on_fov_v_changed(self, v: int):
+        if self._updating_link or not self.chk_fov_link.isChecked():
+            return
+        try:
+            v_v = float(v) / self.factor_fov_v
+            target_h = int(round(v_v * (4.0/3.0) * self.factor_fov_h))
+            self._updating_link = True
+            self.slider_fov_h.setValue(target_h)
+        finally:
+            self._updating_link = False
+
+    def _on_slew_changed(self, v: int):
+        if self._updating_link or not self.chk_slew_link.isChecked():
+            return
+        try:
+            self._updating_link = True
+            self.slider_pan_speed.setValue(int(round(float(v) / self.factor_slew * self.factor_pan_speed)))
+            self.slider_tilt_speed.setValue(int(round(float(v) / self.factor_slew * self.factor_tilt_speed)))
+        finally:
+            self._updating_link = False
+
+    def _on_pan_speed_changed(self, v: int):
+        if self._updating_link:
+            return
+        if self.chk_slew_link.isChecked():
+            try:
+                self._updating_link = True
+                # mirror pan to slew + tilt
+                self.slider_slew.setValue(int(round(float(v) / self.factor_pan_speed * self.factor_slew)))
+                self.slider_tilt_speed.setValue(v)
+            finally:
+                self._updating_link = False
+
+    def _on_tilt_speed_changed(self, v: int):
+        if self._updating_link:
+            return
+        if self.chk_slew_link.isChecked():
+            try:
+                self._updating_link = True
+                self.slider_slew.setValue(int(round(float(v) / self.factor_tilt_speed * self.factor_slew)))
+                self.slider_pan_speed.setValue(v)
+            finally:
+                self._updating_link = False
+
+    def _on_slew_link_toggled(self, checked: bool):
+        if checked:
+            # snap to pan value
+            self._on_slew_changed(self.slider_slew.value())
+        self._on_control_changed()
 
     def _on_control_changed(self) -> None:
-        """Handle live changes from sliders (skipped mid-drag)."""
         try:
             sender = self.sender()
             from PyQt5.QtWidgets import QSlider as _QSlider
@@ -344,17 +353,13 @@ class CameraPanel(BaseConfigPanel):
     def _on_preset_selected(self, name: str) -> None:
         if name in CAMERA_PRESETS:
             preset = CAMERA_PRESETS[name]
-            # Preserve Expected Payload + Starting Positions across presets:
-            # presets only tune optics/kinematics/dynamics.
             try:
                 current = self.collect_config()
             except Exception:
                 current = None
             kwargs = dict(preset)
             if current is not None:
-                for k in ("expected_tid", "expected_wavelength_nm",
-                          "expected_wl_tolerance_nm", "expected_require_nav",
-                          "local_id", "home_pan_deg", "home_tilt_deg",
+                for k in ("home_pan_deg", "home_tilt_deg",
                           "start_pan_deg", "start_tilt_deg", "use_custom_start",
                           "scan_start_index", "use_measured_feedback"):
                     kwargs[k] = getattr(current, k)
@@ -364,15 +369,22 @@ class CameraPanel(BaseConfigPanel):
     def collect_config(self) -> CameraConfig:
         pan_r = float(self.slider_pan_range.value())
         tilt_r = float(self.slider_tilt_range.value())
-
+        # Primary slew drives pan/tilt when linked; otherwise use individual
+        if self.chk_slew_link.isChecked():
+            slew = float(self.slider_slew.value()) / self.factor_slew
+            pan_speed = slew
+            tilt_speed = slew
+        else:
+            pan_speed = float(self.slider_pan_speed.value()) / self.factor_pan_speed
+            tilt_speed = float(self.slider_tilt_speed.value()) / self.factor_tilt_speed
         cfg = CameraConfig(
             fov_deg_h=float(self.slider_fov_h.value()) / self.factor_fov_h,
             fov_deg_v=float(self.slider_fov_v.value()) / self.factor_fov_v,
             resolution_w=640,
             resolution_h=480,
             update_rate_hz=float(self.slider_rate.value()),
-            max_pan_speed_deg_s=float(self.slider_pan_speed.value()) / self.factor_pan_speed,
-            max_tilt_speed_deg_s=float(self.slider_tilt_speed.value()) / self.factor_tilt_speed,
+            max_pan_speed_deg_s=pan_speed,
+            max_tilt_speed_deg_s=tilt_speed,
             max_pan_accel_deg_s2=float(self.slider_pan_accel.value()) / self.factor_pan_accel,
             max_tilt_accel_deg_s2=float(self.slider_tilt_accel.value()) / self.factor_tilt_accel,
             pan_min_deg=-pan_r,
@@ -385,11 +397,6 @@ class CameraPanel(BaseConfigPanel):
             damping_ratio=float(self.slider_damping.value()) / self.factor_damping,
             encoder_noise_deg=float(self.slider_noise.value()) / self.factor_noise,
             use_measured_feedback=bool(self.chk_measured_feedback.isChecked()),
-            expected_tid=str(self.edit_expected_tid.text() or "").strip() or "RT-001",
-            expected_wavelength_nm=float(self.spin_expected_wl.value()),
-            expected_wl_tolerance_nm=float(self.slider_expected_tol.value()) / self.factor_expected_tol,
-            expected_require_nav=bool(self.chk_require_nav.isChecked()),
-            local_id=str(self.edit_local_id.text() or "").strip(),
             start_pan_deg=float(self.slider_start_pan.value()) / self.factor_start_pan,
             start_tilt_deg=float(self.slider_start_tilt.value()) / self.factor_start_tilt,
             use_custom_start=bool(self.chk_custom_start.isChecked()),
@@ -399,79 +406,54 @@ class CameraPanel(BaseConfigPanel):
 
     def set_config(self, cfg: CameraConfig, emit: bool = False) -> None:
         c = cfg.validate()
-
-        # Block signals during bulk programmatic update
         sliders = [
             self.slider_fov_h, self.slider_fov_v, self.slider_rate,
             self.slider_pan_speed, self.slider_tilt_speed,
             self.slider_pan_accel, self.slider_tilt_accel,
             self.slider_pan_range, self.slider_tilt_range,
             self.slider_backlash, self.slider_damping, self.slider_noise,
-            self.slider_expected_tol,
             self.slider_home_pan, self.slider_home_tilt,
             self.slider_start_pan, self.slider_start_tilt,
-            self.slider_scan_start,
+            self.slider_scan_start, self.slider_slew,
         ]
         for s in sliders:
             s.blockSignals(True)
         self.chk_measured_feedback.blockSignals(True)
-        self.chk_require_nav.blockSignals(True)
         self.chk_custom_start.blockSignals(True)
-        self.spin_expected_wl.blockSignals(True)
-        self.edit_expected_tid.blockSignals(True)
-        self.edit_local_id.blockSignals(True)
-
+        self.chk_fov_link.blockSignals(True)
+        self.chk_slew_link.blockSignals(True)
         try:
             self.slider_fov_h.setValue(int(round(c.fov_deg_h * self.factor_fov_h)))
             self.lbl_fov_h.setText(f"{c.fov_deg_h:.1f}°")
-
             self.slider_fov_v.setValue(int(round(c.fov_deg_v * self.factor_fov_v)))
             self.lbl_fov_v.setText(f"{c.fov_deg_v:.1f}°")
-
             self.slider_rate.setValue(int(c.update_rate_hz))
             self.lbl_rate.setText(str(int(c.update_rate_hz)))
-
+            # slew
+            slew = (c.max_pan_speed_deg_s + c.max_tilt_speed_deg_s) / 2.0
+            self.slider_slew.setValue(int(round(slew * self.factor_slew)))
+            self.lbl_slew.setText(f"{slew:.1f} °/s")
             self.slider_pan_speed.setValue(int(round(c.max_pan_speed_deg_s * self.factor_pan_speed)))
             self.lbl_pan_speed.setText(f"{c.max_pan_speed_deg_s:.1f} °/s")
-
             self.slider_tilt_speed.setValue(int(round(c.max_tilt_speed_deg_s * self.factor_tilt_speed)))
             self.lbl_tilt_speed.setText(f"{c.max_tilt_speed_deg_s:.1f} °/s")
-
             self.slider_pan_accel.setValue(int(round(c.max_pan_accel_deg_s2 * self.factor_pan_accel)))
             self.lbl_pan_accel.setText(f"{c.max_pan_accel_deg_s2:.0f} °/s²")
-
             self.slider_tilt_accel.setValue(int(round(c.max_tilt_accel_deg_s2 * self.factor_tilt_accel)))
             self.lbl_tilt_accel.setText(f"{c.max_tilt_accel_deg_s2:.0f} °/s²")
-
             pan_span = int(round(c.pan_max_deg))
             self.slider_pan_range.setValue(pan_span)
             self.lbl_pan_range.setText(str(pan_span))
-
             tilt_span = int(round(c.tilt_max_deg))
             self.slider_tilt_range.setValue(tilt_span)
             self.lbl_tilt_range.setText(str(tilt_span))
-
             self.slider_backlash.setValue(int(round(c.backlash_deg * self.factor_backlash)))
             self.lbl_backlash.setText(f"{c.backlash_deg:.3f}°")
-
             self.slider_damping.setValue(int(round(c.damping_ratio * self.factor_damping)))
             self.lbl_damping.setText(f"{c.damping_ratio:.2f}")
-
             self.slider_noise.setValue(int(round(c.encoder_noise_deg * self.factor_noise)))
             self.lbl_noise.setText(f"{c.encoder_noise_deg:.4f}°")
-
             self.chk_measured_feedback.setChecked(bool(getattr(c, "use_measured_feedback", False)))
-
-            # Expected Payload (Beacon)
-            self.edit_expected_tid.setText(str(getattr(c, "expected_tid", "RT-001")))
-            self.spin_expected_wl.setValue(float(getattr(c, "expected_wavelength_nm", 1550.0)))
-            tol = float(getattr(c, "expected_wl_tolerance_nm", 50.0))
-            self.slider_expected_tol.setValue(int(round(tol * self.factor_expected_tol)))
-            self.lbl_expected_tol.setText(f"{tol:.0f} nm")
-            self.chk_require_nav.setChecked(bool(getattr(c, "expected_require_nav", False)))
-            self.edit_local_id.setText(str(getattr(c, "local_id", "") or ""))
-
-            # Starting Positions (Camera + Local Terminal)
             self.slider_home_pan.setValue(int(round(float(c.home_pan_deg) * self.factor_home_pan)))
             self.lbl_home_pan.setText(f"{float(c.home_pan_deg):.1f}°")
             self.slider_home_tilt.setValue(int(round(float(c.home_tilt_deg) * self.factor_home_tilt)))
@@ -483,16 +465,16 @@ class CameraPanel(BaseConfigPanel):
             self.chk_custom_start.setChecked(bool(getattr(c, "use_custom_start", False)))
             self.slider_scan_start.setValue(int(getattr(c, "scan_start_index", 0)))
             self.lbl_scan_start.setText(str(int(getattr(c, "scan_start_index", 0))))
+            # link state: if pan==tilt within epsilon, keep linked
+            linked = abs(c.max_pan_speed_deg_s - c.max_tilt_speed_deg_s) < 1e-6
+            self.chk_slew_link.setChecked(linked)
         finally:
             for s in sliders:
                 s.blockSignals(False)
             self.chk_measured_feedback.blockSignals(False)
-            self.chk_require_nav.blockSignals(False)
             self.chk_custom_start.blockSignals(False)
-            self.spin_expected_wl.blockSignals(False)
-            self.edit_expected_tid.blockSignals(False)
-            self.edit_local_id.blockSignals(False)
-
+            self.chk_fov_link.blockSignals(False)
+            self.chk_slew_link.blockSignals(False)
         if emit:
             self.configChanged.emit(c)
 

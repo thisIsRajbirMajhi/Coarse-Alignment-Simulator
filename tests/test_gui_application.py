@@ -326,9 +326,10 @@ def test_settings_deck_matches_console_chrome(window):
     assert dlg.windowTitle() == "Settings"
     assert dlg.btn_close is not None and dlg.btn_close.text() == "Close"
     tabs = dlg.findChild(QTabWidget)
-    assert tabs is not None and tabs.count() == 6  # Remote/Local Terminal/Environment/Disturbances/Camera/PID
-    assert tabs.tabText(0) == "Remote Terminal"
-    assert tabs.tabText(1) == "Local Terminal"
+    assert tabs is not None and tabs.count() == 7  # Presets/Remote/Local/Environment/Disturbances/Camera/PID
+    assert tabs.tabText(0) == "Presets"
+    assert tabs.tabText(1) == "Remote Terminal"
+    assert tabs.tabText(2) == "Local Terminal"
     dlg.close()
 
 

@@ -121,6 +121,11 @@ class RemoteTerminalPanel(BaseConfigPanel):
         form_grid.addWidget(self.combo_shape, 1, 1)
         form_grid.addWidget(self._label("Terminal Spacing"), 2, 0)
         form_grid.addWidget(self.spin_spacing, 2, 1)
+        # Formation preview (textual minimap) — updates on count/shape/spacing
+        self.lbl_formation_preview = QLabel("◫ SINGLE")
+        self.lbl_formation_preview.setStyleSheet("color:#4b5563; font-size:10px; font-style:italic; background:transparent;")
+        self.lbl_formation_preview.setWordWrap(True)
+        form_grid.addWidget(self.lbl_formation_preview, 3, 0, 1, 2)
         root.addWidget(form_box)
 
         # MOTION card.
@@ -231,18 +236,31 @@ class RemoteTerminalPanel(BaseConfigPanel):
         term_grid.addWidget(self.spin_opt_power, 4, 1)
         term_grid.addWidget(self._label("Wavelength"), 5, 0)
         term_grid.addWidget(self.spin_wavelength, 5, 1)
-        term_grid.addWidget(self._label("Modulation"), 6, 0)
-        term_grid.addWidget(self.combo_mod, 6, 1)
-        term_grid.addWidget(self._label("Spot Size"), 7, 0)
-        term_grid.addWidget(self.spin_spot, 7, 1)
+        term_grid.addWidget(self._label("Spot Size"), 6, 0)
+        term_grid.addWidget(self.spin_spot, 6, 1)
         term_grid.addWidget(
             self._hint("Spot size = full angular beam width/divergence."),
-            8, 0, 1, 2,
+            7, 0, 1, 2,
         )
         root.addWidget(term_box)
 
-        # BEACON PAYLOAD card (wire identity fields).
-        pay_box, pay_grid = self._make_group("BEACON PAYLOAD")
+        # TERMINAL — keep modulation in primary? Move to advanced (plan)
+        # Remove modulation from primary grid; keep spot size primary.
+        # Store modulation row for migration: will be moved below.
+        # (We already created combo_mod in TERMINAL; move it to advanced below.)
+
+        # ADVANCED — Beacon payload + Pointing + Modulation (collapsed)
+        self.chk_advanced = QCheckBox("Show advanced (beacon payload · pointing · modulation)")
+        self.chk_advanced.setStyleSheet("color:#4b5563; font-size:11px; font-weight:600;")
+        root.addWidget(self.chk_advanced)
+        from PyQt5.QtWidgets import QWidget as _W, QVBoxLayout as _VL
+        self.advanced_widget = _W()
+        av = _VL(self.advanced_widget)
+        av.setContentsMargins(0, 0, 0, 0)
+        av.setSpacing(10)
+
+        # BEACON PAYLOAD (Advanced)
+        pay_box, pay_grid = self._make_group("BEACON PAYLOAD — Advanced")
         self.edit_token = QLineEdit("")
         self.edit_token.setPlaceholderText("Empty = follow Terminal ID")
         self.edit_token.setToolTip(_tooltip("token"))
@@ -266,10 +284,10 @@ class RemoteTerminalPanel(BaseConfigPanel):
                        "(legacy-compatible). NAV off sends ID-only frames."),
             3, 0, 1, 2,
         )
-        root.addWidget(pay_box)
+        av.addWidget(pay_box)
 
-        # POINTING card (beam direction error model, §47).
-        pt_box, pt_grid = self._make_group("POINTING")
+        # POINTING + MODULATION (Advanced)
+        pt_box, pt_grid = self._make_group("POINTING & MODULATION — Advanced")
         self.spin_bias = QDoubleSpinBox()
         self.spin_bias.setRange(float(_meta("pointing_bias_deg")["min"]),
                                 float(_meta("pointing_bias_deg")["max"]))
@@ -284,11 +302,19 @@ class RemoteTerminalPanel(BaseConfigPanel):
         self.spin_jitter.setDecimals(3)
         self.spin_jitter.setSuffix(" deg")
         self.spin_jitter.setToolTip(_tooltip("pointing_jitter_sigma_deg"))
-        pt_grid.addWidget(self._label("Pointing Bias"), 0, 0)
-        pt_grid.addWidget(self.spin_bias, 0, 1)
-        pt_grid.addWidget(self._label("Pointing Jitter σ"), 1, 0)
-        pt_grid.addWidget(self.spin_jitter, 1, 1)
-        root.addWidget(pt_box)
+        # combo_mod already created in TERMINAL primary — reuse it; add row here instead
+        pt_grid.addWidget(self._label("Modulation"), 0, 0)
+        pt_grid.addWidget(self.combo_mod, 0, 1)
+        pt_grid.addWidget(self._label("Pointing Bias"), 1, 0)
+        pt_grid.addWidget(self.spin_bias, 1, 1)
+        pt_grid.addWidget(self._label("Pointing Jitter σ"), 2, 0)
+        pt_grid.addWidget(self.spin_jitter, 2, 1)
+        pt_grid.addWidget(self._hint("Modulation is OOK for protocol (Fixes 4.9); other modes affect power semantics only."), 3, 0, 1, 2)
+        av.addWidget(pt_box)
+
+        self.advanced_widget.setVisible(False)
+        root.addWidget(self.advanced_widget)
+        self.chk_advanced.toggled.connect(self.advanced_widget.setVisible)
 
         # TELEMETRY card (read-only, §56).
         tele_box, tele_grid = self._make_group("TELEMETRY — read-only")
@@ -376,6 +402,10 @@ class RemoteTerminalPanel(BaseConfigPanel):
             self._refresh_terminal_selector()
             self._load_terminal_editor()
             self._show_error("")
+            try:
+                self._update_preview()
+            except Exception:
+                pass
         finally:
             self._updating = False
         if emit:
@@ -530,11 +560,23 @@ class RemoteTerminalPanel(BaseConfigPanel):
         self.error_label.setText(message)
         self.error_label.setVisible(bool(message))
 
+    def _update_preview(self) -> None:
+        try:
+            n = int(self.spin_count.value())
+            shape = str(self.combo_shape.currentData() or "single")
+            sp = float(self.spin_spacing.value())
+            txt = f"{n}× {shape}  ·  {sp:.0f} m  ·  {self.combo_motion.currentText()}"
+            if hasattr(self, "lbl_formation_preview"):
+                self.lbl_formation_preview.setText(txt)
+        except Exception:
+            pass
+
     def _on_formation_changed(self) -> None:
         if self._updating:
             return
         self._sync_terminal_count(int(self.spin_count.value()))
         self._refresh_terminal_selector()
+        self._update_preview()
         self._emit_config()
 
     def _on_terminal_selected(self, index: int) -> None:

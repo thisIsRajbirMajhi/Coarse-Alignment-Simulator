@@ -191,6 +191,9 @@ class CommReceiver:
         self._phase: int | None = None
         self._updates_since_ok = 0
         self._next_t: float | None = None
+        self.latest = None
+        self._last_t: float = 0.0
+        self._last_crc_failed: bool = False
 
     def reset(self) -> None:
         self.buffer.clear()
@@ -203,6 +206,8 @@ class CommReceiver:
         self._phase = None
         self._updates_since_ok = 0
         self._next_t = None
+        self.latest = None
+        self._last_crc_failed = False
 
     @property
     def aligned(self) -> bool:
@@ -339,10 +344,74 @@ class CommReceiver:
             drop = max(int(getattr(result, "consumed_bits", 0)), 0)
             for _ in range(min(drop, len(self.buffer))):
                 self.buffer.popleft()
+            try:
+                self.latest = decode_to_observation(
+                    result, self.last_p_rx_w, self.last_snr_pd_db,
+                    getattr(self, "_last_t", 0.0),
+                )
+            except Exception:
+                pass
             return result
         if result.reason == "CRC_MISMATCH":
             self.crc_failures += 1
         return None
+
+    # -- V2 slot-model API (Implementation_plan_V2.md §2.2, §8.3) ---------
+    # Single-threaded: decoder runs each tick but the camera fast path only
+    # reads the latest completed BeaconObservation slot — never blocks on
+    # the ~336 ms beacon frame. No threads; deterministic.
+    def poll_observation(self, sources: list[CommSource], boresight: tuple[float, float],
+                         sim_time_s: float, dt: float, ber: float | None = None,
+                         rng=None) -> "BeaconObservation | None":
+        """Run one decoder tick and return the latest completed observation.
+
+        Returns the newest valid-CRC BeaconObservation if a frame completed
+        this tick, else the previously latched slot (may be None). Always
+        advances the `latest` slot attribute for the fast path to read.
+        """
+        self._last_t = float(sim_time_s)
+        crc_before = self.crc_failures
+        self.update(sources, boresight, sim_time_s, dt, ber=ber, rng=rng)
+        result = self.try_parse()
+        crc_failed = self.crc_failures > crc_before
+        if result is not None and bool(getattr(result, "valid_crc", False)):
+            obs = decode_to_observation(result, self.last_p_rx_w, self.last_snr_pd_db, float(sim_time_s))
+            self.latest = obs
+            return obs
+        # No new frame: expose latched slot + crc flag for identity gating.
+        self._last_crc_failed = bool(crc_failed)
+        return getattr(self, "latest", None)
+
+    def read_slot(self) -> "BeaconObservation | None":
+        """Non-blocking read of the latest completed beacon slot."""
+        return getattr(self, "latest", None)
+
+
+def decode_to_observation(result, p_rx_w: float = 0.0, snr_db: float = 0.0,
+                          timestamp_s: float = 0.0) -> "BeaconObservation":
+    """Convert a BeaconDecodeResult + photodiode stats into a V2 BeaconObservation."""
+    from local_terminal.models import BeaconObservation as _BO
+
+    payload = getattr(result, "payload", None)
+    tid = str(getattr(payload, "tid", "") or "") if payload is not None else ""
+    try:
+        seq = int(getattr(payload, "seq", -1)) if payload is not None else None
+    except (TypeError, ValueError):
+        seq = None
+    try:
+        wl = float(getattr(payload, "wl", 0.0)) if payload is not None else None
+    except (TypeError, ValueError):
+        wl = None
+    return _BO(
+        terminal_id=tid,
+        valid_crc=bool(getattr(result, "valid_crc", False)),
+        sequence=seq,
+        wavelength_nm=wl,
+        modulation=None,
+        p_rx_w=float(p_rx_w or 0.0),
+        snr_db=float(snr_db or 0.0),
+        timestamp_s=float(timestamp_s),
+    ).validate()
 
 
 __all__ = [
@@ -353,4 +422,6 @@ __all__ = [
     "SUB_DT_S",
     "BUFFER_CHIPS",
     "ber_from_snr_db",
+    "decode_to_observation",
+    "compute_photodiode_snr",
 ]

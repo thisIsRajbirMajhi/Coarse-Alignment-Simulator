@@ -27,17 +27,19 @@ log = logging.getLogger(__name__)
 # environment rebuilds (scene regen, world-size rebuild) wait longer so a
 # slider drag coalesces into one rebuild instead of many.
 HOT_RELOAD_DELAY_MS: dict[str, int] = {
-    "camera": 120,
-    "control": 120,
-    "disturbances": 150,
-    "remote_terminal": 200,
-    "environment": 350,
+    "camera": 150,
+    "control": 150,
+    "disturbances": 200,
+    "remote_terminal": 300,
+    "environment": 600,
+    "local_terminal": 200,
+    "preset": 50,
 }
 # When the sim worker holds the step mutex, a pending apply is re-queued
-# (non-blocking) instead of freezing the GUI. Bounded so a stuck worker
-# surfaces as an error, not an infinite loop.
-_BUSY_RETRY_MS = 100
-_MAX_BUSY_RETRIES = 20
+# (non-blocking) instead of freezing the GUI. Heavy env rebuilds already wait
+# longer so they coalesce; busy retries are generous.
+_BUSY_RETRY_MS = 70
+_MAX_BUSY_RETRIES = 60
 
 
 class MainWindow(QMainWindow):
@@ -219,11 +221,11 @@ class MainWindow(QMainWindow):
             _proc = self.controller._proc_ms[-1] if getattr(self.controller, "_proc_ms", None) else 0.0
         except Exception:
             _proc = 0.0
-        _overloaded = bool(_proc > 25.0)
+        _overloaded = bool(_proc > 28.0)
         if not _overloaded:
             self.sim_view.render_snapshot(snap, self.session)
         self._tick_count += 1
-        if self._tick_count % 3 == 0:
+        if self._tick_count % 4 == 0:
             state = self.presenter.update(snap, self.session, self.controller)
             try:
                 self.dashboard.render(state)
@@ -250,9 +252,10 @@ class MainWindow(QMainWindow):
         self.controller.toggle_pause()
 
     def _on_reset(self) -> None:
-        """Reset EVERYTHING: default configs, fresh session, fresh presentation."""
+        """Reset EVERYTHING: default configs, fresh session, fresh presentation.
+        Control Deck stays open — just refreshes its panels from the new session.
+        """
         try:
-            # Bounded wait: a stuck worker step surfaces as an error, not a freeze.
             with self.worker.try_guard(timeout_ms=2000):
                 ok = self.controller.full_reset()
         except TimeoutError as e:
@@ -264,15 +267,18 @@ class MainWindow(QMainWindow):
             return
         if not ok:
             return
-        # full_reset swapped in a fresh session — re-point the window at it.
         self.session = self.controller.session
         try:
             self.presenter.reset()
         except Exception as e:
             log.debug("presenter reset skipped: %s", e)
         self.sim_view.invalidate_world_cache()
-        self.windows.drop_settings()
+        # Keep Control Deck open — just sync it to new session instead of closing.
         self.clear_pending_configs()
+        try:
+            self.windows.sync_dialog(self.session)
+        except Exception as e:
+            log.debug("settings sync after reset skipped: %s", e)
         try:
             self.dashboard.render(self.presenter.update(None, self.session, self.controller))
         except Exception as e:
@@ -458,6 +464,8 @@ class MainWindow(QMainWindow):
         self._schedule_config("remote_terminal", _apply)
 
     def _on_local_config(self, cfg) -> None:
+        # Throttle local autonomy: many spin boxes fire rapidly while editing —
+        # coalesce via short debounce (200ms) already in _schedule_config.
         def _apply():
             ok = self.controller.apply_config(ApplyConfigCommand(section="local_terminal", config=cfg))
             if ok is False:
@@ -465,6 +473,70 @@ class MainWindow(QMainWindow):
             self.windows.sync_dialog(self.session)
             return True
         self._schedule_config("local_terminal", _apply)
+
+    def _apply_preset_bulk(self, preset_id: str) -> None:
+        """Bulk preset apply — stop → restore defaults → load preset → start.
+
+        Contract per user request: applying a preset automatically stops any
+        running process, restores everything to defaults (fresh session),
+        loads the preset bundle properly, and starts the simulation.
+        One mutex hold so worker never sees a half-applied preset.
+        """
+        from gui.panels.presets_panel import apply_preset_to_session as _apply_bundle
+        with self.worker.try_guard(timeout_ms=4000):
+            # 1. Stop any running simulation (RUNNING/PAUSED → STOPPED).
+            try:
+                if self.controller.lifecycle != self.controller.lifecycle.__class__.STOPPED:
+                    self.controller.stop()
+            except Exception as e:
+                log.debug("preset stop skipped: %s", e)
+            self._step_pending = False
+            self.clear_pending_configs()
+            # 2. Restore everything to defaults (fresh session, STOPPED).
+            ok = self.controller.full_reset()
+            if not ok:
+                raise RuntimeError(f"preset {preset_id}: full_reset failed")
+            self.session = self.controller.session
+            # 3. Load preset bundle onto the fresh default session.
+            try:
+                _apply_bundle(self.session, preset_id)
+            except Exception as e:
+                log.warning("preset %s bundle apply failed: %s", preset_id, e)
+                raise
+            # 4. Housekeeping — one sync/clear, not 6 separate rebuilds.
+            try:
+                self.sim_view.invalidate_world_cache()
+            except Exception:
+                pass
+            try:
+                self.presenter.reset()
+            except Exception:
+                pass
+            try:
+                self.windows.sync_dialog(self.session)
+            except Exception:
+                pass
+            try:
+                self._refresh_status_bar()
+            except Exception:
+                pass
+            try:
+                self._refresh_live_badge()
+            except Exception:
+                pass
+            try:
+                self._apply_button_states()
+            except Exception:
+                pass
+            # 5. Start simulation with the new preset config.
+            if not self.controller.start():
+                log.warning("preset %s: start after apply did not transition (already RUNNING?)", preset_id)
+            try:
+                self._refresh_status_bar()
+                self._refresh_live_badge()
+                self._apply_button_states()
+            except Exception:
+                pass
 
     # -- compat adapters --------------------------------------------
     def closeEvent(self, event) -> None:  # noqa: N802

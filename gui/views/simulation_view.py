@@ -125,7 +125,7 @@ class SimulationView(QWidget):
                 # Dynamic scale factor S to normalize drawing size to widget dimensions
                 lbl_w = max(200, self.world_label.width())
                 lbl_h = max(200, self.world_label.height())
-                S = max(1.0, max(ww / lbl_w, wh / lbl_h))
+                S = max(1.0, max(ww / float(lbl_w), wh / float(lbl_h)))
 
                 camera = getattr(session, "camera", None)
 
@@ -148,12 +148,23 @@ class SimulationView(QWidget):
                     )
 
                     # (b) Camera FOV Bounding Box (sleek cyan frame + center cross)
-                    x0, y0, x1, y1 = camera.get_fov_rect()
+                    # Use disturbed (actual) FOV geometry so God box aligns with FOV content under jitter/platform.
+                    if getattr(snapshot, "fov_rect_disturbed", None) is not None:
+                        x0, y0, x1, y1 = snapshot.fov_rect_disturbed
+                    elif getattr(snapshot, "fov_center_disturbed", None) is not None:
+                        dcx, dcy = snapshot.fov_center_disturbed
+                        hw, hh = camera.fov_width / 2.0, camera.fov_height / 2.0
+                        x0, y0, x1, y1 = dcx - hw, dcy - hh, dcx + hw, dcy + hh
+                    else:
+                        x0, y0, x1, y1 = camera.get_fov_rect()
                     ix0, iy0 = int(round(x0)), int(round(y0))
                     ix1, iy1 = int(round(x1)), int(round(y1))
                     cv2.rectangle(display_world, (ix0, iy0), (ix1, iy1), (56, 189, 248), max(1, int(round(1.5 * S))), cv2.LINE_AA)
 
-                    cx, cy = camera.get_fov_center_world()
+                    if getattr(snapshot, "fov_center_disturbed", None) is not None:
+                        cx, cy = snapshot.fov_center_disturbed
+                    else:
+                        cx, cy = camera.get_fov_center_world()
                     icx, icy = int(round(cx)), int(round(cy))
                     arm = int(round(12 * S))
                     thk = max(1, int(round(1.2 * S)))
@@ -174,6 +185,13 @@ class SimulationView(QWidget):
 
                 # (c) Remote Terminals: Breadcrumb Trails, Predictive Lead Vectors, & Markers
                 terms = getattr(snapshot, "terminals", None)
+                # Prefer tracked target for link line — not just first emitting.
+                active_tid = None
+                try:
+                    tt = getattr(snapshot, "tracker_telemetry", None) or {}
+                    active_tid = (tt.get("autonomy") or {}).get("active_target_id")
+                except Exception:
+                    pass
                 active_target_pos = None
                 if terms and isinstance(terms, dict):
                     for t in terms.get("terminals", []):
@@ -183,8 +201,15 @@ class SimulationView(QWidget):
                         tx, ty = int(round(pos[0])), int(round(pos[1]))
                         is_em = bool(t.get("emitting", False))
                         tid = str(t.get("id", "RT"))
-                        spd = float(t.get("velocity_m_s", 0.0))
-                        heading = float(t.get("heading_rad", 0.0))
+                        # velocity_mps is (vx, vy) tuple — derive speed/heading (old keys velocity_m_s/heading_rad never emitted)
+                        vel = t.get("velocity_mps") or (0.0, 0.0)
+                        try:
+                            vx, vy = float(vel[0]), float(vel[1])
+                            spd = math.hypot(vx, vy)
+                            heading = math.atan2(vy, vx) if spd > 1e-6 else 0.0
+                        except Exception:
+                            spd = float(t.get("velocity_m_s", 0.0))
+                            heading = float(t.get("heading_rad", 0.0))
 
                         # Feature 1: Trajectory Breadcrumb Trail (Motion History)
                         hist = self._trajectory_history.setdefault(tid, [])
@@ -220,9 +245,12 @@ class SimulationView(QWidget):
                             # Projected arrival reticle
                             cv2.circle(display_world, (ilx, ily), max(2, int(round(2.5 * S))), (250, 204, 21), max(1, int(round(1.0 * S))), cv2.LINE_AA)
 
-                        # Terminal Markers
+                        # Terminal Markers — track active_target_id for link line.
                         if is_em:
-                            active_target_pos = (tx, ty)
+                            if active_tid is None or str(t.get("id")) == str(active_tid):
+                                active_target_pos = (tx, ty)
+                            elif active_target_pos is None:
+                                active_target_pos = (tx, ty)
 
                             # Dynamic radiating beacon pulse
                             pulse_phase = (frame_id % 30) / 30.0
@@ -299,11 +327,17 @@ class SimulationView(QWidget):
 
                 # Feature 3: Dynamic Optical Link State & Photon Stream
                 if camera is not None and active_target_pos is not None:
-                    cx, cy = camera.get_fov_center_world()
+                    if getattr(snapshot, "fov_center_disturbed", None) is not None:
+                        cx, cy = snapshot.fov_center_disturbed
+                    else:
+                        cx, cy = camera.get_fov_center_world()
                     icx, icy = int(round(cx)), int(round(cy))
                     atx, aty = active_target_pos
 
-                    x0, y0, x1, y1 = camera.get_fov_rect()
+                    if getattr(snapshot, "fov_rect_disturbed", None) is not None:
+                        x0, y0, x1, y1 = snapshot.fov_rect_disturbed
+                    else:
+                        x0, y0, x1, y1 = camera.get_fov_rect()
                     in_fov = (x0 <= atx <= x1) and (y0 <= aty <= y1)
 
                     # Extract tracking error from PID telemetry
