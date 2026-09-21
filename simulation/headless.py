@@ -261,22 +261,22 @@ class HeadlessSimulation:
         fb = bool(getattr(self.camera_config, "use_measured_feedback", False))
         cx, cy = self.camera.get_fov_center_world(use_measured=fb)
         dcx, dcy = _apply_pose(cx, cy, self.disturbance_config, dt_eff, self.rng, pipeline=pipe)
-        # Capture clean world (no post) — heavy post runs on 640×480 FOV only for real-time.
+        # Capture clean world (God view stays clean); FOV gets vignetting/post on 0.3M for 13x speedup.
         frame_clean = self.scene.get_frame()
         try:
             frame_clean = self.remote.render_spots(frame_clean)
         except Exception:
             pass
+        frame = frame_clean
+        self._last_frame = frame
+        fov_frame = self.camera.extract_fov_at(frame, dcx, dcy)
         try:
             vig = float(getattr(self.env_config, "vignetting_pct", 0)) / 100.0
             if vig > 1e-3:
                 from environment.vignetting import apply_vignetting
-                frame_clean = apply_vignetting(frame_clean, vig)
+                fov_frame = apply_vignetting(fov_frame, vig)
         except Exception:
             pass
-        frame = frame_clean
-        self._last_frame = frame
-        fov_frame = self.camera.extract_fov_at(frame, dcx, dcy)
         try:
             fov_frame = _apply_post(fov_frame, self.disturbance_config, dt_eff, self.rng, pipe, advance=False)
         except Exception:

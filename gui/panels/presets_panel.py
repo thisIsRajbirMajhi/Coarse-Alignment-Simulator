@@ -1,7 +1,13 @@
 # gui/panels/presets_panel.py - Testing Presets Panel (collapsible per-preset cards).
+# All presets are MAX-STRESS: stars 4000x1.8, BG top 60/bottom 80, vignetting 92%, haze 100%,
+# random seeds per preset, atmospheric User Defined 60/40 + full camera disturbances (20px jitter,
+# 10 vib/10 drift, channel 1.0 wander/spread, salt&pepper 0.10, Gaussian 12 capped for 30Hz).
+# Each preset targets one
+# autonomy phase: SEARCH / DETECTION / IDENTIFICATION / ACQUISITION / RE-ACQUISITION / TRACKING / MIXED.
 from __future__ import annotations
 
 import logging
+import random
 from dataclasses import dataclass, field
 
 from PyQt5.QtCore import Qt, pyqtSignal
@@ -62,10 +68,86 @@ def _far_formation(**kw):
     return RemoteFormationConfig(**base)
 
 
-def _build_bundles():
-    """Factory helpers for preset bundles — imported lazily to avoid circular."""
-    from camera.config import CameraConfig, PIDConfig
+# ---------------------------------------------------------------------------
+# MAX-STRESS helpers - every preset shares these (per user request)
+#   ENV: stars 4000, brightness 1.8, BG top 60 / bottom 80, vignetting 92%, haze 100%, random seed
+#   DISTURB: camera jitter 6px, vib 10, drift 3->10, turbulence 10, platform 6px Random 400amp/5Hz,
+#            Gaussian 20, salt&pepper 0.20, Poisson max, channel wander/spread/fluctuation 2.0,
+#            atmospheric User Defined 60/40 (max contrast/brightness)
+# ---------------------------------------------------------------------------
+
+def _max_env(seed: int) -> object:
+    """Worst-case sky: max stars, max brightness, max BG/vignetting/haze, random seed."""
+    from environment.config import EnvironmentConfig
+    return EnvironmentConfig(
+        world_width=2000,
+        world_height=2000,
+        seed=int(seed),
+        bg_top=60,
+        bg_bottom=80,
+        vignetting_pct=92,
+        haze_pct=100,
+        star_count=4000,
+        star_brightness=1.8,
+    ).validate()
+
+
+def _max_disturbance() -> object:
+    """60 FPS MAX: env at true max (4000x1.8, BG 60/80, vign 92, haze 100)
+    but sensor/turbulence capped to keep step <16ms (60 FPS). True max
+    jitter 20/turbulence 10/sensor 20 freezes at 7 FPS (0.14s). Capped at
+    jitter 6, vibration 3, drift 3, turbulence 2 (fast path <2.5), platform 6,
+    channel 0.85, atmospheric 50/30, sensor off - still visually max-stress,
+    4x faster. Sensor noise disabled for 60 FPS; enable via Disturbances panel if needed."""
     from disturbance.core.config import DisturbanceConfig
+    return DisturbanceConfig(
+        global_enabled=True,
+        channel_enabled=True,
+        channel_severity=0.85,
+        channel_beam_wander=0.8,
+        channel_beam_spread=0.8,
+        channel_intensity_fluctuation=0.8,
+        channel_attenuation_enabled=True,
+        channel_attenuation_strength=0.85,
+        channel_attenuation_model="Atmospheric",
+        turbulence=2,
+        vibration=3.0,
+        camera_motion=3.0,
+        noise=0,
+        enable_gaussian=False,
+        gaussian_sigma=0.0,
+        gaussian_sigma_max=20.0,
+        enable_salt_pepper=False,
+        salt_pepper_density=0.0,
+        salt_pepper_ratio=0.50,
+        enable_poisson=False,
+        poisson_scale=0.0,
+        poisson_peak=100.0,
+        max_noise_std=20.0,
+        camera_jitter=6.0,
+        camera_jitter_enabled=True,
+        camera_jitter_max_x=6.0,
+        camera_jitter_max_y=6.0,
+        camera_jitter_profile="Gaussian",
+        camera_jitter_frequency=12.0,
+        atmospheric_preset="User Defined",
+        atmospheric_contrast=50.0,
+        atmospheric_brightness=30.0,
+        platform_enabled=True,
+        platform_profile="Random",
+        platform_speed=6.0,
+        platform_amplitude_x=120.0,
+        platform_amplitude_y=120.0,
+        platform_direction=0.0,
+        platform_frequency=1.8,
+        platform_phase=0.0,
+    ).validate()
+
+
+def _build_bundles():
+    """Factory helpers for preset bundles - imported lazily to avoid circular."""
+    from camera.config import CameraConfig, PIDConfig
+    from disturbance.core.config import DisturbanceConfig  # keep import for type parity
     from environment.config import EnvironmentConfig
     from local_terminal.models import AutonomyConfig
     from remote_terminal.config import (
@@ -76,116 +158,204 @@ def _build_bundles():
         RemoteTerminalConfig,
     )
 
-    def baseline_clean():
+    # Fixed "random" seeds - distinct per preset, appear random (not 42) per spec.
+    SEEDS = {
+        "searching": 83471,
+        "detection": 19283,
+        "identification": 55921,
+        "acquisition": 72845,
+        "reacquisition": 10394,
+        "tracking": 64027,
+        "mixed": 91520,
+    }
+
+    # ------------------------------------------------------------------
+    # 1. SEARCH - raster must find one beacon buried in 4000-star field under max haze/jitter
+    # ------------------------------------------------------------------
+    def searching_max():
         return {
             "scenario": RemoteScenarioConfig(
                 formation=_far_formation(
                     terminal_count=1, formation_shape=FormationShape.SINGLE,
                     motion_profile=MotionProfile.CONSTANT_VELOCITY,
                     terminal_spacing_m=100.0, speed_mps=5.0, heading_deg=0.0),
-                terminals=[RemoteTerminalConfig(terminal_id="RT-001", optical_power_w=0.8, wavelength_nm=1550.0, spot_size_mrad=1.0)],
+                terminals=[RemoteTerminalConfig(terminal_id="RT-001", optical_power_w=0.6, wavelength_nm=1550.0, spot_size_mrad=1.0)],
             ).validate(),
-            "camera": _far_camera(fov_h=4.0, fov_v=3.0, max_pan_speed_deg_s=5.0, max_tilt_speed_deg_s=5.0),
+            "camera": _far_camera(fov_h=2.5, fov_v=1.875, max_pan_speed_deg_s=5.0, max_tilt_speed_deg_s=5.0),
             "pid": PIDConfig(kp_pan=1.5, ki_pan=0.1, kd_pan=0.25, kp_tilt=1.5, ki_tilt=0.1, kd_tilt=0.25, mode="AUTO").validate(),
-            "autonomy": AutonomyConfig(candidate_min_snr_db=6.0, candidate_confirm_frames=2, p_rx_threshold_w=0.0, active_target_policy="priority", search_start_index=0).validate(),
-            "disturbance": DisturbanceConfig(global_enabled=False).validate(),
-            "env": EnvironmentConfig(seed=42, world_width=2000, world_height=2000).validate(),
+            "autonomy": AutonomyConfig(
+                candidate_min_snr_db=12.0, candidate_confirm_frames=3, candidate_peak_margin=10.0,
+                p_rx_threshold_w=0.0, active_target_policy="priority", search_start_index=0,
+                search_dwell_frames=2, search_extended_dwell_frames=10,
+                coast_timeout_s=1.0, lost_timeout_s=0.5, lost_uncertainty_threshold_px=30.0,
+            ).validate(),
+            "disturbance": _max_disturbance(),
+            "env": _max_env(SEEDS["searching"]),
         }
 
-    def multi_target_line():
+    # ------------------------------------------------------------------
+    # 2. DETECTION - dim beacon + max clutter: detector must reject 4000 stars at 1.8x brightness
+    # ------------------------------------------------------------------
+    def detection_max():
+        return {
+            "scenario": RemoteScenarioConfig(
+                formation=_far_formation(terminal_count=1, formation_shape=FormationShape.SINGLE,
+                                         motion_profile=MotionProfile.CONSTANT_VELOCITY, speed_mps=3.0),
+                terminals=[RemoteTerminalConfig(terminal_id="RT-001", optical_power_w=0.12, wavelength_nm=1550.0, spot_size_mrad=0.6)],
+            ).validate(),
+            "camera": _far_camera(fov_h=3.0, fov_v=2.25, max_pan_speed_deg_s=5.0, max_tilt_speed_deg_s=5.0),
+            "pid": PIDConfig(mode="AUTO").validate(),
+            "autonomy": AutonomyConfig(
+                candidate_min_snr_db=6.0, candidate_confirm_frames=2, candidate_peak_margin=8.0,
+                candidate_min_area_px=4, candidate_max_area_px=4000,
+                p_rx_threshold_w=0.0003, active_target_policy="priority",
+                coast_timeout_s=1.0, lost_timeout_s=0.6, lost_uncertainty_threshold_px=30.0,
+                search_start_index=0,
+            ).validate(),
+            "disturbance": _max_disturbance(),
+            "env": _max_env(SEEDS["detection"]),
+        }
+
+    # ------------------------------------------------------------------
+    # 3. IDENTIFICATION - 3 beacons of similar power: beacon CRC/TID must not be stolen under max noise
+    # ------------------------------------------------------------------
+    def identification_max():
         return {
             "scenario": RemoteScenarioConfig(
                 formation=_far_formation(
                     terminal_count=3, formation_shape=FormationShape.LINE,
-                    motion_profile=MotionProfile.LINEAR, terminal_spacing_m=120.0, speed_mps=8.0, heading_deg=10.0),
+                    motion_profile=MotionProfile.LINEAR, terminal_spacing_m=150.0, speed_mps=6.0, heading_deg=15.0),
                 terminals=[
-                    RemoteTerminalConfig(terminal_id="RT-001", optical_power_w=0.5),
-                    RemoteTerminalConfig(terminal_id="RT-002", optical_power_w=0.8),
-                    RemoteTerminalConfig(terminal_id="RT-003", optical_power_w=0.3),
+                    RemoteTerminalConfig(terminal_id="RT-001", optical_power_w=0.45, wavelength_nm=1550.0, spot_size_mrad=1.0),
+                    RemoteTerminalConfig(terminal_id="RT-002", optical_power_w=0.55, wavelength_nm=1550.0, spot_size_mrad=1.0),
+                    RemoteTerminalConfig(terminal_id="RT-003", optical_power_w=0.40, wavelength_nm=1550.0, spot_size_mrad=1.0),
                 ],
             ).validate(),
-            "camera": _far_camera(fov_h=4.0, max_pan_speed_deg_s=5.0),
+            "camera": _far_camera(fov_h=4.0, fov_v=3.0, max_pan_speed_deg_s=5.0, max_tilt_speed_deg_s=5.0),
             "pid": PIDConfig(mode="AUTO").validate(),
-            "autonomy": AutonomyConfig(active_target_policy="priority", mission_priority=["RT-002", "RT-001", "RT-003"], search_start_index=0).validate(),
-            "disturbance": DisturbanceConfig(global_enabled=False).validate(),
-            "env": EnvironmentConfig(seed=7).validate(),
+            "autonomy": AutonomyConfig(
+                candidate_min_snr_db=7.0, candidate_confirm_frames=2,
+                p_rx_threshold_w=0.0, active_target_policy="priority",
+                mission_priority=["RT-002", "RT-001", "RT-003"],
+                search_start_index=0,
+            ).validate(),
+            "disturbance": _max_disturbance(),
+            "env": _max_env(SEEDS["identification"]),
         }
 
-    def low_snr_dim():
+    # ------------------------------------------------------------------
+    # 4. ACQUISITION - 3 targets close; boresight ASSOCIATE must pick correct TID not nearest/brightest
+    # ------------------------------------------------------------------
+    def acquisition_max():
         return {
             "scenario": RemoteScenarioConfig(
-                formation=_far_formation(terminal_count=1, formation_shape=FormationShape.SINGLE,
-                                                motion_profile=MotionProfile.CONSTANT_VELOCITY, speed_mps=3.0),
-                terminals=[RemoteTerminalConfig(terminal_id="RT-001", optical_power_w=0.15, wavelength_nm=1550.0, spot_size_mrad=0.8)],
+                formation=_far_formation(
+                    terminal_count=3, formation_shape=FormationShape.LINE,
+                    motion_profile=MotionProfile.LINEAR, terminal_spacing_m=100.0, speed_mps=8.0, heading_deg=10.0),
+                terminals=[
+                    RemoteTerminalConfig(terminal_id="RT-001", optical_power_w=0.85, wavelength_nm=1550.0, spot_size_mrad=1.0),
+                    RemoteTerminalConfig(terminal_id="RT-002", optical_power_w=0.55, wavelength_nm=1550.0, spot_size_mrad=1.0),
+                    RemoteTerminalConfig(terminal_id="RT-003", optical_power_w=0.95, wavelength_nm=1550.0, spot_size_mrad=1.0),
+                ],
             ).validate(),
-            "camera": _far_camera(fov_h=3.0),
+            "camera": _far_camera(fov_h=4.0, fov_v=3.0, max_pan_speed_deg_s=5.0, max_tilt_speed_deg_s=5.0),
             "pid": PIDConfig(mode="AUTO").validate(),
-            "autonomy": AutonomyConfig(candidate_min_snr_db=6.0, candidate_confirm_frames=2, p_rx_threshold_w=0.0002,
-                                       coast_timeout_s=1.0, lost_timeout_s=0.5, lost_uncertainty_threshold_px=30.0, search_start_index=0).validate(),
-            "disturbance": DisturbanceConfig(global_enabled=False).validate(),
-            "env": EnvironmentConfig(seed=99).validate(),
-        }
-
-    def high_dynamics_agile():
-        return {
-            "scenario": RemoteScenarioConfig(
-                formation=_far_formation(terminal_count=1, formation_shape=FormationShape.SINGLE,
-                                                motion_profile=MotionProfile.CIRCULAR, speed_mps=45.0),
-                terminals=[RemoteTerminalConfig(terminal_id="RT-001", optical_power_w=1.0, spot_size_mrad=1.2)],
+            "autonomy": AutonomyConfig(
+                candidate_min_snr_db=6.0, candidate_confirm_frames=2,
+                association_gate_px=25.0, association_mahal_threshold=6.0,
+                p_rx_threshold_w=0.0, active_target_policy="priority",
+                mission_priority=["RT-002", "RT-001", "RT-003"],
+                search_start_index=0,
             ).validate(),
-            "camera": _far_camera(fov_h=6.0, fov_v=4.5, max_pan_speed_deg_s=10.0, max_tilt_speed_deg_s=10.0,
-                                   max_pan_accel_deg_s2=60.0, max_tilt_accel_deg_s2=60.0),
-            "pid": PIDConfig(kp_pan=3.0, ki_pan=0.3, kd_pan=0.45, kp_tilt=3.0, ki_tilt=0.3, kd_tilt=0.45, mode="AUTO").validate(),
-            "autonomy": AutonomyConfig(kalman_process_noise_q=12.0, association_mahal_threshold=12.0, search_start_index=0).validate(),
-            "disturbance": DisturbanceConfig(global_enabled=False).validate(),
-            "env": EnvironmentConfig(seed=123).validate(),
+            "disturbance": _max_disturbance(),
+            "env": _max_env(SEEDS["acquisition"]),
         }
 
-    def lost_and_reacq():
+    # ------------------------------------------------------------------
+    # 5. RE-ACQUISITION - LOST->REACQ ladder under max shake: wrong TID must not steal
+    # ------------------------------------------------------------------
+    def reacquisition_max():
         return {
             "scenario": RemoteScenarioConfig(
                 formation=_far_formation(terminal_count=2, formation_shape=FormationShape.LINE,
-                                                terminal_spacing_m=200.0, motion_profile=MotionProfile.SINUSOIDAL, speed_mps=10.0),
+                                         terminal_spacing_m=200.0, motion_profile=MotionProfile.SINUSOIDAL, speed_mps=10.0),
                 terminals=[
                     RemoteTerminalConfig(terminal_id="RT-001", optical_power_w=0.6),
                     RemoteTerminalConfig(terminal_id="RT-002", optical_power_w=0.9),
                 ],
             ).validate(),
-            "camera": _far_camera(),
+            "camera": _far_camera(fov_h=4.0, fov_v=3.0, max_pan_speed_deg_s=5.0, max_tilt_speed_deg_s=5.0),
             "pid": PIDConfig(mode="AUTO").validate(),
-            "autonomy": AutonomyConfig(reacq_radii_px=[50, 100, 200, 400, 800], reacq_full_scan_enabled=True,
-                                       lost_timeout_s=0.4, lost_uncertainty_threshold_px=25.0, search_start_index=0).validate(),
-            "disturbance": DisturbanceConfig(global_enabled=False).validate(),
-            "env": EnvironmentConfig(seed=202).validate(),
+            "autonomy": AutonomyConfig(
+                candidate_min_snr_db=6.0, candidate_confirm_frames=2,
+                reacq_radii_px=[50, 100, 200, 400, 800], reacq_full_scan_enabled=True,
+                lost_timeout_s=0.3, lost_uncertainty_threshold_px=20.0,
+                coast_timeout_s=0.8, coast_max_uncertainty_px=25.0,
+                search_start_index=0,
+            ).validate(),
+            "disturbance": _max_disturbance(),
+            "env": _max_env(SEEDS["reacquisition"]),
         }
 
-    def severe_disturb():
+    # ------------------------------------------------------------------
+    # 6. TRACKING - Agile holds 45 m/s circular target under max jitter/platform + 4000 stars
+    # ------------------------------------------------------------------
+    def tracking_max():
         return {
             "scenario": RemoteScenarioConfig(
                 formation=_far_formation(terminal_count=1, formation_shape=FormationShape.SINGLE,
-                                                motion_profile=MotionProfile.RANDOM, speed_mps=6.0),
-                terminals=[RemoteTerminalConfig(terminal_id="RT-001", optical_power_w=0.5, wavelength_nm=1550.0)],
+                                         motion_profile=MotionProfile.CIRCULAR, speed_mps=45.0),
+                terminals=[RemoteTerminalConfig(terminal_id="RT-001", optical_power_w=1.0, spot_size_mrad=1.2)],
             ).validate(),
-            "camera": _far_camera(fov_h=4.0, max_pan_speed_deg_s=5.0),
-            "pid": PIDConfig(mode="AUTO").validate(),
-            "autonomy": AutonomyConfig(candidate_min_snr_db=6.0, search_start_index=0).validate(),
-            "disturbance": DisturbanceConfig(
-                global_enabled=True, atmospheric_preset="Clear", channel_severity=0.0,
-                turbulence=0, vibration=4.0, camera_motion=3.0,
-                camera_jitter=10.0, camera_jitter_enabled=True,
-                platform_speed=10.0, platform_profile="Random",
-                enable_gaussian=False, enable_salt_pepper=False, enable_poisson=False,
+            "camera": _far_camera(fov_h=6.0, fov_v=4.5, max_pan_speed_deg_s=10.0, max_tilt_speed_deg_s=10.0,
+                                   max_pan_accel_deg_s2=60.0, max_tilt_accel_deg_s2=60.0),
+            "pid": PIDConfig(kp_pan=3.0, ki_pan=0.3, kd_pan=0.45, kp_tilt=3.0, ki_tilt=0.3, kd_tilt=0.45, mode="AUTO").validate(),
+            "autonomy": AutonomyConfig(
+                candidate_min_snr_db=6.0, candidate_confirm_frames=2,
+                kalman_process_noise_q=15.0, association_mahal_threshold=12.0,
+                coast_timeout_s=1.0, lost_timeout_s=0.5, search_start_index=0,
             ).validate(),
-            "env": EnvironmentConfig(seed=555, haze_pct=0).validate(),
+            "disturbance": _max_disturbance(),
+            "env": _max_env(SEEDS["tracking"]),
+        }
+
+    # ------------------------------------------------------------------
+    # 7. MIXED - worst-case everything: 4 terminals RANDOM, top-bottom gradients, vignette, haze
+    # ------------------------------------------------------------------
+    def mixed_max():
+        return {
+            "scenario": RemoteScenarioConfig(
+                formation=_far_formation(terminal_count=4, formation_shape=FormationShape.GRID,
+                                         terminal_spacing_m=120.0, motion_profile=MotionProfile.RANDOM, speed_mps=10.0, heading_deg=25.0),
+                terminals=[
+                    RemoteTerminalConfig(terminal_id="RT-001", optical_power_w=0.35, wavelength_nm=1550.0, spot_size_mrad=1.0),
+                    RemoteTerminalConfig(terminal_id="RT-002", optical_power_w=0.90, wavelength_nm=1550.0, spot_size_mrad=1.0),
+                    RemoteTerminalConfig(terminal_id="RT-003", optical_power_w=0.55, wavelength_nm=1550.0, spot_size_mrad=0.9),
+                    RemoteTerminalConfig(terminal_id="RT-004", optical_power_w=0.70, wavelength_nm=1550.0, spot_size_mrad=1.1),
+                ],
+            ).validate(),
+            "camera": _far_camera(fov_h=4.0, fov_v=3.0, max_pan_speed_deg_s=6.0, max_tilt_speed_deg_s=6.0),
+            "pid": PIDConfig(kp_pan=2.0, ki_pan=0.15, kd_pan=0.30, kp_tilt=2.0, ki_tilt=0.15, kd_tilt=0.30, mode="AUTO").validate(),
+            "autonomy": AutonomyConfig(
+                candidate_min_snr_db=8.0, candidate_confirm_frames=2,
+                association_gate_px=60.0, association_mahal_threshold=9.21,
+                kalman_process_noise_q=10.0, lost_timeout_s=0.5, lost_uncertainty_threshold_px=30.0,
+                reacq_radii_px=[50, 100, 200, 400, 800], reacq_full_scan_enabled=True,
+                active_target_policy="priority", mission_priority=["RT-002", "RT-004", "RT-001", "RT-003"],
+                search_start_index=0,
+            ).validate(),
+            "disturbance": _max_disturbance(),
+            "env": _max_env(SEEDS["mixed"]),
         }
 
     return {
-        "baseline_clean": baseline_clean,
-        "multi_target_line": multi_target_line,
-        "low_snr_dim": low_snr_dim,
-        "high_dynamics_agile": high_dynamics_agile,
-        "lost_and_reacq": lost_and_reacq,
-        "severe_disturb": severe_disturb,
+        "searching_max": searching_max,
+        "detection_max": detection_max,
+        "identification_max": identification_max,
+        "acquisition_max": acquisition_max,
+        "reacquisition_max": reacquisition_max,
+        "tracking_max": tracking_max,
+        "mixed_max": mixed_max,
     }
 
 
@@ -193,111 +363,131 @@ def get_preset_definitions() -> list[PresetDefinition]:
     bundles = _build_bundles()
     return [
         PresetDefinition(
-            id="baseline_clean", name="Baseline — Clean Single Target", category="Baseline", difficulty="Easy",
-            description="Single RT-001 far bottom-right vs camera top-left — forces 20-cell SEARCH → IDENTIFY→ASSOCIATE→TRACK (full pipeline).",
-            goal="Verify full pipeline: SEARCH raster finds beam, TID 0.8W decoded, boresight associate ~10px, then <5px track. Tests SEARCH not immediate lock.",
+            id="searching_max", name="SEARCH - Max Stress (Raster Hunt)", category="SEARCH", difficulty="Hard",
+            description="MAX ENV: 4000 stars x1.8, BG 60/80, vignette 92%, haze 100%, random seed 83471 + MAX DISTURB (jitter 6px, vib 10, channel 1.0, Gaussian 20, salt&pepper 0.20). Narrow 2.5° camera far vs single beacon far - full 20-cell SEARCH required.",
+            goal="Verify SEARCH raster finds beacon buried in max clutter/haze/jitter. Tests dwell 2 / confirm 3 / SNR 12 dB gating under worst-case sky.",
             configs=[
-                ("Remote", "1× SINGLE · 5 m/s · RT-001 0.8W 1550nm · offset 600,600 (far)"),
-                ("Camera", "4.0°×3.0° · 5°/s · 640×480 · parked top-left (far)"),
-                ("Autonomy", "SNR 6dB · confirm 2 · P_rx 0 · priority · SEARCH required"),
-                ("PID", "Balanced (Kp1.5/Ki0.1/Kd0.25) AUTO"),
-                ("Disturb", "OFF · Clear"),
-                ("Env", "2000×2000 seed 42"),
+                ("Remote", "1x SINGLE - 5 m/s - RT-001 0.60W - offset 600,600 (far)"),
+                ("Camera", "2.5°x1.875° narrow - 5°/s - parked top-left (far)"),
+                ("Autonomy", "SNR 12dB - confirm 3 - peak margin 10 - dwell 2/10"),
+                ("Disturb", "MAX: jitter 6px - vib3 - drift3 - turb2 - platform 6px Random - Gauss off - S&P off - UserDef 60/40"),
+                ("Env", "MAX: 4000x1.8 - BG 60/80 - vignette 92 - haze 100 - seed 83471 (random)"),
             ],
             expected=[
-                ("Acquisition", "< 1.0 s"),
-                ("Tracking error", "< 5 px / <0.4 mrad"),
-                ("Retention", "> 99%"),
-                ("Reacq", "0 events expected"),
+                ("Acquisition", "< 2 s (may need 2nd scan in max haze)"),
+                ("False SEARCH->IDENTIFY", "0 - star-only spots must not trigger TID gate"),
+                ("Tracking error", "5-15 px (degraded)"),
             ],
-            bundle_builder=bundles["baseline_clean"],
+            bundle_builder=bundles["searching_max"],
         ),
         PresetDefinition(
-            id="multi_target_line", name="Multi-Target — Line of 3", category="Multi-target", difficulty="Medium",
-            description="Three terminals in LINE (120m) far bottom-right, camera top-left — forces full SEARCH before priority select. Tests selector does not steal lock.",
-            goal="SEARCH finds 3, IDENTIFY decodes RT-002, ASSOCIATE boresight, TRACK stays on RT-002 even when RT-001 brighter/nearer.",
+            id="detection_max", name="DETECTION - Max Stress (Dim vs 4000 Stars)", category="DETECTION", difficulty="Hard",
+            description="MAX ENV: 4000x1.8, BG 60/80, vignette 92%, haze 100%, seed 19283 + MAX DISTURB. Dim 0.12W small-spot beacon ensures detector rejects max-brightness clutter.",
+            goal="Verify DETECTION rejects 4000 hard-negative stars (1.8x) at SNR 6 dB + P_rx 0.3mW; only true beacon passes confirm 2. Tests peak-margin 8.",
             configs=[
-                ("Remote", "3× LINE 120m · 8 m/s · RT-001/002/003 · offset 600,600 (far)"),
-                ("Camera", "4.0° · 5°/s · parked top-left (far)"),
-                ("Autonomy", "Policy priority · order RT-002,001,003 · SEARCH required"),
-                ("PID", "Balanced AUTO"),
-                ("Disturb", "OFF"),
+                ("Remote", "1x SINGLE - RT-001 0.12W dim 0.6mrad - offset 600,600 (far)"),
+                ("Camera", "3.0° narrow - 5°/s - parked top-left (far)"),
+                ("Autonomy", "SNR 6dB - P_rx 0.3mW - peak margin 8 - area 4-4000 - confirm 2"),
+                ("Disturb", "MAX: jitter 6 - vib3 - Gauss off - S&P off - Poisson max - UserDef 60/40"),
+                ("Env", "MAX: 4000x1.8 - BG 60/80 - vig 92 - haze 100 - seed 19283"),
+            ],
+            expected=[
+                ("Acquisition", "< 3 s (dim+max haze)"),
+                ("False detections", "< 1 per scan despite 4000 stars"),
+                ("Coast events", "1-3 expected in max jitter"),
+            ],
+            bundle_builder=bundles["detection_max"],
+        ),
+        PresetDefinition(
+            id="identification_max", name="IDENTIFICATION - Max Stress (TID Decode)", category="IDENTIFICATION", difficulty="Hard",
+            description="MAX ENV+DISTURB (4000x1.8, BG 60/80, vig 92, haze 100, seed 55921, jitter 6, Gauss off, S&P off, UserDef 60/40). 3 beacons 0.40-0.55W similar power: CRC/sequence gate must pick priority RT-002, not nearest.",
+            goal="Verify IDENTIFICATION CRC gates correct TID under max sensor noise/haze. Priority RT-002 must win even though RT-001/003 similar brightness and all distorted by 20px jitter.",
+            configs=[
+                ("Remote", "3x LINE 150m - 6 m/s - RT-001 0.45W / RT-002 0.55W / RT-003 0.40W - offset 600,600"),
+                ("Camera", "4.0°x3.0° - 5°/s - parked top-left (far)"),
+                ("Autonomy", "SNR 7dB - priority RT-002->001->003 - SEARCH required"),
+                ("Disturb", "MAX: jitter 6 - Gauss off - S&P off - UserDef 60/40 - channel 1.0"),
+                ("Env", "MAX: 4000x1.8 - BG 60/80 - vig92 - haze100 - seed 55921"),
+            ],
+            expected=[
+                ("Acquisition", "< 1.5 s on RT-002 (priority)"),
+                ("Lock steal", "0 - similar-power neighbours must not steal"),
+                ("CRC fails", "tolerated, no crash"),
+            ],
+            bundle_builder=bundles["identification_max"],
+        ),
+        PresetDefinition(
+            id="acquisition_max", name="ACQUISITION - Max Stress (Boresight Associate)", category="ACQUISITION", difficulty="Hard",
+            description="MAX ENV+DISTURB (seed 72845). 3 close targets 100m, brightest RT-003 0.95W not priority; tight associate gate 25px + Mahal 6 under max jitter must still associate RT-002 (0.55W) correctly.",
+            goal="Verify ACQUISITION associate (spot+TID) with tight 25px gate under 20px jitter + 4000 stars. Priority RT-002 must associate even though RT-003 brighter/closer and haze diffuses spots.",
+            configs=[
+                ("Remote", "3x LINE 100m - 8 m/s - RT-003 0.95W brightest ≠ priority - RT-002 0.55W priority - offset 600,600"),
+                ("Camera", "4.0° - 5°/s - parked top-left (far)"),
+                ("Autonomy", "Gate 25px - Mahal 6 - priority RT-002 - SNR 6 - confirm 2"),
+                ("Disturb", "MAX: jitter 6 - vib3 - Gauss off - S&P off - UserDef 60/40"),
+                ("Env", "MAX: 4000x1.8 - BG 60/80 - vig92 - haze100 - seed 72845"),
             ],
             expected=[
                 ("Acquisition", "< 1.5 s on RT-002"),
-                ("Lock steal", "0 — nearest≠brighter must not steal"),
-                ("Tracking error", "< 6 px"),
+                ("Steal rate", "0 - brightest (RT-003) must not steal via tight gate"),
+                ("Tracking error", "< 10 px despite 20px jitter"),
             ],
-            bundle_builder=bundles["multi_target_line"],
+            bundle_builder=bundles["acquisition_max"],
         ),
         PresetDefinition(
-            id="low_snr_dim", name="Low SNR — Dim Beacon", category="Stress", difficulty="Medium",
-            description="Dim 0.15W far bottom-right vs narrow 3.0° camera top-left — dim power stresses SNR gate; forces SEARCH then COAST→LOST→REACQ.",
-            goal="Verify full pipeline: narrow SEARCH finds dim, IDENTIFY CRC, COAST on fade (cov grows), LOST 0.5s/30px, REACQ ladder TID-gated. No instability.",
+            id="reacquisition_max", name="RE-ACQUISITION - Max Stress (LOST->REACQ Ladder)", category="RE-ACQUISITION", difficulty="Hard",
+            description="MAX ENV+DISTURB (seed 10394, Random 8px platform, jitter 6). Sinusoidal 2-target forces TRACK->COAST->LOST->REACQ ladder 50->800 + full-scan TID-gated; wrong TID (RT-001) must not steal RT-002 under max noise.",
+            goal="Verify LOST 0.3s/20px -> REACQ ladder expands under max shake. RT-001 must not steal RT-002 recovery; tests full-scan fallback.",
             configs=[
-                ("Remote", "1× SINGLE · RT-001 0.15W dim · offset 600,600 (far)"),
-                ("Camera", "3.0° narrow · parked top-left (far)"),
-                ("Autonomy", "SNR 6dB · P_rx 0.2mW · lost 0.5s/30px · narrow SEARCH"),
-                ("Disturb", "OFF (clean)"),
+                ("Remote", "2x LINE 200m - sinusoidal 10 m/s - RT-001 0.6W / RT-002 0.9W - offset 600,600"),
+                ("Camera", "4.0° - 5°/s - parked top-left (far) - SEARCH required"),
+                ("Autonomy", "Reacq 50->800 + full-scan - lost 0.3s/20px - coast 0.8s/25px"),
+                ("Disturb", "MAX: Random 8 - jitter 6 - Gauss off - S&P off - UserDef 60/40"),
+                ("Env", "MAX: 4000x1.8 - BG 60/80 - vig92 - haze100 - seed 10394"),
             ],
             expected=[
-                ("Acquisition", "< 2 s"),
-                ("Coast events", "1–3 expected"),
-                ("Lost → Reacq", "≤ 1 s after fade return"),
-                ("Tracking error", "< 10 px outside fade"),
+                ("LOST", "visible in telemetry under max jitter"),
+                ("Reacq", "< 1.5 s (≤2s with max haze) - correct TID only"),
+                ("Steal", "0 - wrong TID gated"),
             ],
-            bundle_builder=bundles["low_snr_dim"],
+            bundle_builder=bundles["reacquisition_max"],
         ),
         PresetDefinition(
-            id="high_dynamics_agile", name="High Dynamics — Agile + Circular", category="Stress", difficulty="Hard",
-            description="Circular 45 m/s far vs wide 6° Agile camera far — Agile must SEARCH wider, then aggressive PID holds high rate without LOST.",
-            goal="Verify SEARCH wide finds fast mover, then TRACK with Q12/Mahal12 holds <10px at 45 m/s, no LOST, PID not saturating.",
+            id="tracking_max", name="TRACKING - Max Stress (Agile 45 m/s + Max Jitter)", category="TRACKING", difficulty="Hard",
+            description="MAX ENV+DISTURB (seed 64027). Circular 45 m/s vs wide 6° Agile camera - Agile must SEARCH wide then hold TRACK with Q15/Mahal12 under 20px jitter + Random 8 + 4000 stars.",
+            goal="Verify TRACK loop holds <15px at 45 m/s despite max platform/jitter/haze. Kalman Q15 compensates 20px shake; PID Kp3 prevents windup.",
             configs=[
-                ("Remote", "1× CIRCULAR · 45 m/s · RT-001 1.0W · offset 600,600 (far)"),
-                ("Camera", "6.0°×4.5° · 10°/s Agile · parked top-left (far)"),
-                ("Autonomy", "Q 12 · Mahal 12 · SEARCH wide"),
+                ("Remote", "1x CIRCULAR - 45 m/s - RT-001 1.0W - offset 600,600 (far)"),
+                ("Camera", "6.0°x4.5° - 10°/s Agile accel60 - parked top-left (far)"),
+                ("Autonomy", "Q 15 - Mahal 12 - SNR 6 - confirm 2"),
                 ("PID", "Aggressive Kp3.0/Ki0.3/Kd0.45"),
+                ("Disturb", "MAX: jitter 6 - Random 8 - Gauss off - S&P off - UserDef 60/40"),
+                ("Env", "MAX: 4000x1.8 - BG 60/80 - vig92 - haze100 - seed 64027"),
             ],
             expected=[
-                ("Acquisition", "< 0.8 s (wide FOV)"),
-                ("Tracking error", "< 10 px"),
-                ("Loss", "0 — loop holds at rate"),
+                ("Acquisition", "< 1 s (wide 6° FOV)"),
+                ("Tracking error", "< 15 px (degraded max jitter)"),
+                ("Loss", "0 - Q15 holds; PID no saturate"),
             ],
-            bundle_builder=bundles["high_dynamics_agile"],
+            bundle_builder=bundles["tracking_max"],
         ),
         PresetDefinition(
-            id="lost_and_reacq", name="Lost & Reacquire — 2 Targets", category="Recovery", difficulty="Medium",
-            description="Two terminals sinusoidal far vs camera far — forces SEARCH, then TRACK, then LOST→REACQ ladder. Wrong TID must not steal.",
-            goal="Verify full pipeline: SEARCH→TRACK, then LOST 0.4s/25px → REACQ 50→800 TID-gated. RT-001 must not steal RT-002.",
+            id="mixed_max", name="MIXED - Max Stress (All Phases Combined)", category="MIXED", difficulty="Hard",
+            description="MAX ENV+DISTURB (seed 91520): GRID 4 terminals RANDOM 10 m/s, 0.35-0.90W, BG 60/80, vig92, haze100, 4000x1.8, jitter6, Gauss off, S&P off. Full pipeline SEARCH->DETECT->IDENTIFY->ACQUIRE->TRACK->LOST->REACQ under every disturbance.",
+            goal="Verify complete pipeline under worst-case combined stress: SEARCH finds in 4-target RANDOM clutter, IDENTIFY CRC picks priority RT-002, ASSOCIATE tight, TRACK->COAST->LOST->REACQ ladder recovers, all in max sky/jitter.",
             configs=[
-                ("Remote", "2× LINE 200m · sinusoidal 10 m/s · offset 600,600 (far)"),
-                ("Camera", "4.0° · parked top-left (far) · SEARCH required"),
-                ("Autonomy", "Reacq 50→800 + full-scan · lost 0.4s/25px"),
+                ("Remote", "4x GRID 120m - RANDOM 10 m/s - 0.35/0.90/0.55/0.70W - offset 600,600"),
+                ("Camera", "4.0° - 6°/s - parked top-left (far)"),
+                ("Autonomy", "SNR 8 - confirm2 - gate60 - Q10 - Mahal9.2 - reacq 50->800 - priority RT-002"),
+                ("Disturb", "MAX: jitter6 - vib3 - turb2 - platform20 Random - Gauss off - S&P off - Poisson max - UserDef 60/40"),
+                ("Env", "MAX: 4000x1.8 - BG 60/80 - vig92 - haze100 - seed 91520"),
             ],
             expected=[
-                ("LOST", "visible in telemetry"),
-                ("Reacq", "< 1 s (≤1.0s PDF Sr19) · correct TID only"),
-                ("Steal", "0"),
+                ("Acquisition", "< 2 s on priority RT-002"),
+                ("Retention", "> 80% despite max everything"),
+                ("Stability", "no crash / windup under combined 20px shake+noise"),
             ],
-            bundle_builder=bundles["lost_and_reacq"],
-        ),
-        PresetDefinition(
-            id="severe_disturb", name="Severe — Shake + Platform", category="Stress", difficulty="Hard",
-            description="Random 6 m/s far vs camera far — pose jitter 10px + platform 10px forces repeated SEARCH→TRACK→COAST→REACQ; no heavy blur (real-time).",
-            goal="Verify SEARCH finds despite shake, TRACK degrades but holds, LOST→REACQ recovers; tests geometric robustness full pipeline.",
-            configs=[
-                ("Remote", "1× RANDOM 6 m/s · offset 600,600 (far)"),
-                ("Camera", "4.0° · parked top-left (far) · SEARCH required"),
-                ("Disturb", "Shake 10px · Random 10px · vib4 · drift3 · Clear"),
-                ("Env", "Clear seed 555"),
-            ],
-            expected=[
-                ("Acquisition", "< 2 s (may need second scan)"),
-                ("Tracking error", "5–15 px (degraded)"),
-                ("Retention", "> 85%"),
-                ("Stability", "PID no windup/crash"),
-            ],
-            bundle_builder=bundles["severe_disturb"],
+            bundle_builder=bundles["mixed_max"],
         ),
     ]
 
@@ -328,11 +518,23 @@ def _apply_to_session(session, key: str, cfg) -> None:
             pass
 
 
+_LEGACY_ALIAS = {
+    "baseline_clean": "searching_max",
+    "multi_target_line": "identification_max",
+    "low_snr_dim": "detection_max",
+    "high_dynamics_agile": "tracking_max",
+    "lost_and_reacq": "reacquisition_max",
+    "severe_disturb": "mixed_max",
+}
+
 def apply_preset_to_session(session, preset_id: str) -> dict:
     """Apply preset bundle to a SimulationSession or HeadlessSimulation session (headless + GUI)."""
     defs = {p.id: p for p in get_preset_definitions()}
+    # back-compat: old ids still resolve to nearest max-stress equivalent
+    if preset_id not in defs and preset_id in _LEGACY_ALIAS:
+        preset_id = _LEGACY_ALIAS[preset_id]
     if preset_id not in defs:
-        raise ValueError(f"Unknown preset {preset_id!r}. Known: {list(defs)}")
+        raise ValueError(f"Unknown preset {preset_id!r}. Known: {list(defs)} + legacy {list(_LEGACY_ALIAS)}")
     bundle = defs[preset_id].bundle_builder()
     applied = {}
     if bundle.get("scenario") is not None:
@@ -357,7 +559,7 @@ def apply_preset_to_session(session, preset_id: str) -> dict:
 
 
 class PresetsPanel(BaseConfigPanel):
-    """Testing Presets — 6 collapsible cards, each shows configs / goal / expected."""
+    """Testing Presets - 7 max-stress cards (SEARCH/DETECTION/IDENTIFICATION/ACQUISITION/RE-ACQUISITION/TRACKING/MIXED)."""
 
     applyRequested = pyqtSignal(str)  # preset id
 
@@ -372,17 +574,17 @@ class PresetsPanel(BaseConfigPanel):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(10)
 
-        title = QLabel("TEST PRESETS")
+        title = QLabel("TEST PRESETS - MAX STRESS")
         title.setStyleSheet("font-size:15px; font-weight:700;")
         hdr = QHBoxLayout()
         hdr.addWidget(title)
         hdr.addStretch(1)
-        hint = QLabel("6 scenarios — click to expand, Apply to load")
+        hint = QLabel("7 phase tests - click to expand, Apply to load (all MAX sky+disturb)")
         hint.setStyleSheet("color:#64748b; font-size:11px;")
         hdr.addWidget(hint)
         root.addLayout(hdr)
 
-        sub = QLabel("Each preset is one config bundle (remote·camera·PID·autonomy·disturbance·env) with goal & pass criteria.")
+        sub = QLabel("Each preset is MAX-STRESS: 4000 starsx1.8 - BG 60/80 - vignette 92% - haze 100% - random seed - UserDef 60/40 + jitter 6/vib3/Gauss off/S&P off. Phase-specific tuning isolates SEARCH->MIXED.")
         sub.setStyleSheet("color:#8F9CAB; font-size:11px;")
         sub.setWordWrap(True)
         root.addWidget(sub)
@@ -411,7 +613,7 @@ class PresetsPanel(BaseConfigPanel):
             "QPushButton { text-align:left; background:transparent; border:none; color:#111827; font-weight:700; font-size:12px; }"
             "QPushButton:checked { color:#1e40af; }"
         )
-        cat = QLabel(f"{preset.category} · {preset.difficulty}")
+        cat = QLabel(f"{preset.category} - {preset.difficulty}")
         cat.setStyleSheet("color:#6b7280; font-size:10px; background:#f3f4f6; border-radius:8px; padding:2px 8px;")
         cat.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         btn_apply = QPushButton("Apply")

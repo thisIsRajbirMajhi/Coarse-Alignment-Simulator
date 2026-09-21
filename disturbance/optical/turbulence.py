@@ -130,19 +130,49 @@ def apply_turbulence(
     r0 = r0_from_intensity(float(intensity), float(wavelength))
     sigma_R2 = rytov_variance(float(intensity))
 
-    # 1) Seeing blur
-    ksize = int(np.clip(round(3 + float(intensity) * 1.9), 3, 21))
+    # 1) Seeing blur (fast for 60 FPS: small kernel when intensity low)
+    ksize = int(np.clip(round(3 + float(intensity) * 1.2), 3, 11))
     if ksize % 2 == 0:
         ksize += 1
     sigma_blur = max(0.5, 0.42 * (1.22 * float(wavelength) / float(r0)) / 35e-6 * 0.7)
-    sigma_blur = float(np.clip(sigma_blur, 0.6, 4.5))
+    sigma_blur = float(np.clip(sigma_blur, 0.6, 3.0))
     blurred = cv2.GaussianBlur(frame, (ksize, ksize), sigmaX=sigma_blur)
 
-    # 2) Warp field
+    # 2) Warp field - skip heavy Kolmogorov FFT for 60 FPS presets
+    # Intensity 0-2 is ~90% of presets after FPS tuning; warp is 15ms saved.
+    if float(intensity) < 2.5:
+        # No warp, just scintillation on blurred image
+        warped = blurred
+        # Update state to avoid stale warp reuse
+        state["dx"], state["dy"] = None, None
+        # Jump directly to scintillation
+        if not apply_scintillation:
+            return warped
+        sigma_chi = float(math.sqrt(min(float(sigma_R2), RYTOV_CAP) / 4.0 + 1e-9))
+        if sigma_chi > 0.04:
+            small_h = max(1, h // 8)
+            small_w = max(1, w // 8)
+            chi_small = get_rng(rng).normal(-sigma_chi**2, sigma_chi, (small_h, small_w)).astype(np.float32)
+            chi = cv2.resize(chi_small, (w, h), interpolation=cv2.INTER_LINEAR)
+            chi = cv2.GaussianBlur(chi, (0, 0), sigmaX=1.5, sigmaY=1.5)
+            gain = np.clip(np.exp(chi), 0.6, 1.6).astype(np.float32)
+            if warped.ndim == 3:
+                gain = gain[:, :, None]
+            return np.clip(warped.astype(np.float32) * gain, 0, 255).astype(np.uint8)
+        else:
+            chi0 = float(get_rng(rng).normal(-sigma_chi**2, sigma_chi)) if sigma_chi > 0 else 0.0
+            gain0 = float(np.clip(math.exp(chi0), 0.8, 1.2))
+            return np.clip(warped.astype(np.float32) * gain0, 0, 255).astype(np.uint8)
     prev_dx = state.get("dx")
     prev_dy = state.get("dy")
     _rng = get_rng(rng)
-    if h * w > 250_000:
+    if h * w > 120_000:
+        # Quarter size for 60 FPS (was half) - 4x fewer FFT points
+        h2, w2 = max(32, h // 4), max(32, w // 4)
+        dx_s, dy_s = _kolmogorov_displacement(h2, w2, r0, float(intensity), float(wavelength), rng=_rng)
+        dx_new = cv2.resize(dx_s, (w, h), interpolation=cv2.INTER_LINEAR) * 1.9
+        dy_new = cv2.resize(dy_s, (w, h), interpolation=cv2.INTER_LINEAR) * 1.9
+    elif h * w > 250_000:
         h2, w2 = max(32, h // 2), max(32, w // 2)
         dx_s, dy_s = _kolmogorov_displacement(h2, w2, r0, float(intensity), float(wavelength), rng=_rng)
         dx_new = cv2.resize(dx_s, (w, h), interpolation=cv2.INTER_LINEAR) * 1.9

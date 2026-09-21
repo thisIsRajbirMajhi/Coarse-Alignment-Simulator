@@ -272,6 +272,31 @@ class RemoteTerminalManager:
             out = _add_gaussian_spot(out, cx, cy, sigma, peak)
         return out
 
+    def render_spots_on_fov(self, fov_frame: np.ndarray, fov_rect: tuple[float, float, float, float]) -> np.ndarray:
+        """FOV-only spot rendering for 60 FPS: draw only spots visible in FOV.
+        13x cheaper than world 2000x2000 → 640x480, no world copy."""
+        if fov_frame is None or not self.terminals:
+            return fov_frame
+        out = fov_frame
+        x0, y0, x1, y1 = fov_rect
+        # Quick reject: if formation far from FOV, skip all
+        for terminal in self.terminals:
+            power = float(terminal.runtime.instantaneous_power_w)
+            if not terminal.runtime.effective_emission_enabled or power <= 0.0:
+                continue
+            cx_w = terminal.position_m.x * M_PER_PX
+            cy_w = terminal.position_m.y * M_PER_PX
+            # Convert world to FOV local coordinates
+            cx = cx_w - x0
+            cy = cy_w - y0
+            # Check if within FOV extended bounds
+            if not (-30 <= cx < 670 and -30 <= cy < 510):
+                continue
+            sigma = max(float(terminal.runtime.beam_diameter_m) / 2.0, MIN_SPOT_SIGMA_PX)
+            peak = float(np.clip(power / POWER_REF_W, 0.0, 1.0)) * 255.0
+            out = _add_gaussian_spot(out, cx, cy, sigma, peak)
+        return out
+
     # -- internals ---------------------------------------------------
     def _compute_offsets(self) -> list[Vector2]:
         form = self.config.formation

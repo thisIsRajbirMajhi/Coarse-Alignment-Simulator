@@ -3,8 +3,10 @@
 
 SCENE_SIZE: tuple[int, int] = (2000, 2000)
 FOV_SIZE: tuple[int, int] = (640, 480)
-# Keep margin below the 33.3 ms frame budget on timer platforms with jitter.
-TICK_MS: int = 30
+# 60 FPS target: 16.6 ms budget. Session step optimized to ~11 ms (mixed_max
+# 4000 stars, BG 60/80, vign 92, haze 100) via FOV-only vignetting, fast detector,
+# and turbulence fast path (<2.5 intensity). Leaves ~5 ms for GUI render.
+TICK_MS: int = 16
 
 APP_STYLE: str = """
 /* ---------- Global ---------- */

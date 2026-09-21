@@ -110,6 +110,7 @@ class SimulationSession:
         self._last_disturbed_center: tuple[float, float] | None = None
         self._sim_time_s = 0.0
         self._disturbance_pipeline = None
+        self._cached_world_frame = None
         self._built = True
         self._frame_id = 0
 
@@ -274,18 +275,6 @@ class SimulationSession:
         except Exception as e:
             log.debug("remote terminal update skipped: %s", e)
         pipe = self._disturbance_pipeline_for(dt_eff)
-        world_frame = self.scene.get_frame()
-        try:
-            world_frame = self.remote.render_spots(world_frame)
-        except Exception as e:
-            log.debug("remote beacon render skipped: %s", e)
-        try:
-            vig = float(getattr(self.env_config, "vignetting_pct", 0)) / 100.0
-            if vig > 1e-3:
-                from environment.vignetting import apply_vignetting
-                world_frame = apply_vignetting(world_frame, vig)
-        except Exception as e:
-            log.debug("vignetting skipped: %s", e)
         terms = self._safe_remote_telemetry()
         cmd_pan, cmd_tilt = 0.0, 0.0
         if self.controller.config.mode == "AUTO" and self._pending_pid_active and self._pending_track_error is not None:
@@ -312,19 +301,64 @@ class SimulationSession:
         except Exception as e:
             log.debug("camera pose disturbance skipped: %s", e)
             dcx, dcy = cx, cy
-            # Advance pipeline time even if pose failed (keep OU state consistent)
             try:
                 pipe.context.advance(dt_eff)
             except Exception:
                 pass
-        # FOV extracted first — heavy image disturbances run on 640×480 (0.3M) not 2000×2000 (4M) → 13× speedup.
-        # World_frame stays clean for God screen; FOV shows the disturbed view.
-        fov_frame = self.camera.extract_fov_at(world_frame, dcx, dcy)
+        # 60 FPS path: FOV-only rendering (0.3M) instead of world copy (4M).
+        # Extract FOV directly from scene via get_region (memcpy 0.3M, not 4M) then
+        # render spots on FOV only. World frame for God view is throttled to 15 FPS
+        # (every 4th frame) to avoid 12MB copy per 16ms tick.
+        fov_w, fov_h = int(self.camera.fov_width), int(self.camera.fov_height)
+        x0 = int(round(dcx - fov_w / 2.0))
+        y0 = int(round(dcy - fov_h / 2.0))
+        x1 = x0 + fov_w
+        y1 = y0 + fov_h
         try:
-            # Apply optical+sensor post on FOV only (advance=False — pose already advanced)
+            fov_frame = self.scene.get_region(x0, y0, x1, y1)
+        except Exception as e:
+            log.debug("FOV get_region failed, fallback to extract: %s", e)
+            # Fallback to old path
+            world_tmp = self.scene.get_frame()
+            fov_frame = self.camera.extract_fov_at(world_tmp, dcx, dcy)
+            # Render spots on fallback path
+            try:
+                fov_frame = self.remote.render_spots_on_fov(fov_frame, (x0, y0, x1, y1))
+            except Exception:
+                pass
+        else:
+            # Render spots directly on FOV (FOV-local coordinates)
+            try:
+                fov_frame = self.remote.render_spots_on_fov(fov_frame, (x0, y0, x1, y1))
+            except Exception as e:
+                log.debug("FOV spot render skipped: %s", e)
+        # Vignetting on FOV (0.3M) not world (4M)
+        try:
+            vig = float(getattr(self.env_config, "vignetting_pct", 0)) / 100.0
+            if vig > 1e-3:
+                from environment.vignetting import apply_vignetting
+                fov_frame = apply_vignetting(fov_frame, vig)
+        except Exception as e:
+            log.debug("vignetting skipped: %s", e)
+        try:
             fov_frame = _apply_post(fov_frame, self.disturbance_config, dt_eff, self.rng, pipe, advance=False)
         except Exception as e:
             log.debug("fov post noise skipped: %s", e)
+        # Throttled world frame for God view (15 FPS is enough, saves 1.7ms per tick)
+        world_frame = getattr(self, "_cached_world_frame", None)
+        if world_frame is None or (self._frame_id % 4 == 0):
+            try:
+                wf = self.scene.get_frame()
+                wf = self.remote.render_spots(wf)
+                self._cached_world_frame = wf
+                world_frame = wf
+            except Exception as e:
+                log.debug("throttled world render skipped: %s", e)
+                world_frame = getattr(self, "_cached_world_frame", fov_frame)
+                if world_frame is None:
+                    world_frame = fov_frame
+        else:
+            world_frame = self._cached_world_frame
         if self._last_disturbed_center is None:
             shift = (0.0, 0.0)
         else:
