@@ -38,9 +38,11 @@ class PTZCamera:
         self.world_size = (int(world_size[0]), int(world_size[1]))
         self.rng = get_rng(rng, 42)
 
-        # Mechanical state (true angles and velocities)
-        self.pan_deg: float = float(self.config.home_pan_deg)
-        self.tilt_deg: float = float(self.config.home_tilt_deg)
+        # Mechanical state (true angles and velocities). Initial pose is the
+        # configured custom start when enabled, else home.
+        init_pan, init_tilt = self.config.get_initial_pose()
+        self.pan_deg: float = float(init_pan)
+        self.tilt_deg: float = float(init_tilt)
         self.pan_vel_deg_s: float = 0.0
         self.tilt_vel_deg_s: float = 0.0
         self.pan_accel_deg_s2: float = 0.0
@@ -90,9 +92,10 @@ class PTZCamera:
         self._compute_measured_angles()
 
     def reset(self, pan_deg: float | None = None, tilt_deg: float | None = None) -> None:
-        """Reset gimbal to home or specified angles, bounded by world borders."""
-        raw_pan = float(self.config.home_pan_deg if pan_deg is None else pan_deg)
-        raw_tilt = float(self.config.home_tilt_deg if tilt_deg is None else tilt_deg)
+        """Reset gimbal to start/home or specified angles, bounded by world borders."""
+        init_pan, init_tilt = self.config.get_initial_pose()
+        raw_pan = float(init_pan if pan_deg is None else pan_deg)
+        raw_tilt = float(init_tilt if tilt_deg is None else tilt_deg)
         p_min, p_max, t_min, t_max = self.get_effective_angular_limits()
         self.pan_deg = float(np.clip(raw_pan, p_min, p_max))
         self.tilt_deg = float(np.clip(raw_tilt, t_min, t_max))
@@ -520,5 +523,20 @@ class PTZCamera:
                 "resolution": [self.config.resolution_w, self.config.resolution_h],
                 "deg_per_px_h": self.config.deg_per_px_h,
                 "deg_per_px_v": self.config.deg_per_px_v,
-            }
+            },
+            "expected_payload": {
+                "expected_tid": str(getattr(self.config, "expected_tid", "RT-001")),
+                "expected_wavelength_nm": float(getattr(self.config, "expected_wavelength_nm", 1550.0)),
+                "expected_wl_tolerance_nm": float(getattr(self.config, "expected_wl_tolerance_nm", 50.0)),
+                "expected_require_nav": bool(getattr(self.config, "expected_require_nav", False)),
+                "local_id": str(getattr(self.config, "local_id", "")),
+            },
+            "start_pose": {
+                "home_pan_deg": float(self.config.home_pan_deg),
+                "home_tilt_deg": float(self.config.home_tilt_deg),
+                "start_pan_deg": float(getattr(self.config, "start_pan_deg", 0.0)),
+                "start_tilt_deg": float(getattr(self.config, "start_tilt_deg", 0.0)),
+                "use_custom_start": bool(getattr(self.config, "use_custom_start", False)),
+                "scan_start_index": int(getattr(self.config, "scan_start_index", 0)),
+            },
         }

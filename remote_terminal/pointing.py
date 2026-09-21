@@ -9,8 +9,8 @@ from typing import Any
 from remote_terminal.geometry import normalize_angle_deg
 
 # Internal pointing-error constants (degrees).
-POINTING_BIAS_DEG: float = 0.05
-POINTING_JITTER_SIGMA_DEG: float = 0.02
+POINTING_BIAS_DEG: float = 0.005
+POINTING_JITTER_SIGMA_DEG: float = 0.002
 
 
 def _draw_gaussian(rng: Any, sigma: float) -> float:

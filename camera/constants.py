@@ -41,6 +41,15 @@ CAMERA_LIMITS: dict[str, tuple[float, float]] = {
     "backlash_deg": (0.0, 0.5),            # Gear backlash / dead-zone (deg)
     "encoder_bits": (10, 24),              # Encoder resolution in bits
     "encoder_noise_deg": (0.0, 0.05),      # 1-sigma encoder noise (deg)
+
+    # Expected Payload (local-terminal beacon expectations, §3.1)
+    "expected_wavelength_nm": (800.0, 1700.0),  # Expected carrier wavelength (nm)
+    "expected_wl_tolerance_nm": (1.0, 200.0),   # Wavelength match tolerance (nm)
+
+    # Custom Starting Positions (all agents)
+    "start_pan_deg": (-180.0, 180.0),       # Custom gimbal start pose (deg)
+    "start_tilt_deg": (-90.0, 90.0),
+    "scan_start_index": (0, 19),             # Local-terminal scan grid start cell
 }
 
 CAMERA_DEFAULTS: dict[str, Any] = {
@@ -67,6 +76,15 @@ CAMERA_DEFAULTS: dict[str, Any] = {
     "backlash_deg": 0.005,                 # 18 arcsec backlash
     "encoder_bits": 16,                    # 16-bit encoder (~0.0055° resolution)
     "encoder_noise_deg": 0.001,            # 3.6 arcsec RMS noise
+
+    # Expected Payload (local-terminal beacon expectations)
+    "expected_wavelength_nm": 1550.0,
+    "expected_wl_tolerance_nm": 50.0,
+
+    # Custom Starting Positions (camera + local-terminal scan)
+    "start_pan_deg": 0.0,
+    "start_tilt_deg": 0.0,
+    "scan_start_index": 0,
 }
 
 CAMERA_PRESETS: dict[str, dict[str, Any]] = {

@@ -78,6 +78,8 @@ class PIDController:
         deg_per_px_h: float,
         deg_per_px_v: float,
         dt: float,
+        target_vel_x_px_s: float = 0.0,
+        target_vel_y_px_s: float = 0.0,
     ) -> tuple[float, float]:
         """
         Compute velocity commands (deg/s) from pixel tracking errors (target - boresight).
@@ -88,6 +90,8 @@ class PIDController:
             deg_per_px_h: Optical scaling factor for horizontal axis.
             deg_per_px_v: Optical scaling factor for vertical axis.
             dt: Time step (seconds).
+            target_vel_x_px_s: Optional target velocity feedforward in x (px/s).
+            target_vel_y_px_s: Optional target velocity feedforward in y (px/s).
             
         Returns:
             (cmd_pan_vel_deg_s, cmd_tilt_vel_deg_s)
@@ -120,6 +124,10 @@ class PIDController:
         error_pan_deg = eff_err_x * deg_per_px_h
         error_tilt_deg = -eff_err_y * deg_per_px_v
 
+        # Feedforward from target velocity
+        ff_pan = float(target_vel_x_px_s) * deg_per_px_h
+        ff_tilt = -float(target_vel_y_px_s) * deg_per_px_v
+
         # 3. Compute PID for each axis independently
         cmd_pan, p_pan, i_pan, d_pan, sat_pan = self._update_axis(
             error=error_pan_deg,
@@ -131,6 +139,7 @@ class PIDController:
             prev_error=self.prev_error_pan,
             dt=dt_eff,
             is_first_step=self._first_step_pan,
+            feedforward=ff_pan,
         )
 
         cmd_tilt, p_tilt, i_tilt, d_tilt, sat_tilt = self._update_axis(
@@ -143,6 +152,7 @@ class PIDController:
             prev_error=self.prev_error_tilt,
             dt=dt_eff,
             is_first_step=self._first_step_tilt,
+            feedforward=ff_tilt,
         )
 
         # Store internal states
@@ -187,6 +197,7 @@ class PIDController:
         prev_error: float,
         dt: float,
         is_first_step: bool = False,
+        feedforward: float = 0.0,
     ) -> tuple[float, float, float, float, bool]:
         """
         Single-axis PID calculation with filtered derivative and anti-windup clamping.
@@ -215,8 +226,8 @@ class PIDController:
         max_int = float(self.config.max_integral_deg)
         new_integral = float(np.clip(new_integral, -max_int, max_int))
 
-        # Output with tentative integral
-        raw_output = p_term + new_integral + d_term
+        # Output with tentative integral and feedforward
+        raw_output = p_term + new_integral + d_term + float(feedforward)
         max_out = float(self.config.max_output_deg_s)
         is_saturated = abs(raw_output) > max_out
 
@@ -225,7 +236,7 @@ class PIDController:
         if is_saturated and (raw_output * error > 0):
             new_integral = integral
             # Recalculate output with frozen integral for consistency
-            raw_output = p_term + new_integral + d_term
+            raw_output = p_term + new_integral + d_term + float(feedforward)
 
         cmd_vel = float(np.clip(raw_output, -max_out, max_out))
 

@@ -153,6 +153,31 @@ class RemoteTerminalPanel(BaseConfigPanel):
         )
         root.addWidget(mot_box)
 
+        # STARTING POSITION card (formation-center offset from world center).
+        start_box, start_grid = self._make_group("STARTING POSITION")
+        self.spin_start_x = QDoubleSpinBox()
+        self.spin_start_x.setRange(float(_meta("start_offset_x_m")["min"]),
+                                   float(_meta("start_offset_x_m")["max"]))
+        self.spin_start_x.setSingleStep(float(_meta("start_offset_x_m")["step"]))
+        self.spin_start_x.setSuffix(" m")
+        self.spin_start_x.setToolTip(_tooltip("start_offset_x_m"))
+        self.spin_start_y = QDoubleSpinBox()
+        self.spin_start_y.setRange(float(_meta("start_offset_y_m")["min"]),
+                                   float(_meta("start_offset_y_m")["max"]))
+        self.spin_start_y.setSingleStep(float(_meta("start_offset_y_m")["step"]))
+        self.spin_start_y.setSuffix(" m")
+        self.spin_start_y.setToolTip(_tooltip("start_offset_y_m"))
+        start_grid.addWidget(self._label("Start Offset X"), 0, 0)
+        start_grid.addWidget(self.spin_start_x, 0, 1)
+        start_grid.addWidget(self._label("Start Offset Y"), 1, 0)
+        start_grid.addWidget(self.spin_start_y, 1, 1)
+        start_grid.addWidget(
+            self._hint("Formation-center offset from world center at build/reset. "
+                       "(0, 0) = scene center."),
+            2, 0, 1, 2,
+        )
+        root.addWidget(start_box)
+
         # TERMINAL card.
         term_box, term_grid = self._make_group("TERMINAL")
         self.combo_terminal = QComboBox()
@@ -247,6 +272,8 @@ class RemoteTerminalPanel(BaseConfigPanel):
         self.combo_motion.currentIndexChanged.connect(self._on_formation_changed)
         self.spin_speed.valueChanged.connect(self._on_formation_changed)
         self.spin_heading.valueChanged.connect(self._on_formation_changed)
+        self.spin_start_x.valueChanged.connect(self._on_formation_changed)
+        self.spin_start_y.valueChanged.connect(self._on_formation_changed)
         self.combo_terminal.currentIndexChanged.connect(self._on_terminal_selected)
         self.edit_tid.editingFinished.connect(self._on_terminal_edited)
         self.chk_power.toggled.connect(self._on_terminal_edited)
@@ -269,6 +296,8 @@ class RemoteTerminalPanel(BaseConfigPanel):
             terminal_spacing_m=float(self.spin_spacing.value()),
             speed_mps=float(self.spin_speed.value()),
             heading_deg=float(self.spin_heading.value()),
+            start_offset_x_m=float(self.spin_start_x.value()),
+            start_offset_y_m=float(self.spin_start_y.value()),
         )
         self._config.formation = formation
         self._sync_terminal_count(int(self.spin_count.value()))
@@ -288,6 +317,8 @@ class RemoteTerminalPanel(BaseConfigPanel):
             self._set_combo(self.combo_motion, form.motion_profile.value)
             self.spin_speed.setValue(float(form.speed_mps))
             self.spin_heading.setValue(float(form.heading_deg))
+            self.spin_start_x.setValue(float(getattr(form, "start_offset_x_m", 0.0)))
+            self.spin_start_y.setValue(float(getattr(form, "start_offset_y_m", 0.0)))
             self._refresh_terminal_selector()
             self._load_terminal_editor()
             self._show_error("")
@@ -314,6 +345,8 @@ class RemoteTerminalPanel(BaseConfigPanel):
             terminal_spacing_m=round(_random.uniform(10.0, 500.0), 1),
             speed_mps=round(_random.uniform(0.0, 100.0), 1),
             heading_deg=round(_random.uniform(-180.0, 180.0), 1),
+            start_offset_x_m=round(_random.uniform(-500.0, 500.0), 1),
+            start_offset_y_m=round(_random.uniform(-500.0, 500.0), 1),
         )
         terminals = [
             RemoteTerminalConfig(

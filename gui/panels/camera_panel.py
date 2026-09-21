@@ -8,9 +8,12 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
+    QSpinBox,
     QVBoxLayout,
 )
 
@@ -198,6 +201,107 @@ class CameraPanel(BaseConfigPanel):
         mech_grid.addWidget(self.chk_measured_feedback, 3, 0, 1, 3)
 
         root.addWidget(mech_box)
+
+        # --- 4. Expected Payload (Beacon) Group ---
+        pay_box, pay_grid = self._make_group("EXPECTED PAYLOAD (BEACON)")
+
+        self.edit_expected_tid = QLineEdit("RT-001")
+        self.edit_expected_tid.setToolTip(
+            "Expected beacon Terminal ID — seeded into the local-terminal "
+            "signature registry when the mission file lacks it")
+        pay_grid.addWidget(self._label("Expected TID"), 0, 0)
+        pay_grid.addWidget(self.edit_expected_tid, 0, 1)
+
+        self.spin_expected_wl = QDoubleSpinBox()
+        self.spin_expected_wl.setRange(800.0, 1700.0)
+        self.spin_expected_wl.setSingleStep(1.0)
+        self.spin_expected_wl.setDecimals(0)
+        self.spin_expected_wl.setSuffix(" nm")
+        self.spin_expected_wl.setToolTip(
+            "Expected beacon carrier wavelength (local-terminal registry override)")
+        pay_grid.addWidget(self._label("Expected Wavelength"), 1, 0)
+        pay_grid.addWidget(self.spin_expected_wl, 1, 1)
+
+        self.slider_expected_tol, self.lbl_expected_tol, self.factor_expected_tol = self._make_float_slider(
+            1.0, 200.0, 50.0, decimals=0, suffix=" nm",
+            tooltip="Wavelength match tolerance for validation scoring",
+        )
+        pay_grid.addWidget(self._label("Wavelength Tolerance"), 2, 0)
+        pay_grid.addWidget(self.slider_expected_tol, 2, 1)
+        pay_grid.addWidget(self.lbl_expected_tol, 2, 2)
+
+        self.chk_require_nav = QCheckBox("Require NAV extension")
+        self.chk_require_nav.setToolTip(
+            "Require the 12-byte navigation extension on expected beacons")
+        self.chk_require_nav.setStyleSheet("color:#374151; font-size:11px;")
+        pay_grid.addWidget(self.chk_require_nav, 3, 0, 1, 2)
+
+        self.edit_local_id = QLineEdit("")
+        self.edit_local_id.setPlaceholderText("e.g. LT-001 (empty = disabled)")
+        self.edit_local_id.setToolTip(
+            "Local self-ID for loopback-fault detection (empty disables the check)")
+        pay_grid.addWidget(self._label("Local Self-ID"), 4, 0)
+        pay_grid.addWidget(self.edit_local_id, 4, 1)
+
+        pay_grid.addWidget(
+            self._hint("Seeds/overrides the signature registry built from the mission file."),
+            5, 0, 1, 3,
+        )
+        root.addWidget(pay_box)
+
+        # --- 5. Starting Positions (Camera + Local Terminal) Group ---
+        start_box, start_grid = self._make_group("STARTING POSITIONS (CAMERA + LOCAL)")
+
+        self.slider_home_pan, self.lbl_home_pan, self.factor_home_pan = self._make_float_slider(
+            -180.0, 180.0, 0.0, decimals=1, suffix="°",
+            tooltip="Gimbal home pan angle (reset reference)",
+        )
+        start_grid.addWidget(self._label("Home Pan"), 0, 0)
+        start_grid.addWidget(self.slider_home_pan, 0, 1)
+        start_grid.addWidget(self.lbl_home_pan, 0, 2)
+
+        self.slider_home_tilt, self.lbl_home_tilt, self.factor_home_tilt = self._make_float_slider(
+            -90.0, 90.0, 0.0, decimals=1, suffix="°",
+            tooltip="Gimbal home tilt angle (reset reference)",
+        )
+        start_grid.addWidget(self._label("Home Tilt"), 1, 0)
+        start_grid.addWidget(self.slider_home_tilt, 1, 1)
+        start_grid.addWidget(self.lbl_home_tilt, 1, 2)
+
+        self.slider_start_pan, self.lbl_start_pan, self.factor_start_pan = self._make_float_slider(
+            -180.0, 180.0, 0.0, decimals=1, suffix="°",
+            tooltip="Custom gimbal start pan (used on init/reset when enabled)",
+        )
+        start_grid.addWidget(self._label("Start Pan"), 2, 0)
+        start_grid.addWidget(self.slider_start_pan, 2, 1)
+        start_grid.addWidget(self.lbl_start_pan, 2, 2)
+
+        self.slider_start_tilt, self.lbl_start_tilt, self.factor_start_tilt = self._make_float_slider(
+            -90.0, 90.0, 0.0, decimals=1, suffix="°",
+            tooltip="Custom gimbal start tilt (used on init/reset when enabled)",
+        )
+        start_grid.addWidget(self._label("Start Tilt"), 3, 0)
+        start_grid.addWidget(self.slider_start_tilt, 3, 1)
+        start_grid.addWidget(self.lbl_start_tilt, 3, 2)
+
+        self.chk_custom_start = QCheckBox("Use custom start pose on init/reset")
+        self.chk_custom_start.setToolTip(
+            "When checked, the camera starts at Start Pan/Tilt instead of Home")
+        self.chk_custom_start.setStyleSheet("color:#374151; font-size:11px;")
+        start_grid.addWidget(self.chk_custom_start, 4, 0, 1, 3)
+
+        self.slider_scan_start, self.lbl_scan_start = self._make_int_slider(
+            0, 19, 0, tooltip="Local-terminal scan grid start cell (0..19)"
+        )
+        start_grid.addWidget(self._label("Scan Start Cell"), 5, 0)
+        start_grid.addWidget(self.slider_scan_start, 5, 1)
+        start_grid.addWidget(self.lbl_scan_start, 5, 2)
+
+        start_grid.addWidget(
+            self._hint("Remote-terminal formation start offsets live under Remote Terminal → Starting Position."),
+            6, 0, 1, 3,
+        )
+        root.addWidget(start_box)
         root.addStretch(1)
 
         # Connect change signals — release-gated: valueChanged updates the
@@ -210,11 +314,20 @@ class CameraPanel(BaseConfigPanel):
             self.slider_pan_accel, self.slider_tilt_accel,
             self.slider_pan_range, self.slider_tilt_range,
             self.slider_backlash, self.slider_damping, self.slider_noise,
+            self.slider_expected_tol,
+            self.slider_home_pan, self.slider_home_tilt,
+            self.slider_start_pan, self.slider_start_tilt,
+            self.slider_scan_start,
         ]
         for s in sliders:
             s.valueChanged.connect(self._on_control_changed)
             s.sliderReleased.connect(self._on_control_changed)
         self.chk_measured_feedback.toggled.connect(self._on_control_changed)
+        self.chk_require_nav.toggled.connect(self._on_control_changed)
+        self.chk_custom_start.toggled.connect(self._on_control_changed)
+        self.spin_expected_wl.valueChanged.connect(self._on_control_changed)
+        self.edit_expected_tid.editingFinished.connect(self._on_control_changed)
+        self.edit_local_id.editingFinished.connect(self._on_control_changed)
 
     def _on_control_changed(self) -> None:
         """Handle live changes from sliders (skipped mid-drag)."""
@@ -231,7 +344,21 @@ class CameraPanel(BaseConfigPanel):
     def _on_preset_selected(self, name: str) -> None:
         if name in CAMERA_PRESETS:
             preset = CAMERA_PRESETS[name]
-            cfg = CameraConfig(**preset).validate()
+            # Preserve Expected Payload + Starting Positions across presets:
+            # presets only tune optics/kinematics/dynamics.
+            try:
+                current = self.collect_config()
+            except Exception:
+                current = None
+            kwargs = dict(preset)
+            if current is not None:
+                for k in ("expected_tid", "expected_wavelength_nm",
+                          "expected_wl_tolerance_nm", "expected_require_nav",
+                          "local_id", "home_pan_deg", "home_tilt_deg",
+                          "start_pan_deg", "start_tilt_deg", "use_custom_start",
+                          "scan_start_index", "use_measured_feedback"):
+                    kwargs[k] = getattr(current, k)
+            cfg = CameraConfig(**kwargs).validate()
             self.set_config(cfg, emit=True)
 
     def collect_config(self) -> CameraConfig:
@@ -252,10 +379,21 @@ class CameraPanel(BaseConfigPanel):
             pan_max_deg=pan_r,
             tilt_min_deg=-tilt_r,
             tilt_max_deg=tilt_r,
+            home_pan_deg=float(self.slider_home_pan.value()) / self.factor_home_pan,
+            home_tilt_deg=float(self.slider_home_tilt.value()) / self.factor_home_tilt,
             backlash_deg=float(self.slider_backlash.value()) / self.factor_backlash,
             damping_ratio=float(self.slider_damping.value()) / self.factor_damping,
             encoder_noise_deg=float(self.slider_noise.value()) / self.factor_noise,
             use_measured_feedback=bool(self.chk_measured_feedback.isChecked()),
+            expected_tid=str(self.edit_expected_tid.text() or "").strip() or "RT-001",
+            expected_wavelength_nm=float(self.spin_expected_wl.value()),
+            expected_wl_tolerance_nm=float(self.slider_expected_tol.value()) / self.factor_expected_tol,
+            expected_require_nav=bool(self.chk_require_nav.isChecked()),
+            local_id=str(self.edit_local_id.text() or "").strip(),
+            start_pan_deg=float(self.slider_start_pan.value()) / self.factor_start_pan,
+            start_tilt_deg=float(self.slider_start_tilt.value()) / self.factor_start_tilt,
+            use_custom_start=bool(self.chk_custom_start.isChecked()),
+            scan_start_index=int(self.slider_scan_start.value()),
         )
         return cfg.validate()
 
@@ -269,10 +407,19 @@ class CameraPanel(BaseConfigPanel):
             self.slider_pan_accel, self.slider_tilt_accel,
             self.slider_pan_range, self.slider_tilt_range,
             self.slider_backlash, self.slider_damping, self.slider_noise,
+            self.slider_expected_tol,
+            self.slider_home_pan, self.slider_home_tilt,
+            self.slider_start_pan, self.slider_start_tilt,
+            self.slider_scan_start,
         ]
         for s in sliders:
             s.blockSignals(True)
         self.chk_measured_feedback.blockSignals(True)
+        self.chk_require_nav.blockSignals(True)
+        self.chk_custom_start.blockSignals(True)
+        self.spin_expected_wl.blockSignals(True)
+        self.edit_expected_tid.blockSignals(True)
+        self.edit_local_id.blockSignals(True)
 
         try:
             self.slider_fov_h.setValue(int(round(c.fov_deg_h * self.factor_fov_h)))
@@ -314,10 +461,37 @@ class CameraPanel(BaseConfigPanel):
             self.lbl_noise.setText(f"{c.encoder_noise_deg:.4f}°")
 
             self.chk_measured_feedback.setChecked(bool(getattr(c, "use_measured_feedback", False)))
+
+            # Expected Payload (Beacon)
+            self.edit_expected_tid.setText(str(getattr(c, "expected_tid", "RT-001")))
+            self.spin_expected_wl.setValue(float(getattr(c, "expected_wavelength_nm", 1550.0)))
+            tol = float(getattr(c, "expected_wl_tolerance_nm", 50.0))
+            self.slider_expected_tol.setValue(int(round(tol * self.factor_expected_tol)))
+            self.lbl_expected_tol.setText(f"{tol:.0f} nm")
+            self.chk_require_nav.setChecked(bool(getattr(c, "expected_require_nav", False)))
+            self.edit_local_id.setText(str(getattr(c, "local_id", "") or ""))
+
+            # Starting Positions (Camera + Local Terminal)
+            self.slider_home_pan.setValue(int(round(float(c.home_pan_deg) * self.factor_home_pan)))
+            self.lbl_home_pan.setText(f"{float(c.home_pan_deg):.1f}°")
+            self.slider_home_tilt.setValue(int(round(float(c.home_tilt_deg) * self.factor_home_tilt)))
+            self.lbl_home_tilt.setText(f"{float(c.home_tilt_deg):.1f}°")
+            self.slider_start_pan.setValue(int(round(float(getattr(c, "start_pan_deg", 0.0)) * self.factor_start_pan)))
+            self.lbl_start_pan.setText(f"{float(getattr(c, 'start_pan_deg', 0.0)):.1f}°")
+            self.slider_start_tilt.setValue(int(round(float(getattr(c, "start_tilt_deg", 0.0)) * self.factor_start_tilt)))
+            self.lbl_start_tilt.setText(f"{float(getattr(c, 'start_tilt_deg', 0.0)):.1f}°")
+            self.chk_custom_start.setChecked(bool(getattr(c, "use_custom_start", False)))
+            self.slider_scan_start.setValue(int(getattr(c, "scan_start_index", 0)))
+            self.lbl_scan_start.setText(str(int(getattr(c, "scan_start_index", 0))))
         finally:
             for s in sliders:
                 s.blockSignals(False)
             self.chk_measured_feedback.blockSignals(False)
+            self.chk_require_nav.blockSignals(False)
+            self.chk_custom_start.blockSignals(False)
+            self.spin_expected_wl.blockSignals(False)
+            self.edit_expected_tid.blockSignals(False)
+            self.edit_local_id.blockSignals(False)
 
         if emit:
             self.configChanged.emit(c)

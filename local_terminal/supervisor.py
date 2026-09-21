@@ -136,7 +136,7 @@ class AutonomySupervisor:
         self._transition(AutonomyState.SEARCH, "escalation_scan")
         self.scan_ctrl.reset(clear_visited=True)
         self.validator.reset_track()
-        self.tracker.reset()
+        self.tracker.reset_measurement_lock()
 
     def full_reset(self) -> bool:
         """Level 2: clears all state, centres camera, rate-limited to 3 per 5 min."""
@@ -160,6 +160,7 @@ class AutonomySupervisor:
         self.selector.standby_pool.clear()
         self.reacq_mgr.reset()
         self.comm_rx.reset()
+        self._hold_target_angles = (0.0, 0.0)
 
         self._transition(AutonomyState.SEARCH, "full_reset")
         return True
@@ -183,9 +184,18 @@ class AutonomySupervisor:
         the photodiode physical sensor model in comm_rx; all autonomy
         decisions consume only decoded photons and detections.
         """
+        from common.coordinates import FovPoint, fov_to_world
+
         self.sim_time_s = float(sim_time_s)
         dt_eff = max(float(dt), 1e-6)
         self.total_frames += 1
+
+        cam_rect = (
+            boresight_world[0] - fov_size[0] / 2.0,
+            boresight_world[1] - fov_size[1] / 2.0,
+            float(fov_size[0]),
+            float(fov_size[1]),
+        )
 
         # 1. Detection (§5.1)
         dets = detect_candidates(fov_frame, self.detector_config) if fov_frame is not None else []
@@ -195,9 +205,7 @@ class AutonomySupervisor:
 
         # 2. Photodiode Comm Receiver update (§2.7, §5.3)
         sources = comm_sources or []
-        snr_db = float(dets[0].snr_db) if dets else 6.0
-        ber = ber_from_snr_db(snr_db)
-        self.comm_rx.update(sources, boresight_world, self.sim_time_s, dt_eff, ber)
+        self.comm_rx.update(sources, boresight_world, self.sim_time_s, dt_eff)
         crc_before = self.comm_rx.crc_failures
         decode_res = self.comm_rx.try_parse()
         crc_failed = self.comm_rx.crc_failures > crc_before
@@ -242,10 +250,15 @@ class AutonomySupervisor:
             # Hold dwell on current scan cell
             target_angles = getattr(self, "_hold_target_angles", curr_cam_angles)
 
-            # Ingest into validator (§5.3)
-            phot = None
+            # Ingest into validator (§5.3) - prioritize detection closest to boresight center
+            best_det = None
             if dets:
-                phot = {"snr_db": dets[0].snr_db, "peak": dets[0].peak, "centroid": (dets[0].fov_x, dets[0].fov_y)}
+                cx, cy = fov_size[0] / 2.0, fov_size[1] / 2.0
+                best_det = min(dets, key=lambda d: (d.fov_x - cx) ** 2 + (d.fov_y - cy) ** 2)
+
+            phot = None
+            if best_det is not None:
+                phot = {"snr_db": best_det.snr_db, "peak": best_det.peak, "centroid": (best_det.fov_x, best_det.fov_y)}
             vsnap = self.validator.ingest(decode_res, phot, crc_failed, self.sim_time_s)
             self._pending_validation_snap = vsnap
 
@@ -259,8 +272,17 @@ class AutonomySupervisor:
             self.total_searching_time_s += dt_eff
             # Select best target from pool (§6)
             cands = []
-            if self._pending_validation_snap and dets:
-                cands.append((self._pending_validation_snap, (dets[0].fov_x, dets[0].fov_y)))
+            if self._pending_validation_snap:
+                if dets:
+                    cx, cy = fov_size[0] / 2.0, fov_size[1] / 2.0
+                    best_det = min(dets, key=lambda d: (d.fov_x - cx) ** 2 + (d.fov_y - cy) ** 2)
+                    cand_pos = (best_det.fov_x, best_det.fov_y)
+                elif self.validator.centroids:
+                    cand_pos = self.validator.centroids[-1]
+                else:
+                    cand_pos = (fov_size[0] / 2.0, fov_size[1] / 2.0)
+                w_pt = fov_to_world(FovPoint(cand_pos[0], cand_pos[1]), cam_rect)
+                cands.append((self._pending_validation_snap, cand_pos, (w_pt.x, w_pt.y)))
             selected_snap, selected_pos = self.selector.select(cands, self.sim_time_s, self.validator.blacklist)
 
             if selected_snap is not None and selected_pos is not None and selected_snap.terminal_id:
@@ -293,8 +315,9 @@ class AutonomySupervisor:
             if not tsnap.locked:
                 self.target_loss_count += 1
                 self.reacquisition_start_s = self.sim_time_s
-                last_pos = (tsnap.fov_x, tsnap.fov_y)
-                self.reacq_mgr.start(tsnap.terminal_id or "RT", last_pos, self.tracker.model, self.sim_time_s)
+                w_pt = fov_to_world(FovPoint(tsnap.fov_x, tsnap.fov_y), cam_rect)
+                last_world_pos = (w_pt.x, w_pt.y)
+                self.reacq_mgr.start(tsnap.terminal_id or "RT", last_world_pos, self.tracker.model, self.sim_time_s)
                 self._transition(AutonomyState.RE_ACQUIRE, "target_lost_exceeded_misses")
 
         elif self.state == AutonomyState.RE_ACQUIRE:
@@ -308,6 +331,9 @@ class AutonomySupervisor:
                 self.scan_ctrl,
                 cam_home,
                 px_per_deg,
+                current_cam_angles=curr_cam_angles,
+                cam_fov_rect=cam_rect,
+                fov_size=fov_size,
             )
 
             if reacq_res.reacquired and reacq_res.target_id and reacq_res.target_pos:

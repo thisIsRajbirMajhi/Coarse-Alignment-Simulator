@@ -27,9 +27,16 @@ class SignatureRegistry:
 
     entries: dict[str, ExpectedSignature] = field(default_factory=dict)
     local_id: str | None = None
+    wl_tolerance_nm: float = WAVELENGTH_TOLERANCE_NM
 
     @classmethod
-    def from_scenario(cls, scenario, local_id: str | None = None) -> "SignatureRegistry":
+    def from_scenario(
+        cls,
+        scenario,
+        local_id: str | None = None,
+        wl_tolerance_nm: float | None = None,
+        require_nav: bool = False,
+    ) -> "SignatureRegistry":
         """Build from a validated RemoteScenarioConfig (mission file)."""
         entries: dict[str, ExpectedSignature] = {}
         for term in getattr(scenario, "terminals", []):
@@ -39,9 +46,61 @@ class SignatureRegistry:
             entries[tid] = ExpectedSignature(
                 terminal_id=tid,
                 wavelength_nm=float(getattr(term, "wavelength_nm", 1550.0)),
-                require_nav=False,
+                require_nav=bool(require_nav),
             )
-        return cls(entries=entries, local_id=local_id)
+        tol = float(wl_tolerance_nm) if wl_tolerance_nm is not None else WAVELENGTH_TOLERANCE_NM
+        tol = max(1.0, min(tol, 200.0))
+        lid = str(local_id).strip() if local_id else None
+        return cls(entries=entries, local_id=lid or None, wl_tolerance_nm=tol)
+
+    def apply_expected_overrides(
+        self,
+        expected_tid: str | None = None,
+        expected_wavelength_nm: float | None = None,
+        wl_tolerance_nm: float | None = None,
+        require_nav: bool | None = None,
+        local_id: str | None = None,
+    ) -> "SignatureRegistry":
+        """Apply camera-control Expected Payload overrides in place.
+
+        - Ensures ``expected_tid`` exists as a known entry (seeded with the
+          expected wavelength when the mission file lacks it).
+        - Overrides the entry wavelength / require_nav when given.
+        - Updates registry-wide wavelength tolerance and self-ID.
+        Returns self for chaining.
+        """
+        if wl_tolerance_nm is not None:
+            try:
+                self.wl_tolerance_nm = max(1.0, min(float(wl_tolerance_nm), 200.0))
+            except (TypeError, ValueError):
+                pass
+        if local_id is not None:
+            lid = str(local_id).strip()
+            self.local_id = lid or None
+        tid = str(expected_tid or "").strip()
+        if tid:
+            if tid not in self.entries:
+                try:
+                    wl = float(expected_wavelength_nm) if expected_wavelength_nm is not None else 1550.0
+                except (TypeError, ValueError):
+                    wl = 1550.0
+                self.entries[tid] = ExpectedSignature(
+                    terminal_id=tid,
+                    wavelength_nm=wl,
+                    require_nav=bool(require_nav) if require_nav is not None else False,
+                )
+            else:
+                if expected_wavelength_nm is not None:
+                    try:
+                        self.entries[tid].wavelength_nm = float(expected_wavelength_nm)
+                    except (TypeError, ValueError):
+                        pass
+                if require_nav is not None:
+                    self.entries[tid].require_nav = bool(require_nav)
+        elif require_nav is not None:
+            for e in self.entries.values():
+                e.require_nav = bool(require_nav)
+        return self
 
     def is_known(self, terminal_id: str) -> bool:
         return str(terminal_id) in self.entries
@@ -57,10 +116,11 @@ class SignatureRegistry:
         exp = self.entries.get(str(terminal_id))
         if exp is None:
             return -1.0
+        tol = max(1e-6, float(getattr(self, "wl_tolerance_nm", WAVELENGTH_TOLERANCE_NM)))
         delta = abs(wl - exp.wavelength_nm)
-        if delta > WAVELENGTH_TOLERANCE_NM:
+        if delta > tol:
             return -1.0
-        return float(max(0.0, min(1.0, 1.0 - delta / WAVELENGTH_TOLERANCE_NM)))
+        return float(max(0.0, min(1.0, 1.0 - delta / tol)))
 
 
 __all__ = [

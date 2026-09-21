@@ -6,8 +6,9 @@
 #
 # SIM INTEGRATION ASSUMPTIONS (documented, deterministic):
 #   * Metre-to-pixel mapping is 1 m = 1 px (``M_PER_PX``).
-#   * The formation center starts at the scene-bounds center (position is
-#     deliberately NOT a GUI parameter — RemoteTerminal.md §79).
+#   * The formation center starts at the scene-bounds center plus the
+#     configured start offset (``formation.start_offset_{x,y}_m``), clamped
+#     to world bounds. (0, 0) preserves the legacy center start.
 #   * The geometric reference (intended receiver) defaults to the scene
 #     center; override via ``reference_m``.
 #   * ``render_spots`` is visualization-only: a gaussian marker whose floor
@@ -47,7 +48,7 @@ class RemoteTerminalManager:
         self.seed = int(seed)
         self.sim_time_s = 0.0
         self._formation = FormationManager()
-        center = Vector2(self.bounds[0] / 2.0, self.bounds[1] / 2.0)
+        center = self._start_center(self.config, self.bounds)
         self._center = center
         self.reference_m = reference_m or Vector2(center.x, center.y)
         self._motion_rng = py_random.Random(self.seed)
@@ -77,9 +78,20 @@ class RemoteTerminalManager:
 
         Beacon sequences restart: new generators begin at sequence 0.
         Simulation time keeps running.
+
+        When the start offsets change, the formation center jumps to the new
+        configured start (so the GUI custom start applies live); otherwise
+        the live center is preserved across reconfiguration.
         """
+        old = getattr(self, "config", None)
+        old_ox = float(getattr(getattr(old, "formation", None), "start_offset_x_m", 0.0) or 0.0)
+        old_oy = float(getattr(getattr(old, "formation", None), "start_offset_y_m", 0.0) or 0.0)
         self.config = config.validate()
         form = self.config.formation
+        new_ox = float(getattr(form, "start_offset_x_m", 0.0) or 0.0)
+        new_oy = float(getattr(form, "start_offset_y_m", 0.0) or 0.0)
+        if (new_ox, new_oy) != (old_ox, old_oy):
+            self.reset_to_start()
         # Preserve the live center across reconfiguration.
         self._motion = MotionModel(
             speed_mps=form.speed_mps,
@@ -93,6 +105,35 @@ class RemoteTerminalManager:
             for i, cfg in enumerate(self.config.terminals)
         ]
         self._offsets = self._compute_offsets()
+
+    def reset_to_start(self) -> Vector2:
+        """Jump the formation center to the configured start (offsets)."""
+        center = self._start_center(self.config, self.bounds)
+        self._center = center
+        try:
+            self._motion.position = Vector2(center.x, center.y)
+            self._motion.start = Vector2(center.x, center.y)
+            self._motion.sim_time_s = 0.0
+        except AttributeError:
+            pass
+        return center
+
+    @staticmethod
+    def _start_center(config, bounds: tuple[int, int]) -> Vector2:
+        """World-center plus configured start offsets, clamped in-bounds."""
+        bw, bh = float(max(1, int(bounds[0]))), float(max(1, int(bounds[1])))
+        form = getattr(config, "formation", None)
+        try:
+            ox = float(getattr(form, "start_offset_x_m", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            ox = 0.0
+        try:
+            oy = float(getattr(form, "start_offset_y_m", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            oy = 0.0
+        cx = min(max(bw / 2.0 + ox, 30.0), max(30.0, bw - 30.0))
+        cy = min(max(bh / 2.0 + oy, 30.0), max(30.0, bh - 30.0))
+        return Vector2(float(cx), float(cy))
 
     def update(self, dt: float) -> RemoteScenarioRuntime:
         """Advance the scenario by ``dt`` seconds (§68)."""
@@ -194,11 +235,16 @@ class RemoteTerminalManager:
         """
         terms = [t.get_telemetry() for t in self.terminals]
         emitting = sum(1 for t in terms if t["emitting"])
+        form = getattr(self.config, "formation", None)
         return {
             "terminal_count": len(terms),
             "emitting_count": emitting,
             "simulation_time_s": self.sim_time_s,
             "formation_center_m": self._center.as_tuple(),
+            "formation_start_offset_m": (
+                float(getattr(form, "start_offset_x_m", 0.0) or 0.0),
+                float(getattr(form, "start_offset_y_m", 0.0) or 0.0),
+            ),
             "reference_m": self.reference_m.as_tuple(),
             "terminals": terms,
         }

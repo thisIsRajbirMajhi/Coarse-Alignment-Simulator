@@ -128,6 +128,11 @@ class RemoteFormationConfig:
     terminal_spacing_m: float = 100.0
     speed_mps: float = 10.0
     heading_deg: float = 0.0
+    # Custom starting position: formation-center offset (m) from the world
+    # center. (0, 0) = scene center (legacy behavior). Clamped to world
+    # bounds by the manager.
+    start_offset_x_m: float = 0.0
+    start_offset_y_m: float = 0.0
 
     def validate(self) -> RemoteFormationConfig:
         count = self.terminal_count
@@ -156,6 +161,13 @@ class RemoteFormationConfig:
         heading = _require_number("Heading", self.heading_deg)
         if not -180.0 <= heading <= 180.0:
             raise ValueError(f"Heading {heading}° outside [-180, 180]°.")
+        for _name, _val in (("Start offset X", self.start_offset_x_m),
+                            ("Start offset Y", self.start_offset_y_m)):
+            _v = _require_number(_name, _val)
+            if not -5000.0 <= _v <= 5000.0:
+                raise ValueError(f"{_name} {_v} m outside [-5000, 5000] m.")
+        self.start_offset_x_m = float(self.start_offset_x_m)
+        self.start_offset_y_m = float(self.start_offset_y_m)
         if self.formation_shape == FormationShape.SINGLE and count != 1:
             raise ValueError("SINGLE formation requires exactly one terminal.")
         return self
@@ -175,6 +187,8 @@ class RemoteFormationConfig:
                 terminal_spacing_m=float(data.get("terminal_spacing_m", 100.0)),
                 speed_mps=float(data.get("speed_mps", 10.0)),
                 heading_deg=float(data.get("heading_deg", 0.0)),
+                start_offset_x_m=float(data.get("start_offset_x_m", 0.0)),
+                start_offset_y_m=float(data.get("start_offset_y_m", 0.0)),
             ).validate()
         except (TypeError, ValueError, KeyError, AttributeError) as e:
             raise ValueError(f"Invalid formation configuration: {e}") from e
@@ -327,6 +341,16 @@ FIELD_METADATA: dict[str, dict[str, Any]] = {
         "label": "Heading", "control": "float", "unit": "deg",
         "min": -180.0, "max": 180.0, "step": 0.5, "group": "Motion",
         "description": "0° = +X, 90° = +Y. Rotates the formation and sets travel direction.",
+    },
+    "start_offset_x_m": {
+        "label": "Start Offset X", "control": "float", "unit": "m",
+        "min": -5000.0, "max": 5000.0, "step": 10.0, "group": "Starting Position",
+        "description": "Formation-center X offset from world center at build/reset.",
+    },
+    "start_offset_y_m": {
+        "label": "Start Offset Y", "control": "float", "unit": "m",
+        "min": -5000.0, "max": 5000.0, "step": 10.0, "group": "Starting Position",
+        "description": "Formation-center Y offset from world center at build/reset.",
     },
     "terminal_id": {
         "label": "Terminal ID", "control": "text", "unit": "",

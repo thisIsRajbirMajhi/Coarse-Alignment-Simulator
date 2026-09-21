@@ -58,6 +58,7 @@ class RemoteTerminalRuntime:
     beam_diameter_m: float = 0.0
     effective_emission_enabled: bool = False
     instantaneous_power_w: float = 0.0
+    pointing_coupling: float = 1.0
     beacon_sequence: int = 0
     operational_state: OperationalState = OperationalState.BEACONING
 
@@ -82,6 +83,7 @@ class OpticalEmission:
     active: bool = False
     wavelength_nm: float = 1550.0
     instantaneous_power_w: float = 0.0
+    pointing_coupling: float = 1.0
     modulation: ModulationType = ModulationType.OOK
     beam_center_angle_deg: float = 0.0
     beam_width_rad: float = 0.001

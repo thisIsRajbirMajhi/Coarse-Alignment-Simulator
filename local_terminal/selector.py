@@ -23,6 +23,8 @@ class StandbyCandidate:
     fov_y: float
     timestamp_s: float
     score: float = 0.0
+    world_x: float = 0.0
+    world_y: float = 0.0
 
     def to_dict(self) -> dict:
         return {
@@ -30,6 +32,8 @@ class StandbyCandidate:
             "score": round(float(self.score), 3),
             "fov_x": round(float(self.fov_x), 1),
             "fov_y": round(float(self.fov_y), 1),
+            "world_x": round(float(self.world_x), 1),
+            "world_y": round(float(self.world_y), 1),
             "timestamp_s": round(float(self.timestamp_s), 3),
         }
 
@@ -99,14 +103,15 @@ class TargetSelector:
 
     def select(
         self,
-        candidates: Sequence[tuple[ValidationSnapshot, tuple[float, float]]],
+        candidates: Sequence[tuple[ValidationSnapshot, tuple[float, float]] | tuple[ValidationSnapshot, tuple[float, float], tuple[float, float]]],
         now_s: float,
         blacklist: set[str] | None = None,
     ) -> tuple[ValidationSnapshot | None, tuple[float, float] | None]:
         """Select best candidate from scored list.
 
         Args:
-            candidates: list of (ValidationSnapshot, (fov_x, fov_y)).
+            candidates: list of (ValidationSnapshot, (fov_x, fov_y)) or
+                        (ValidationSnapshot, (fov_x, fov_y), (world_x, world_y)).
             now_s: current sim time.
             blacklist: current session blacklist.
 
@@ -114,9 +119,12 @@ class TargetSelector:
             (selected_snapshot, (fov_x, fov_y)) or (None, None) if empty pool.
         """
         bl = blacklist or set()
-        valid: list[tuple[ValidationSnapshot, tuple[float, float]]] = []
+        valid: list[tuple[ValidationSnapshot, tuple[float, float], tuple[float, float]]] = []
 
-        for snap, pos in candidates:
+        for item in candidates:
+            snap = item[0]
+            pos = item[1]
+            w_pos = item[2] if len(item) > 2 else (0.0, 0.0)
             tid = snap.terminal_id
             if (
                 snap.score >= self.score_min
@@ -124,7 +132,7 @@ class TargetSelector:
                 and tid
                 and tid not in bl
             ):
-                valid.append((snap, pos))
+                valid.append((snap, pos, w_pos))
 
         if not valid:
             return None, None
@@ -145,8 +153,10 @@ class TargetSelector:
                 fov_y=pos[1],
                 timestamp_s=now_s,
                 score=snap.score,
+                world_x=w_pos[0],
+                world_y=w_pos[1],
             )
-            for snap, pos in valid
+            for snap, pos, w_pos in valid
             if snap.terminal_id != selected[0].terminal_id
         ]
         self.standby_pool.update(alternates, now_s, bl)

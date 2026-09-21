@@ -85,6 +85,8 @@ class SimulationSession:
         self.controller = PIDController(config=self.pid_config)
         from local_terminal import AutonomySupervisor, SignatureRegistry
         self.supervisor = AutonomySupervisor(registry=SignatureRegistry.from_scenario(self.scenario_config))
+        self._apply_expected_payload_to_registry()
+        self._apply_scan_start_index()
         self.tracker = self.supervisor.tracker
         self.comm_rx = self.supervisor.comm_rx
         self.validator = self.supervisor.validator
@@ -117,11 +119,66 @@ class SimulationSession:
             self.controller.reset()
 
     # -- config application (validated, explicit) ----------------------
+    def _apply_expected_payload_to_registry(self) -> None:
+        """Push camera-control Expected Payload overrides into the registry."""
+        try:
+            sup = getattr(self, "supervisor", None)
+            reg = getattr(sup, "registry", None) if sup is not None else None
+            if reg is None:
+                return
+            cam = getattr(self, "camera_config", None)
+            if cam is None:
+                return
+            reg.apply_expected_overrides(
+                expected_tid=str(getattr(cam, "expected_tid", "RT-001") or ""),
+                expected_wavelength_nm=float(getattr(cam, "expected_wavelength_nm", 1550.0)),
+                wl_tolerance_nm=float(getattr(cam, "expected_wl_tolerance_nm", 50.0)),
+                require_nav=bool(getattr(cam, "expected_require_nav", False)),
+                local_id=str(getattr(cam, "local_id", "") or ""),
+            )
+            try:
+                sup.validator.set_registry(reg)
+            except (AttributeError, TypeError):
+                pass
+        except Exception as e:
+            log.debug("expected payload override skipped: %s", e)
+
+    def _apply_scan_start_index(self) -> None:
+        """Jump the local-terminal scan schedule to the configured start cell."""
+        try:
+            sup = getattr(self, "supervisor", None)
+            scan = getattr(sup, "scan_ctrl", None) if sup is not None else None
+            if scan is None:
+                return
+            idx = int(getattr(self.camera_config, "scan_start_index", 0) or 0)
+            sched = list(getattr(scan, "_schedule", []) or [])
+            if not sched:
+                return
+            idx = max(0, min(idx, len(sched) - 1))
+            # Map grid-cell index -> position inside the current schedule order.
+            try:
+                ptr = sched.index(idx)
+            except ValueError:
+                ptr = 0
+            scan._schedule_ptr = int(ptr)
+            scan._dwell_count = 0
+            try:
+                scan._required_dwell = int(scan.config.default_dwell_frames)
+            except (AttributeError, TypeError, ValueError):
+                pass
+        except Exception as e:
+            log.debug("scan start index apply skipped: %s", e)
+
     def apply_camera_config(self, config=None) -> None:
         if config is not None:
+            old_idx = int(getattr(self.camera_config, "scan_start_index", 0) or 0)
             self.camera_config = config.validate()
             if hasattr(self, "camera") and self.camera is not None:
                 self.camera.apply_config(self.camera_config)
+            self._apply_expected_payload_to_registry()
+            new_idx = int(getattr(self.camera_config, "scan_start_index", 0) or 0)
+            if new_idx != old_idx or not getattr(self, "_built", False):
+                self._apply_scan_start_index()
 
     def apply_controller_config(self, config=None) -> None:
         if config is not None:
@@ -157,6 +214,7 @@ class SimulationSession:
         # New mission file = new expectations: fresh registry in supervisor (documented).
         from local_terminal import SignatureRegistry
         self.supervisor.set_registry(SignatureRegistry.from_scenario(self.scenario_config))
+        self._apply_expected_payload_to_registry()
         self.validator = self.supervisor.validator
 
     # -- stepping ------------------------------------------------------

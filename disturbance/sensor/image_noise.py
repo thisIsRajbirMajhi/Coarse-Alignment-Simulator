@@ -55,12 +55,11 @@ def _get_persistent_hot_pixels(h: int, w: int, density: float, salt_vs_pepper: f
         key = (h, w, round(float(density), 5), round(float(salt_vs_pepper), 3), seed_tok)
     cache = _HOT_PIXEL_CACHE if defect_state is None else defect_state
     if key not in cache:
-        # Use 0.8 * density as persistent pool (slightly fewer than transient total)
-        persist_density = float(density) * _HOT_PIXEL_PERSISTENT_RATIO * 0.5
+        persist_density = float(density) * _HOT_PIXEL_PERSISTENT_RATIO
         n = int(h * w * persist_density)
         # Zero density must mean zero pixels; tiny densities scale naturally,
         # large frames are capped to bound the defect map.
-        n = int(np.clip(n, 0, 800))
+        n = int(np.clip(n, 0, 1000))
         ys = _rng.integers(0, h, size=n)
         xs = _rng.integers(0, w, size=n)
         is_salt = _rng.random(n) < float(salt_vs_pepper)
@@ -116,21 +115,20 @@ def apply_salt_pepper(
 
     # Persistent hot pixels — same positions for this (h,w)
     if persist_dens > 1e-9:
-        # Scale persistent cache to requested density: subsample cache
-        cache_ys, cache_xs, cache_is_salt = _get_persistent_hot_pixels(h, w, density, float(salt_vs_pepper), rng=_rng, defect_state=defect_state)
-        # Adjust count to persist_dens
-        want = int(h * w * float(persist_dens))
-        if want > 0 and len(cache_ys) > 0:
-            if want >= len(cache_ys):
-                # Cache pre-sized to want — use directly, no per-frame choice
-                idx = np.arange(len(cache_ys))
-            else:
-                # Subsample cache deterministically per call: random choice without replacement
-                idx = _rng.choice(len(cache_ys), size=want, replace=False)
-            py = cache_ys[idx][~cache_is_salt[idx]] if len(idx) > 0 else np.array([], dtype=int)
-            px = cache_xs[idx][~cache_is_salt[idx]] if len(idx) > 0 else np.array([], dtype=int)
-            sy = cache_ys[idx][cache_is_salt[idx]] if len(idx) > 0 else np.array([], dtype=int)
-            sx = cache_xs[idx][cache_is_salt[idx]] if len(idx) > 0 else np.array([], dtype=int)
+        cache_ys, cache_xs, cache_is_salt = _get_persistent_hot_pixels(
+            h, w, density, float(salt_vs_pepper), rng=_rng, defect_state=defect_state
+        )
+        want = min(len(cache_ys), int(h * w * float(persist_dens)))
+        if want > 0:
+            p_ys = cache_ys[:want]
+            p_xs = cache_xs[:want]
+            p_salt = cache_is_salt[:want]
+
+            py = p_ys[~p_salt]
+            px = p_xs[~p_salt]
+            sy = p_ys[p_salt]
+            sx = p_xs[p_salt]
+
             if len(py) > 0:
                 if out.ndim == 3:
                     out[py, px, :] = 0
@@ -141,22 +139,6 @@ def apply_salt_pepper(
                     out[sy, sx, :] = 255
                 else:
                     out[sy, sx] = 255
-        # If want > cache size, fill remainder with transient-like
-        if want > len(cache_ys):
-            extra = want - len(cache_ys)
-            ys2 = _rng.integers(0, h, size=extra)
-            xs2 = _rng.integers(0, w, size=extra)
-            salt_n2 = int(extra * float(salt_vs_pepper))
-            if extra - salt_n2 > 0:
-                if out.ndim == 3:
-                    out[ys2[salt_n2:], xs2[salt_n2:], :] = 0
-                else:
-                    out[ys2[salt_n2:], xs2[salt_n2:]] = 0
-            if salt_n2 > 0:
-                if out.ndim == 3:
-                    out[ys2[:salt_n2], xs2[:salt_n2], :] = 255
-                else:
-                    out[ys2[:salt_n2], xs2[:salt_n2]] = 255
 
     # Transient speckles — random each frame
     if transient_dens > 1e-9:

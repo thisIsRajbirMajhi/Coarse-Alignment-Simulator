@@ -107,6 +107,7 @@ class RemoteTerminal:
             beam_angle_deg=self.runtime.beam_angle_deg,
             range_m=self.runtime.range_m,
             chip_level=chip,
+            pointing_error_deg=self.runtime.pointing_error_deg,
         )
         self.runtime.position_m = Vector2(self.position_m.x, self.position_m.y)
         self.runtime.velocity_mps = Vector2(self.velocity_mps.x, self.velocity_mps.y)
@@ -116,6 +117,7 @@ class RemoteTerminal:
         )
         self.runtime.effective_emission_enabled = self.emission.active
         self.runtime.instantaneous_power_w = self.emission.instantaneous_power_w
+        self.runtime.pointing_coupling = self.emission.pointing_coupling
         self.runtime.operational_state = self.config.operational_state
 
     # -- telemetry ---------------------------------------------------
