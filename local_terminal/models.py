@@ -198,8 +198,10 @@ class AutonomyConfig:
     candidate_min_area_px: int = 4
     candidate_max_area_px: int = 4000
 
-    # Association
-    association_gate_px: float = 60.0
+    # Association - gate must be large enough for initial acquisition when FOV is 100+px off (scan offset)
+    # 60 was too small for 115px offset seen in headless tests (640 gate was too large, 60 too small)
+    # 200 is balanced: allows 150px acquisition but still rejects far corners (400px) and keeps X/Y gates meaningful
+    association_gate_px: float = 200.0
     association_mahal_threshold: float = 9.21  # chi2 2-dof 99%
 
     # Kalman

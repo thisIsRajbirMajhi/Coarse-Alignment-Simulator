@@ -1,8 +1,8 @@
 # local_terminal/detector.py - V2 classical spot detector (Plan V2 §8-§9, §17).
 #
-# Optimized for 60 FPS: frame → gray (float32) → background (downsampled median)
-# → threshold → connected components → global SNR → centroid → SpotCandidate[]
-# plus temporal confirmation. ~4x faster than previous per-component ring version.
+# Optimized for 60 FPS + max-star robustness: frame → gray (uint8) → background
+# (downsampled median) → threshold → morph open → connected components
+# → area/shape/SNR gates → centroid → SpotCandidate[] plus temporal confirmation.
 
 from __future__ import annotations
 
@@ -17,58 +17,68 @@ from local_terminal.models import AutonomyConfig, SpotCandidate
 def _to_gray(frame: np.ndarray) -> np.ndarray:
     if frame.ndim == 3:
         if frame.shape[2] == 3:
-            return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
+            return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         if frame.shape[2] == 4:
-            return cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY).astype(np.float32)
-        return frame[:, :, 0].astype(np.float32)
-    return frame.astype(np.float32)
+            return cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
+        return frame[:, :, 0].copy()
+    return frame.copy()
 
 
 def detect_spots(frame, config: AutonomyConfig | None = None) -> list[SpotCandidate]:
-    """V2 fast spot detector: threshold + connected components + area/SNR.
-    Optimized: float32, downsampled median, global bg stats, centroids from
-    OpenCV, component cap for 4000-star fields."""
+    """V2 fast spot detector: threshold + morph + CC + shape/SNR.
+    Robust to 4000-star max fields: area 12-200, fill 0.25-0.85, aspect >0.35,
+    global SNR prefilter + local SNR refine, component cap 50."""
     cfg = (config or AutonomyConfig()).validate()
     if frame is None or getattr(frame, "size", 0) == 0:
         return []
     gray = _to_gray(frame)
-    # Fast bg floor: median on 1/16 downsampled image (19k vs 307k pixels, ~6x faster)
-    # Still accurate within ~0.5 DN for threshold.
+    if gray.dtype != np.uint8:
+        gray = np.clip(gray, 0, 255).astype(np.uint8)
+    # Fast bg floor: median on 1/16 downsampled (19k vs 307k, ~6x faster)
     try:
         small = gray[::4, ::4]
         bg_floor = float(np.median(small))
     except Exception:
         bg_floor = float(np.median(gray))
-    thresh = bg_floor + float(cfg.candidate_peak_margin)
-    mask = (gray >= thresh).astype(np.uint8)
-    if not mask.any():
+    thresh = int(np.clip(bg_floor + float(cfg.candidate_peak_margin), 0, 255))
+    _, mask = cv2.threshold(gray, thresh, 255, cv2.THRESH_BINARY)
+    if not np.any(mask):
         return []
-    n, labels, stats, centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    # Morph open to remove haze texture and 1-2px hot pixels while keeping sigma~3 beacons (area ~28)
+    try:
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
+        if not np.any(mask):
+            return []
+    except Exception:
+        pass
+    # Connected components on 8-bit mask (expects 0/255)
+    mask_bin = (mask > 0).astype(np.uint8)
+    n, labels, stats, centroids = cv2.connectedComponentsWithStats(mask_bin, connectivity=8)
     if n <= 1:
         return []
-    # Global background stats (once) - use pixels outside mask
+    # Global bg stats for prefilter (fast)
     try:
-        bg_pixels = gray[mask == 0]
-        if bg_pixels.size > 100:
-            bg_mean = float(bg_pixels.mean())
-            bg_std = float(max(float(bg_pixels.std()), 1e-3))
+        bg_pixels = gray[mask_bin == 0]
+        if bg_pixels.size > 200:
+            bg_mean_g = float(bg_pixels.mean())
+            bg_std_g = float(max(float(bg_pixels.std()), 1.5))
         else:
-            bg_mean, bg_std = bg_floor, 1.0
+            bg_mean_g, bg_std_g = bg_floor, 3.0
     except Exception:
-        bg_mean, bg_std = bg_floor, 1.0
+        bg_mean_g, bg_std_g = bg_floor, 3.0
 
     min_snr = float(cfg.candidate_min_snr_db)
-    min_area = int(cfg.candidate_min_area_px)
-    max_area = int(cfg.candidate_max_area_px)
+    # Enforce selective area even if config is permissive (4-4000) - beacons are 12-200
+    cfg_min_area = int(cfg.candidate_min_area_px)
+    cfg_max_area = int(cfg.candidate_max_area_px)
+    min_area = max(12, cfg_min_area)
+    max_area = min(250, cfg_max_area)
 
-    # Cap components for 4000-star fields: keep brightest by area to avoid 300 loops
-    # Sort indices by area descending, keep top 50 worst-case still <5ms
+    # Cap components for 4000-star fields
     if n - 1 > 60:
-        # stats[1:, cv2.CC_STAT_AREA] is area
         areas = stats[1:, cv2.CC_STAT_AREA]
-        # Get indices of top 50 areas (1-based in stats)
         top_idx = np.argsort(areas)[::-1][:50] + 1
-        # Reorder iteration to top_idx order (brightest/large first)
         iter_indices = top_idx
     else:
         iter_indices = range(1, n)
@@ -78,33 +88,59 @@ def detect_spots(frame, config: AutonomyConfig | None = None) -> list[SpotCandid
         area = int(stats[idx, cv2.CC_STAT_AREA])
         if area < min_area or area > max_area:
             continue
-        # Centroid from OpenCV (fast, <0.01ms) - close to weighted within 1px for stars
-        cx, cy = float(centroids[idx, 0]), float(centroids[idx, 1])
-        # Peak: max in bounding box where label matches
-        x0 = int(stats[idx, cv2.CC_STAT_LEFT])
-        y0 = int(stats[idx, cv2.CC_STAT_TOP])
         bw = int(stats[idx, cv2.CC_STAT_WIDTH])
         bh = int(stats[idx, cv2.CC_STAT_HEIGHT])
-        # Clamp to frame bounds
+        if bw < 2 or bh < 2:
+            continue
+        # Shape: fill ratio and aspect for circular spots vs haze streaks
+        fill = float(area) / max(1, bw * bh)
+        if not (0.25 <= fill <= 0.90):
+            continue
+        aspect = float(min(bw, bh)) / max(1, max(bw, bh))
+        if aspect < 0.35:
+            continue
+        # Centroid
+        cx, cy = float(centroids[idx, 0]), float(centroids[idx, 1])
+        # Peak in bounding box
+        x0 = int(stats[idx, cv2.CC_STAT_LEFT])
+        y0 = int(stats[idx, cv2.CC_STAT_TOP])
         x0c, y0c = max(0, x0), max(0, y0)
         x1c, y1c = min(gray.shape[1], x0 + bw), min(gray.shape[0], y0 + bh)
         if x1c <= x0c or y1c <= y0c:
             continue
         patch = gray[y0c:y1c, x0c:x1c]
         lbl_patch = labels[y0c:y1c, x0c:x1c]
-        # Fast peak: max where label==idx
         vals = patch[lbl_patch == idx]
         if vals.size == 0:
             continue
         peak = float(vals.max())
-        # SNR using global bg (not per-component ring - 30x faster, still discriminative)
-        snr_db = 20.0 * math.log10(max(peak - bg_mean, 1e-3) / bg_std)
+        # Global SNR prefilter (fast)
+        snr_g = 20.0 * math.log10(max(peak - bg_mean_g, 1e-3) / bg_std_g)
+        if snr_g < min_snr - 1.0:  # lenient prefilter
+            continue
+        # Local SNR refine for top candidates (accurate, per-component ring)
+        # Use 6px ring around bbox for local background
+        bg_ring = 6
+        ex0, ey0 = max(0, x0 - bg_ring), max(0, y0 - bg_ring)
+        ex1, ey1 = min(gray.shape[1], x0 + bw + bg_ring), min(gray.shape[0], y0 + bh + bg_ring)
+        win = gray[ey0:ey1, ex0:ex1]
+        win_mask = np.zeros_like(win, dtype=bool)
+        # Map component mask into win
+        win_mask[y0 - ey0:y0 - ey0 + bh, x0 - ex0:x0 - ex0 + bw] = (lbl_patch == idx) if lbl_patch.shape == (bh, bw) else False
+        # Fallback if shape mismatch
+        if win_mask.shape != win.shape:
+            bg_local = bg_pixels
+        else:
+            bg_local = win[~win_mask]
+        if bg_local.size < 8:
+            snr_db = snr_g
+        else:
+            bg_m = float(bg_local.mean())
+            bg_s = float(max(float(bg_local.std()), 1.5))
+            snr_db = 20.0 * math.log10(max(peak - bg_m, 1e-3) / bg_s)
         if snr_db < min_snr:
             continue
         out.append(SpotCandidate(x=cx, y=cy, peak=peak, snr_db=snr_db, area_px=area))
-        if len(out) >= 12:  # early stop: keep top peaks, sort later
-            # need peak sorting, so continue to collect then sort - but cap total work
-            pass
     out.sort(key=lambda d: d.peak, reverse=True)
     return out[:8]
 

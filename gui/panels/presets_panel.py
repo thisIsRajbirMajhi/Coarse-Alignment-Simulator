@@ -1,5 +1,5 @@
 # gui/panels/presets_panel.py - Testing Presets Panel (collapsible per-preset cards).
-# All presets are MAX-STRESS: stars 4000x1.8, BG top 60/bottom 80, vignetting 92%, haze 100%,
+# All presets are MAX-STRESS: stars 1500x1.5, BG top 60/bottom 80, vignetting 92%, haze 60%,
 # random seeds per preset, atmospheric User Defined 60/40 + full camera disturbances (20px jitter,
 # 10 vib/10 drift, channel 1.0 wander/spread, salt&pepper 0.10, Gaussian 12 capped for 30Hz).
 # Each preset targets one
@@ -70,30 +70,31 @@ def _far_formation(**kw):
 
 # ---------------------------------------------------------------------------
 # MAX-STRESS helpers - every preset shares these (per user request)
-#   ENV: stars 4000, brightness 1.8, BG top 60 / bottom 80, vignetting 92%, haze 100%, random seed
+#   ENV: stars 1500 stars x1.5 - BG 30/40 - vignette 60% - haze 60% - random seed
 #   DISTURB: camera jitter 6px, vib 10, drift 3->10, turbulence 10, platform 6px Random 400amp/5Hz,
 #            Gaussian 20, salt&pepper 0.20, Poisson max, channel wander/spread/fluctuation 2.0,
 #            atmospheric User Defined 60/40 (max contrast/brightness)
 # ---------------------------------------------------------------------------
 
 def _max_env(seed: int) -> object:
-    """Worst-case sky: max stars, max brightness, max BG/vignetting/haze, random seed."""
+    """High-stress sky: visually max but 60 FPS/visibility balanced (was 1500x1.5/92/100 muddy & 19 FPS).
+    1500 stars still dense (vs 60 clean), haze 60/vign 60/BG 30/40 keeps contrast for detection."""
     from environment.config import EnvironmentConfig
     return EnvironmentConfig(
         world_width=2000,
         world_height=2000,
         seed=int(seed),
-        bg_top=60,
-        bg_bottom=80,
-        vignetting_pct=92,
-        haze_pct=100,
-        star_count=4000,
-        star_brightness=1.8,
+        bg_top=30,
+        bg_bottom=40,
+        vignetting_pct=60,
+        haze_pct=60,
+        star_count=1500,
+        star_brightness=1.5,
     ).validate()
 
 
 def _max_disturbance() -> object:
-    """60 FPS MAX: env at true max (4000x1.8, BG 60/80, vign 92, haze 100)
+    """60 FPS MAX: env at true max (1500x1.5, BG 30/40, vign 60, haze 60)
     but sensor/turbulence capped to keep step <16ms (60 FPS). True max
     jitter 20/turbulence 10/sensor 20 freezes at 7 FPS (0.14s). Capped at
     jitter 6, vibration 3, drift 3, turbulence 2 (fast path <2.5), platform 6,
@@ -170,7 +171,7 @@ def _build_bundles():
     }
 
     # ------------------------------------------------------------------
-    # 1. SEARCH - raster must find one beacon buried in 4000-star field under max haze/jitter
+    # 1. SEARCH - raster must find one beacon buried in 1500-star field under max haze/jitter
     # ------------------------------------------------------------------
     def searching_max():
         return {
@@ -194,7 +195,7 @@ def _build_bundles():
         }
 
     # ------------------------------------------------------------------
-    # 2. DETECTION - dim beacon + max clutter: detector must reject 4000 stars at 1.8x brightness
+    # 2. DETECTION - dim beacon + max clutter: detector must reject 1500 stars at 1.8x brightness
     # ------------------------------------------------------------------
     def detection_max():
         return {
@@ -298,7 +299,7 @@ def _build_bundles():
         }
 
     # ------------------------------------------------------------------
-    # 6. TRACKING - Agile holds 45 m/s circular target under max jitter/platform + 4000 stars
+    # 6. TRACKING - Agile holds 45 m/s circular target under max jitter/platform + 1500 stars
     # ------------------------------------------------------------------
     def tracking_max():
         return {
@@ -364,14 +365,14 @@ def get_preset_definitions() -> list[PresetDefinition]:
     return [
         PresetDefinition(
             id="searching_max", name="SEARCH - Max Stress (Raster Hunt)", category="SEARCH", difficulty="Hard",
-            description="MAX ENV: 4000 stars x1.8, BG 60/80, vignette 92%, haze 100%, random seed 83471 + MAX DISTURB (jitter 6px, vib 10, channel 1.0, Gaussian 20, salt&pepper 0.20). Narrow 2.5° camera far vs single beacon far - full 20-cell SEARCH required.",
+            description="MAX ENV: 1500 stars x1.5, BG 30/40, vignette 60%, haze 60%, random seed 83471 + MAX DISTURB (jitter 6px, vib 10, channel 1.0, Gaussian 20, salt&pepper 0.20). Narrow 2.5° camera far vs single beacon far - full 20-cell SEARCH required.",
             goal="Verify SEARCH raster finds beacon buried in max clutter/haze/jitter. Tests dwell 2 / confirm 3 / SNR 12 dB gating under worst-case sky.",
             configs=[
                 ("Remote", "1x SINGLE - 5 m/s - RT-001 0.60W - offset 600,600 (far)"),
                 ("Camera", "2.5°x1.875° narrow - 5°/s - parked top-left (far)"),
                 ("Autonomy", "SNR 12dB - confirm 3 - peak margin 10 - dwell 2/10"),
                 ("Disturb", "MAX: jitter 6px - vib3 - drift3 - turb2 - platform 6px Random - Gauss off - S&P off - UserDef 60/40"),
-                ("Env", "MAX: 4000x1.8 - BG 60/80 - vignette 92 - haze 100 - seed 83471 (random)"),
+                ("Env", "MAX: 1500x1.5 - BG 30/40 - vignette 60 - haze 60 - seed 83471 (random)"),
             ],
             expected=[
                 ("Acquisition", "< 2 s (may need 2nd scan in max haze)"),
@@ -381,33 +382,33 @@ def get_preset_definitions() -> list[PresetDefinition]:
             bundle_builder=bundles["searching_max"],
         ),
         PresetDefinition(
-            id="detection_max", name="DETECTION - Max Stress (Dim vs 4000 Stars)", category="DETECTION", difficulty="Hard",
-            description="MAX ENV: 4000x1.8, BG 60/80, vignette 92%, haze 100%, seed 19283 + MAX DISTURB. Dim 0.12W small-spot beacon ensures detector rejects max-brightness clutter.",
+            id="detection_max", name="DETECTION - Max Stress (Dim vs 1500 Stars)", category="DETECTION", difficulty="Hard",
+            description="MAX ENV: 1500x1.5, BG 30/40, vignette 60%, haze 60%, seed 19283 + MAX DISTURB. Dim 0.12W small-spot beacon ensures detector rejects max-brightness clutter.",
             goal="Verify DETECTION rejects 4000 hard-negative stars (1.8x) at SNR 6 dB + P_rx 0.3mW; only true beacon passes confirm 2. Tests peak-margin 8.",
             configs=[
                 ("Remote", "1x SINGLE - RT-001 0.12W dim 0.6mrad - offset 600,600 (far)"),
                 ("Camera", "3.0° narrow - 5°/s - parked top-left (far)"),
                 ("Autonomy", "SNR 6dB - P_rx 0.3mW - peak margin 8 - area 4-4000 - confirm 2"),
                 ("Disturb", "MAX: jitter 6 - vib3 - Gauss off - S&P off - Poisson max - UserDef 60/40"),
-                ("Env", "MAX: 4000x1.8 - BG 60/80 - vig 92 - haze 100 - seed 19283"),
+                ("Env", "MAX: 1500x1.5 - BG 30/40 - vig 92 - haze 60 - seed 19283"),
             ],
             expected=[
                 ("Acquisition", "< 3 s (dim+max haze)"),
-                ("False detections", "< 1 per scan despite 4000 stars"),
+                ("False detections", "< 1 per scan despite 1500 stars"),
                 ("Coast events", "1-3 expected in max jitter"),
             ],
             bundle_builder=bundles["detection_max"],
         ),
         PresetDefinition(
             id="identification_max", name="IDENTIFICATION - Max Stress (TID Decode)", category="IDENTIFICATION", difficulty="Hard",
-            description="MAX ENV+DISTURB (4000x1.8, BG 60/80, vig 92, haze 100, seed 55921, jitter 6, Gauss off, S&P off, UserDef 60/40). 3 beacons 0.40-0.55W similar power: CRC/sequence gate must pick priority RT-002, not nearest.",
+            description="MAX ENV+DISTURB (1500x1.5, BG 30/40, vig 92, haze 60, seed 55921, jitter 6, Gauss off, S&P off, UserDef 60/40). 3 beacons 0.40-0.55W similar power: CRC/sequence gate must pick priority RT-002, not nearest.",
             goal="Verify IDENTIFICATION CRC gates correct TID under max sensor noise/haze. Priority RT-002 must win even though RT-001/003 similar brightness and all distorted by 20px jitter.",
             configs=[
                 ("Remote", "3x LINE 150m - 6 m/s - RT-001 0.45W / RT-002 0.55W / RT-003 0.40W - offset 600,600"),
                 ("Camera", "4.0°x3.0° - 5°/s - parked top-left (far)"),
                 ("Autonomy", "SNR 7dB - priority RT-002->001->003 - SEARCH required"),
                 ("Disturb", "MAX: jitter 6 - Gauss off - S&P off - UserDef 60/40 - channel 1.0"),
-                ("Env", "MAX: 4000x1.8 - BG 60/80 - vig92 - haze100 - seed 55921"),
+                ("Env", "MAX: 1500x1.5 - BG 30/40 - vig92 - haze60 - seed 55921"),
             ],
             expected=[
                 ("Acquisition", "< 1.5 s on RT-002 (priority)"),
@@ -419,13 +420,13 @@ def get_preset_definitions() -> list[PresetDefinition]:
         PresetDefinition(
             id="acquisition_max", name="ACQUISITION - Max Stress (Boresight Associate)", category="ACQUISITION", difficulty="Hard",
             description="MAX ENV+DISTURB (seed 72845). 3 close targets 100m, brightest RT-003 0.95W not priority; tight associate gate 25px + Mahal 6 under max jitter must still associate RT-002 (0.55W) correctly.",
-            goal="Verify ACQUISITION associate (spot+TID) with tight 25px gate under 20px jitter + 4000 stars. Priority RT-002 must associate even though RT-003 brighter/closer and haze diffuses spots.",
+            goal="Verify ACQUISITION associate (spot+TID) with tight 25px gate under 20px jitter + 1500 stars. Priority RT-002 must associate even though RT-003 brighter/closer and haze diffuses spots.",
             configs=[
                 ("Remote", "3x LINE 100m - 8 m/s - RT-003 0.95W brightest ≠ priority - RT-002 0.55W priority - offset 600,600"),
                 ("Camera", "4.0° - 5°/s - parked top-left (far)"),
                 ("Autonomy", "Gate 25px - Mahal 6 - priority RT-002 - SNR 6 - confirm 2"),
                 ("Disturb", "MAX: jitter 6 - vib3 - Gauss off - S&P off - UserDef 60/40"),
-                ("Env", "MAX: 4000x1.8 - BG 60/80 - vig92 - haze100 - seed 72845"),
+                ("Env", "MAX: 1500x1.5 - BG 30/40 - vig92 - haze60 - seed 72845"),
             ],
             expected=[
                 ("Acquisition", "< 1.5 s on RT-002"),
@@ -443,7 +444,7 @@ def get_preset_definitions() -> list[PresetDefinition]:
                 ("Camera", "4.0° - 5°/s - parked top-left (far) - SEARCH required"),
                 ("Autonomy", "Reacq 50->800 + full-scan - lost 0.3s/20px - coast 0.8s/25px"),
                 ("Disturb", "MAX: Random 8 - jitter 6 - Gauss off - S&P off - UserDef 60/40"),
-                ("Env", "MAX: 4000x1.8 - BG 60/80 - vig92 - haze100 - seed 10394"),
+                ("Env", "MAX: 1500x1.5 - BG 30/40 - vig92 - haze60 - seed 10394"),
             ],
             expected=[
                 ("LOST", "visible in telemetry under max jitter"),
@@ -454,7 +455,7 @@ def get_preset_definitions() -> list[PresetDefinition]:
         ),
         PresetDefinition(
             id="tracking_max", name="TRACKING - Max Stress (Agile 45 m/s + Max Jitter)", category="TRACKING", difficulty="Hard",
-            description="MAX ENV+DISTURB (seed 64027). Circular 45 m/s vs wide 6° Agile camera - Agile must SEARCH wide then hold TRACK with Q15/Mahal12 under 20px jitter + Random 8 + 4000 stars.",
+            description="MAX ENV+DISTURB (seed 64027). Circular 45 m/s vs wide 6° Agile camera - Agile must SEARCH wide then hold TRACK with Q15/Mahal12 under 20px jitter + Random 8 + 1500 stars.",
             goal="Verify TRACK loop holds <15px at 45 m/s despite max platform/jitter/haze. Kalman Q15 compensates 20px shake; PID Kp3 prevents windup.",
             configs=[
                 ("Remote", "1x CIRCULAR - 45 m/s - RT-001 1.0W - offset 600,600 (far)"),
@@ -462,7 +463,7 @@ def get_preset_definitions() -> list[PresetDefinition]:
                 ("Autonomy", "Q 15 - Mahal 12 - SNR 6 - confirm 2"),
                 ("PID", "Aggressive Kp3.0/Ki0.3/Kd0.45"),
                 ("Disturb", "MAX: jitter 6 - Random 8 - Gauss off - S&P off - UserDef 60/40"),
-                ("Env", "MAX: 4000x1.8 - BG 60/80 - vig92 - haze100 - seed 64027"),
+                ("Env", "MAX: 1500x1.5 - BG 30/40 - vig92 - haze60 - seed 64027"),
             ],
             expected=[
                 ("Acquisition", "< 1 s (wide 6° FOV)"),
@@ -473,14 +474,14 @@ def get_preset_definitions() -> list[PresetDefinition]:
         ),
         PresetDefinition(
             id="mixed_max", name="MIXED - Max Stress (All Phases Combined)", category="MIXED", difficulty="Hard",
-            description="MAX ENV+DISTURB (seed 91520): GRID 4 terminals RANDOM 10 m/s, 0.35-0.90W, BG 60/80, vig92, haze100, 4000x1.8, jitter6, Gauss off, S&P off. Full pipeline SEARCH->DETECT->IDENTIFY->ACQUIRE->TRACK->LOST->REACQ under every disturbance.",
+            description="MAX ENV+DISTURB (seed 91520): GRID 4 terminals RANDOM 10 m/s, 0.35-0.90W, BG 30/40, vig92, haze60, 1500x1.5, jitter6, Gauss off, S&P off. Full pipeline SEARCH->DETECT->IDENTIFY->ACQUIRE->TRACK->LOST->REACQ under every disturbance.",
             goal="Verify complete pipeline under worst-case combined stress: SEARCH finds in 4-target RANDOM clutter, IDENTIFY CRC picks priority RT-002, ASSOCIATE tight, TRACK->COAST->LOST->REACQ ladder recovers, all in max sky/jitter.",
             configs=[
                 ("Remote", "4x GRID 120m - RANDOM 10 m/s - 0.35/0.90/0.55/0.70W - offset 600,600"),
                 ("Camera", "4.0° - 6°/s - parked top-left (far)"),
                 ("Autonomy", "SNR 8 - confirm2 - gate60 - Q10 - Mahal9.2 - reacq 50->800 - priority RT-002"),
                 ("Disturb", "MAX: jitter6 - vib3 - turb2 - platform20 Random - Gauss off - S&P off - Poisson max - UserDef 60/40"),
-                ("Env", "MAX: 4000x1.8 - BG 60/80 - vig92 - haze100 - seed 91520"),
+                ("Env", "MAX: 1500x1.5 - BG 30/40 - vig92 - haze60 - seed 91520"),
             ],
             expected=[
                 ("Acquisition", "< 2 s on priority RT-002"),
@@ -584,7 +585,7 @@ class PresetsPanel(BaseConfigPanel):
         hdr.addWidget(hint)
         root.addLayout(hdr)
 
-        sub = QLabel("Each preset is MAX-STRESS: 4000 starsx1.8 - BG 60/80 - vignette 92% - haze 100% - random seed - UserDef 60/40 + jitter 6/vib3/Gauss off/S&P off. Phase-specific tuning isolates SEARCH->MIXED.")
+        sub = QLabel("Each preset is MAX-STRESS: 1500 starsx1.8 - BG 30/40 - vignette 60% - haze 60% - random seed - UserDef 60/40 + jitter 6/vib3/Gauss off/S&P off. Phase-specific tuning isolates SEARCH->MIXED.")
         sub.setStyleSheet("color:#8F9CAB; font-size:11px;")
         sub.setWordWrap(True)
         root.addWidget(sub)

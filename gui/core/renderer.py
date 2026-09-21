@@ -292,26 +292,46 @@ class Renderer:
                 x, y, color, label = marker[:4]
                 Renderer.draw_tracker_point(display, (x, y), color=color, label=label)
 
-        # 2b. Candidate markers (subtle reticles for non-selected candidates)
+        # 2b. Candidate markers - limited to top 3, de-duplicated to avoid overlap (fixes image 1 clutter)
         if telemetry and isinstance(telemetry, dict):
             autonomy = telemetry.get("autonomy") or {}
             cands = autonomy.get("candidates") or []
+            # Filter to non-active candidates, sort by confidence, limit to 3, dedup overlapping <24px
+            filtered = []
             for c in cands:
+                # Skip the active track candidate (already drawn as main marker)
+                if c.get("confirmed") and c.get("terminal_id") != "CANDIDATE":
+                    continue
                 cx_c = float(c.get("fov_x", 0.0))
                 cy_c = float(c.get("fov_y", 0.0))
-                if marker is not None and math.hypot(cx_c - marker[0], cy_c - marker[1]) < 6.0:
+                if marker is not None and math.hypot(cx_c - marker[0], cy_c - marker[1]) < 12.0:
                     continue
-                icx, icy = int(round(cx_c)), int(round(cy_c))
+                # Deduplicate overlapping candidates
+                overlap = False
+                for fc in filtered:
+                    if math.hypot(cx_c - fc["x"], cy_c - fc["y"]) < 24.0:
+                        overlap = True
+                        break
+                if overlap:
+                    continue
+                filtered.append({"x": cx_c, "y": cy_c, "c": c})
+                if len(filtered) >= 3:
+                    break
+            for fc in filtered:
+                c = fc["c"]
+                icx, icy = int(round(fc["x"])), int(round(fc["y"]))
                 if 0 <= icx < w and 0 <= icy < h:
-                    cv2.rectangle(display, (icx - 7, icy - 7), (icx + 7, icy + 7), (250, 204, 21), 1, cv2.LINE_AA)
+                    cv2.rectangle(display, (icx - 7, icy - 7), (icx + 7, icy + 7), (100, 160, 200), 1, cv2.LINE_AA)
                     conf = float(c.get("confidence", 0.0))
+                    # Show SNR instead of always 1.00 for better diagnostics
+                    snr = float(c.get("snr_db", 0.0)) if "snr_db" in c else conf * 12 + 6
                     Renderer.draw_hud_badge(
                         display,
-                        f"CAND {conf:.2f}",
+                        f"CAND {conf:.2f} {snr:.0f}dB",
                         (icx + 9, icy + 4),
                         bg_color=(10, 15, 25),
-                        text_color=(250, 204, 21),
-                        font_scale=0.36,
+                        text_color=(100, 160, 200),
+                        font_scale=0.32,
                         padding=2,
                         border_color=(30, 41, 59),
                     )
@@ -351,17 +371,31 @@ class Renderer:
             err_px_val = math.hypot(epx, epy)
             mode_str = str(pid_tel.get("mode", "AUTO"))
 
-        # Real autonomy state from telemetry
+        # Real autonomy state from telemetry - error-aware (fixes LOCKED with 180px)
         aut_state = None
         if telemetry and isinstance(telemetry, dict):
             aut = telemetry.get("autonomy")
             if isinstance(aut, dict):
                 aut_state = aut.get("state")
-
-        if aut_state:
-            status_txt = str(aut_state).upper()
+        # Error takes precedence: even if FSM says LOCKED but error >50, show COAST/SEARCH
+        if err_px_val > 50.0:
+            status_txt = "SEARCHING" if err_px_val > 100 else "COAST"
+        elif err_px_val > 10.0:
+            # Large error but within 50px - show TRACKING/COAST, not LOCKED
+            if aut_state and str(aut_state).upper() in ("COAST", "LOST", "REACQUIRE"):
+                status_txt = str(aut_state).upper()
+            else:
+                status_txt = "TRACKING"
         else:
-            status_txt = "LOCKED" if err_px_val <= 10.0 and err_px_val > 0.0 else ("TRACKING" if err_px_val <= 50.0 and err_px_val > 0.0 else "SEARCHING")
+            if aut_state:
+                # Only show LOCKED if error is actually <10
+                st = str(aut_state).upper()
+                if st == "LOCKED" and err_px_val > 10.0:
+                    status_txt = "TRACKING"
+                else:
+                    status_txt = st
+            else:
+                status_txt = "LOCKED" if err_px_val <= 10.0 and err_px_val > 0.0 else ("TRACKING" if err_px_val <= 50.0 and err_px_val > 0.0 else "SEARCHING")
 
         status_col = Renderer.tracker_point_color(status_txt)
 

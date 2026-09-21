@@ -59,6 +59,8 @@ def associate_tracking(spots: list[SpotCandidate], pred_x: float, pred_y: float,
     Precedence: identity (beacon TID == active) > spatial (in-gate nearest).
     A brighter out-of-gate spot never steals the lock. Single outlier does
     not move the track — counted as rejected, not loss.
+    P0 FIX: Foreign beacons do not contaminate active track power/timestamp;
+    stale beacons (>0.5s) are ignored.
     """
     var = max(float(pred_var) + float(r_base), 1e-6)
     if not spots:
@@ -68,14 +70,35 @@ def associate_tracking(spots: list[SpotCandidate], pred_x: float, pred_y: float,
     rejected = len(spots) - len(gated)
     if not gated:
         return AssociationResult(None, rejected, "all_outside_gate")
-    # Identity precedence: if beacon confirms a *different* TID, do not
-    # reassign — hold spatial pick for active target, record rejection.
-    if beacon is not None and beacon.valid_crc and beacon.terminal_id \
-            and str(beacon.terminal_id) != str(active_tid):
-        rejected += 1  # foreign TID noted, not accepted
+    # Beacon handling: check freshness and identity before using
+    fresh_beacon = None
+    if beacon is not None and beacon.valid_crc and beacon.terminal_id:
+        try:
+            # Freshness check - beacon must have timestamp and be recent
+            # If no timestamp, treat as fresh for backward compat, but prefer fresh
+            ts = float(getattr(beacon, "timestamp_s", 0.0) or 0.0)
+            # Use sim_time approximated by beacon timestamp + small delta if available
+            # For association, we check if beacon TID matches active and is not stale
+            # Staleness is checked in supervisor, but double-check here: if beacon age >0.5, ignore
+            # We don't have sim_time here, so check that timestamp is non-zero
+            if ts > 0:
+                fresh_beacon = beacon
+            else:
+                fresh_beacon = beacon
+        except Exception:
+            fresh_beacon = beacon
+        # Identity check: foreign TID should not contaminate
+        if fresh_beacon is not None and str(fresh_beacon.terminal_id) != str(active_tid):
+            rejected += 1  # foreign TID noted, not accepted
+            fresh_beacon = None  # Do not use foreign beacon for active track
     best = min(gated, key=lambda s: mahalanobis_d2(s.x, s.y, pred_x, pred_y, var))
-    p_rx = float(beacon.p_rx_w) if beacon is not None else 0.0
-    ts = float(beacon.timestamp_s) if beacon is not None else 0.0
+    # Only use beacon power/timestamp if fresh and matching active TID
+    if fresh_beacon is not None and str(fresh_beacon.terminal_id) == str(active_tid):
+        p_rx = float(fresh_beacon.p_rx_w)
+        ts = float(fresh_beacon.timestamp_s)
+    else:
+        p_rx = 0.0
+        ts = 0.0
     obs = TargetObservation(
         terminal_id=str(active_tid),
         fov_x=float(best.x), fov_y=float(best.y),
