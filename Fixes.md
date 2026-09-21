@@ -1,841 +1,1134 @@
-# Coarse Alignment Simulator — Bugs, Errors, Improvements, and Required Changes
+# Coarse Alignment Simulator — Re-Checked Bugs, Errors, Improvements, and Required Changes
 
 **Repository:** `thisIsRajbirMajhi/Coarse-Alignment-Simulator`  
 **Branch:** `Main`  
-**Scope:** End-to-end coarse-alignment simulation pipeline from remote optical source generation through camera sensing, detection, validation, tracking, PID control, PTZ actuation, re-acquisition, and communication reception.
+**Re-check commit:** `f12b70d7e06948bdce720b636aef20f021b9cf63`  
+**Re-check date:** 2026-09-21  
+**Scope:** End-to-end PAT/FSOC coarse-alignment simulator: remote terminal → optical source → propagation/disturbance → camera/photodiode → detection/decoding → validation → selection → tracking → PID → PTZ plant → re-acquisition/reset.
+
+> **Important:** This document supersedes the earlier bug list. The repository has already incorporated a number of the previously recommended changes, but several are only partial implementations. This document classifies the current state from the code as it exists in commit `f12b70d`.
 
 ---
 
-## 1. Executive Summary
+## 1. Verification Result
 
-The simulator already contains most of the intended subsystems:
+### Overall assessment
 
-- Remote-terminal motion and geometry
-- Optical beacon generation
-- PTZ camera plant
-- Detector and Gaussian spot fitting
-- Image-based tracker
-- PID controller
-- Search / detect / validate / select / track supervisor
-- Re-acquisition ladder
-- Optical and camera disturbance modules
-- Communication / beacon reception
-- Acceptance-test infrastructure
-- Dual-viewport GUI and terminal interfaces
+The simulator has improved materially since the previous review. The following areas now have concrete implementation work behind them:
 
-However, several parts of the implementation are currently disconnected from the physical signal path or use inconsistent coordinate/measurement assumptions. The most important problems are not cosmetic. They can cause the simulator to report successful acquisition/tracking under conditions where a physically coupled FSOC/PAT system should not work, or can cause recovery logic to operate in the wrong coordinate frame.
+- Explicit `FovPoint`, `WorldPoint`, and `PtzAngles` coordinate types.
+- World/FOV/angle transform helpers.
+- Re-acquisition scan results converted back to FOV coordinates before tracker lock.
+- Escalation scans no longer call the full tracker reset.
+- Pointing-error attenuation is now included in `BeamModel`.
+- A physical photodiode SNR/BER calculation exists.
+- Persistent hot-pixel maps are now cached as fixed spatial defects.
+- Additional coordinate, optical-coupling, photodiode, and re-acquisition tests were added.
+- Configurable remote-terminal start offsets and camera start poses were added.
 
-The highest-priority work is therefore to make the **camera image and photodiode signal consequences of the optical propagation model authoritative**, enforce **explicit coordinate-frame transformations**, and make **validation/tracking source-specific and multi-target aware**.
+However, several central claims made by the current `Fixes.md` are stronger than what the implementation actually guarantees.
+
+### Current status by severity
+
+| ID | Area | Current status | Severity |
+|---|---|---|---|
+| C-01 | Re-acquisition coordinate frames | **Fixed structurally, with remaining logic issues** | P1 |
+| C-02 | Re-acquisition scan → tracker FOV conversion | **Fixed** | P1 |
+| C-03 | Escalation preserving tracker motion model | **Fixed** | P1 |
+| C-04 | `FULL_RESET` actually homes PTZ in integrated path | **Not fixed** | **P0** |
+| C-05 | Pointing error affects optical strength | **Partially fixed** | P1 |
+| C-06 | Physical propagation drives camera image | **Not fixed** | **P0** |
+| C-07 | Photodiode observes physical analog optical waveform | **Not fixed** | **P0** |
+| C-08 | BER no longer shortcut from camera SNR | **Partially fixed** | **P0** |
+| C-09 | Source-specific communication/visual attribution | **Not fixed** | **P0** |
+| C-10 | Multi-candidate validation/selection pipeline | **Not fixed** | **P0** |
+| C-11 | Photodiode source metadata reaches receiver | **Broken integration** | **P0** |
+| C-12 | Wavelength spoofing acceptance test | **Invalid test setup** | **P0** |
+| C-13 | Re-acquisition local-search gate | **Logic defect remains** | P1 |
+| C-14 | Provisional re-acquisition gate | **Too weak** | P1 |
+| C-15 | PTZ mechanical model | **Still simplified and dimensionally questionable** | P1 |
+| C-16 | Camera update-rate enforcement | **Not implemented as an independent clock** | P2 |
+| C-17 | Camera exposure / radiometric image formation | **Not implemented** | P1 |
+| C-18 | Modulation support (CW/OOK/PPM) | **Configuration exceeds implementation** | P1 |
+| C-19 | ROC sweep | **Still not a real ROC sweep** | P1 |
+| C-20 | Truth vs observation GUI separation | **Still mixed** | P2 |
+| C-21 | Photodiode comment/code oversampling mismatch | **Documentation defect** | P2 |
+| C-22 | Protocol timing/watchdog assumptions | **Still partially hard-coded** | P2 |
+| C-23 | Multi-target association | **Still nearest/brightest gated candidate** | P1 |
+| C-24 | Physical power-consistency validation | **Still not fully implemented** | P1 |
 
 ---
 
-# 2. Priority Classification
+# 2. What Is Actually Fixed
 
-| Priority | Meaning | Typical action |
-|---|---|---|
-| **P0 — Critical** | Can produce incorrect simulator behavior, false acquisition, broken re-acquisition, or physically invalid coupling | Fix before relying on end-to-end results |
-| **P1 — High** | Significant realism, robustness, or control-model deficiency | Fix before final validation/benchmarking |
-| **P2 — Medium** | Correctness/architecture/maintainability issue with limited immediate impact | Fix during hardening |
-| **P3 — Enhancement** | Useful future capability or visualization/test improvement | Add after core correctness |
+## 2.1 Explicit coordinate-frame model
 
----
+**Files:**
 
-# 3. P0 — Critical Bugs and Errors
-
-## 3.1 Re-acquisition Coordinate-Frame Mismatch
-
-**Affected areas:**
-
+- `common/coordinates.py`
 - `local_terminal/reacquisition.py`
 - `local_terminal/supervisor.py`
-- `local_terminal/tracker.py`
-- camera world/FOV coordinate transformations
+- `tests/test_coordinates.py`
+- `tests/test_reacquisition_coords.py`
 
-### Problem
-
-The tracker state is expressed in **FOV-local pixels**, but the re-acquisition manager treats predicted/last-known pixel coordinates as **world coordinates**.
-
-Examples of the current mismatch:
-
-- Supervisor passes `(tsnap.fov_x, tsnap.fov_y)` into re-acquisition.
-- Re-acquisition converts that point using camera-home/world-pixel assumptions.
-- Standby candidate positions are stored as FOV pixel coordinates but are later compared/used as world locations.
-- Re-acquisition scan-cell centers are world coordinates but are passed to `tracker.lock_target()`, which expects FOV-local pixels.
-
-### Consequence
-
-The re-acquisition ladder can search the wrong area or relock the tracker using an invalid coordinate. This can appear as random acquisition failure even when the target is present.
-
-### Required change
-
-Define explicit coordinate-frame types and central conversion functions:
+The new typed frames are a significant improvement:
 
 ```text
-FovPoint      -> camera-frame pixel coordinates
-WorldPoint    -> simulation/world pixel coordinates
-AnglePoint    -> PTZ pan/tilt angles
-ImagePoint    -> sensor/image coordinates if different from FOV coordinates
+FovPoint
+WorldPoint
+PtzAngles
 ```
 
-Required transforms:
+and helper transforms now exist for:
 
 ```text
-FOV pixels <-> world pixels
-world pixels <-> camera pan/tilt angles
-FOV pixels <-> pan/tilt angular offset
+world ↔ FOV
+world ↔ PTZ angle
+FOV → PTZ angle
 ```
 
-Do not allow functions to accept raw `(x, y)` tuples without the frame being explicit.
+This addresses the original raw-tuple ambiguity.
 
-### Acceptance test
+### Remaining caveat
 
-A target lost at a known FOV location must be re-acquired at that same world location after camera motion, and all intermediate coordinates must round-trip within a defined tolerance.
+The code still allows raw `(x, y)` tuples at public APIs. The new types are available, but the architecture does not yet enforce them everywhere. A future bug can therefore still be introduced by passing an untyped tuple into a function expecting another frame.
+
+### Required hardening
+
+Move toward APIs that accept the explicit point types and only serialize to tuples at integration boundaries.
 
 ---
 
-## 3.2 Re-acquisition Scan Results Are Passed Back in the Wrong Frame
+## 2.2 Re-acquisition scan results are returned as FOV coordinates
 
-**Affected areas:**
+The previous world-coordinate → tracker-coordinate defect was addressed in Stage 3/4 of `ReacquisitionManager`.
 
-- `local_terminal/reacquisition.py`
+When a scan finds the target without an explicit detector point, the scan world location is converted through `world_to_fov(...)` before being returned to the supervisor.
+
+This is correct architectural behavior.
+
+---
+
+## 2.3 Escalation no longer destroys the motion model
+
+`AutonomySupervisor.escalation_scan()` now calls:
+
+```python
+self.tracker.reset_measurement_lock()
+```
+
+instead of a full tracker reset.
+
+`reset_measurement_lock()` preserves the α-β motion model, velocity, and uncertainty.
+
+This is consistent with the intended escalation behavior.
+
+---
+
+## 2.4 Pointing-error attenuation exists in the beam model
+
+`remote_terminal/optics.py` now calculates a Gaussian-style pointing coupling and reduces emitted instantaneous power accordingly.
+
+Conceptually:
+
+```text
+pointing error
+→ beam displacement
+→ coupling loss
+→ reduced optical power
+```
+
+This is an important improvement over the prior telemetry-only pointing error.
+
+### Remaining caveat
+
+Only the **power amplitude** is currently attenuated in the rendered marker path. The spot center is still placed at the nominal terminal position. Therefore pointing error is not yet modeled as a spatially displaced beam footprint at the receiver plane.
+
+---
+
+## 2.5 A physical photodiode SNR calculation exists
+
+`local_terminal/comm_receiver.py` now contains an explicit calculation using:
+
+- optical power
+- beam diameter
+- pointing coupling
+- atmospheric transmission
+- receiver aperture
+- optical filter response
+- wavelength response
+- photodiode responsivity
+- shot noise
+- thermal noise
+- electrical SNR
+- BER
+
+This is much closer to the desired architecture.
+
+### Critical integration problem
+
+The end-to-end simulation does **not consistently populate these fields** when constructing `CommSource`. See Section 5.1.
+
+---
+
+## 2.6 Persistent hot-pixel caching was improved
+
+`disturbance/sensor/image_noise.py` now creates a persistent defect map instead of independently choosing the persistent coordinates every frame.
+
+The intended split is now:
+
+```text
+persistent defects → fixed spatial positions
+transient defects  → newly sampled per frame
+```
+
+This addresses the original persistence bug.
+
+### Remaining caveat
+
+The defect map uses randomized integer coordinates without explicit collision rejection. Duplicate coordinates reduce the effective defect count slightly. This is minor compared with the original persistence issue.
+
+---
+
+# 3. P0 — Critical Current Defects
+
+# 3.1 `FULL_RESET` does not home the actual integrated PTZ camera
+
+**Files:**
+
 - `local_terminal/supervisor.py`
-- `local_terminal/tracker.py`
+- `gui/application/session.py`
+- `simulation/headless.py`
+- `camera/ptz.py`
 
-### Problem
+The supervisor's `full_reset()` now sets:
 
-Stage 3/4 re-acquisition produces world scan locations, while tracker lock logic expects FOV-local image coordinates.
-
-### Consequence
-
-A successful scan result can still initialize the tracker incorrectly.
-
-### Required change
-
-When a scan finds a target:
-
-```text
-World detection location
-        ↓
-Camera world-to-FOV transform
-        ↓
-FOV-local centroid
-        ↓
-tracker.lock_target(FovPoint)
+```python
+self._hold_target_angles = (0.0, 0.0)
 ```
 
-Never pass a world coordinate directly to the image tracker.
+but it does not issue a direct camera reset/home command.
+
+The actual camera API does have:
+
+```python
+PTZCamera.reset()
+```
+
+and `reset()` correctly resets position, velocity, acceleration, backlash, target state, and encoder cache.
+
+The problem is that the **autonomy supervisor reset path is not coupled to that camera method**.
+
+In the normal session loop, `camera_target_angles` can remain `None` after `full_reset()`, which does not guarantee an actual physical return to home.
+
+### Required fix
+
+Add an explicit supervisor output/event:
+
+```text
+Supervisor
+    ↓
+CameraResetCommand(home/custom-start)
+    ↓
+PTZCamera.reset(...)
+```
+
+Do not depend on an internal `_hold_target_angles` side effect.
+
+### Acceptance condition
+
+Immediately after a full reset:
+
+```text
+pan  = configured home/start angle ± tolerance
+ tilt = configured home/start angle ± tolerance
+rate = 0 ± tolerance
+accel = 0 ± tolerance
+```
+
+before search resumes.
 
 ---
 
-## 3.3 Escalation Scan Incorrectly Resets the Motion Model
+# 3.2 The camera image is still not driven by the per-terminal propagation model
 
-**Affected area:**
-
-- `local_terminal/supervisor.py`
-
-### Problem
-
-`escalation_scan()` calls `tracker.reset()`, which clears the α-β motion state.
-
-The intended recovery design is to preserve useful target motion information during escalating search.
-
-### Consequence
-
-Re-acquisition loses the previous velocity estimate, increasing reacquisition time and potentially causing an avoidable full scan.
-
-### Required change
-
-Separate:
-
-```text
-reset_measurement_lock()
-```
-
-from:
-
-```text
-reset_motion_model()
-```
-
-Escalation should normally preserve:
-
-- last position
-- velocity estimate
-- uncertainty trend
-- target identity
-- blacklist state
-- valid standby candidates
-
-unless the target model is explicitly declared invalid.
-
----
-
-## 3.4 Full Reset Does Not Actually Home the Camera
-
-**Affected areas:**
-
-- `local_terminal/supervisor.py`
-- camera integration / headless simulation loop
-
-### Problem
-
-The supervisor performs logical reset operations but does not own or issue an explicit camera-home command in the integrated path.
-
-### Consequence
-
-A nominal `FULL_RESET` can leave the physical camera at its previous pan/tilt state. The next search therefore starts from an unexpected mechanical state.
-
-### Required change
-
-Introduce an explicit reset command/event:
-
-```text
-Supervisor → CameraController → PTZCamera.home()
-```
-
-Home behavior should define:
-
-- pan reference
-- tilt reference
-- velocity reset
-- acceleration reset
-- backlash state
-- encoder state if appropriate
-- actuator fault state
-
-### Acceptance test
-
-After `FULL_RESET`, camera angle and angular velocity must return to the specified home state within tolerance before the next scan begins.
-
----
-
-## 3.5 Optical Pointing Error Does Not Control the Rendered Spot
-
-**Affected areas:**
-
-- `remote_terminal/terminal.py`
-- `remote_terminal/pointing_model.py`
-- `remote_terminal/beam_model.py`
-- `remote_terminal/terminal_manager.py`
-
-### Problem
-
-Pointing error is calculated, but the rendered Gaussian spot is still effectively generated from the terminal's nominal geometry. Beam pointing error is therefore largely telemetry rather than a causal optical variable.
-
-### Consequence
-
-A terminal can have a large pointing error and still produce a strong, well-centered camera spot.
-
-This can produce physically impossible acquisition/tracking results.
-
-### Required change
-
-Beam geometry must explicitly depend on angular pointing error:
-
-```text
-Pointing error
-    ↓
-beam-center offset at target plane
-    ↓
-beam overlap / irradiance distribution
-    ↓
-received optical power
-    ↓
-camera + photodiode signals
-```
-
-For a simple Gaussian approximation:
-
-```text
-r_offset ≈ range × tan(theta_error)
-```
-
-Then calculate irradiance/power coupling from the displaced Gaussian footprint.
-
----
-
-## 3.6 Camera Image Is Not Driven by the Per-Terminal Physical Optical Channel
-
-**Affected areas:**
+**Files:**
 
 - `disturbance/core/pipeline.py`
+- `simulation/headless.py`
+- `gui/application/session.py`
+- `remote_terminal/scenario.py`
 - `disturbance/optical/*`
-- `remote_terminal/terminal_manager.py`
-- image-rendering path
 
-### Problem
+The code contains a proper propagation API:
 
-The simulator has a `PropagationChannel`, beam wander/spread/scintillation, attenuation, turbulence, etc., but the primary image-generation path largely creates ideal Gaussian spots first and applies global image disturbances afterward.
+```python
+DisturbancePipeline.propagate_beam(...)
+```
 
-The physical propagation result is therefore not the authoritative input to the camera sensor.
+but the normal image-generation path still does:
+
+```text
+remote.render_spots(world_frame)
+        ↓
+whole-image optical disturbance
+        ↓
+whole-image sensor noise
+        ↓
+camera crop
+```
+
+rather than:
+
+```text
+per-terminal emission
+        ↓
+per-terminal propagation
+        ↓
+received irradiance field
+        ↓
+camera optical formation
+        ↓
+pixel integration
+        ↓
+sensor model
+```
+
+Therefore the existing propagation subsystem is not yet the authoritative causal source for the camera image.
 
 ### Consequence
 
-A disturbance can exist in the simulator but have little or no effect on the signal seen by the camera.
+The simulator can expose a propagation disturbance configuration without guaranteeing that the disturbance physically changes the received terminal field in the way expected by an FSOC link.
 
-### Required change
+### Required fix
 
-Make the physical optical chain authoritative:
-
-```text
-Terminal optical emission
-        ↓
-Pointing / beam geometry
-        ↓
-Propagation channel
-        ↓
-Per-terminal received irradiance / field
-        ↓
-Atmospheric / turbulence effects
-        ↓
-Camera optics / PSF
-        ↓
-Pixel integration + exposure
-        ↓
-Photon statistics + read noise + defects
-        ↓
-ADC / image frame
-        ↓
-Detector
-```
-
-The renderer should visualize this same physical signal rather than generating a separate idealized approximation.
+Make each terminal produce a propagated optical field or received-power map, then composite those fields before the camera sensor stage.
 
 ---
 
-## 3.7 Photodiode Receiver Uses `chip_at(t)` Instead of a Physical Received Optical Signal
+# 3.3 The photodiode still obtains digital chips directly from `chip_at(t)`
 
-**Affected area:**
+**File:** `local_terminal/comm_receiver.py`
 
+The receiver now computes a physical SNR, but `_dominant_chip()` still calls:
+
+```python
+best.chip_at(t)
+```
+
+and directly creates a digital `0/1` sample stream.
+
+The physical SNR is then converted into BER and bit flips are optionally injected into those already-digital chips.
+
+That is not the same thing as:
+
+```text
+optical waveform
+→ received optical power(t)
+→ photocurrent(t)
+→ noise
+→ analog sampled signal
+→ threshold/demodulation
+→ bits
+```
+
+### Required fix
+
+Keep `chip_at(t)` only inside the transmitter waveform source.
+
+The receiver should receive a source model capable of evaluating received optical power at time `t` and then generate the sampled analog signal internally.
+
+---
+
+# 3.4 The physical photodiode model is not connected correctly to the end-to-end source metadata
+
+**Files:**
+
+- `gui/application/session.py`
+- `simulation/headless.py`
 - `local_terminal/comm_receiver.py`
 
-### Problem
+The end-to-end code constructs `CommSource` with only a subset of the physical fields:
 
-The receiver's source-selection path identifies a nearby emitting source and directly calls its digital `chip_at(t)` function.
+```python
+position
+emitting
+power_w
+chip_at
+```
 
-Actual source power, range attenuation, beam overlap, receiver aperture, wavelength response, scintillation, extinction ratio, and pointing loss are not used to generate the analog photodiode signal.
+but the physical receiver expects important values such as:
+
+```text
+wavelength_nm
+beam_diameter_m
+range_m
+pointing_error_deg
+atm_transmission
+```
+
+Those are not populated by the normal session/headless construction path.
+
+### Result
+
+The receiver's detailed formulas can silently fall back to defaults such as:
+
+```text
+range = 0
+beam diameter = 0
+wavelength = 1550 nm
+pointing error = 0
+atmospheric transmission = 1
+```
+
+This defeats most of the new physical receive model during actual end-to-end operation.
+
+### Required fix
+
+Create one authoritative sensor-facing source object populated directly from `RemoteTerminalRuntime`, e.g.:
+
+```python
+CommSource(
+    position=...,
+    emitting=...,
+    tx_power_w=...,
+    wavelength_nm=...,
+    range_m=...,
+    beam_diameter_m=...,
+    pointing_error_deg=...,
+    atm_transmission=...,
+    chip_at=...,
+)
+```
+
+Do not rely on defaults for values that are available from the remote terminal runtime.
+
+---
+
+# 3.5 Power semantics can be double-counted after the receiver integration is fixed
+
+The current remote terminal runtime's `instantaneous_power_w` already includes pointing coupling from `BeamModel`.
+
+The photodiode model separately contains a pointing-coupling term.
+
+If the future integration simply passes `instantaneous_power_w` as `p_tx` **and** also passes `pointing_error_deg`, pointing loss will be applied twice.
+
+### Required design decision
+
+Choose one canonical semantic:
+
+### Recommended
+
+```text
+P_tx = transmitter source power before link losses
+pointing_error = separate state
+beam geometry = separate state
+channel = applies coupling exactly once
+```
+
+Then derive:
+
+```text
+P_rx = Link(P_tx, geometry, pointing, range, atmosphere, receiver)
+```
+
+Do not pass already-received power into a function that treats it as transmitter power.
+
+---
+
+# 3.6 Communication source attribution is still not robust for multiple emitters
+
+`CommReceiver._dominant_chip()` selects the nearest emitting source to the photodiode boresight.
+
+That is an explicit simplification, but it is not adequate for a multi-terminal simulator where multiple beams can overlap the receiver.
+
+### Current limitation
+
+The model does not perform:
+
+```text
+P_total(t) = Σ P_rx,i(t)
+```
+
+followed by physical waveform interference/capture behavior.
 
 ### Consequence
 
-Communication can remain decodable even when a physical receiver should have insufficient optical power.
+A strong nearby source can effectively replace the true target without the receiver modeling the analog superposition.
 
-### Required change
+### Required improvement
 
-Replace direct chip access with a sampled analog receive chain:
+At minimum support:
 
-```text
-P_tx
-  ↓
-beam / pointing coupling
-  ↓
-propagation attenuation
-  ↓
-scintillation / turbulence
-  ↓
-receiver aperture / FOV
-  ↓
-wavelength response
-  ↓
-photodiode responsivity
-  ↓
-photocurrent
-  ↓
-shot noise + thermal/read noise
-  ↓
-TIA / gain model
-  ↓
-ADC/sample stream
-  ↓
-demodulation
+- per-source received power
+- aggregate received power
+- capture-effect threshold if desired
+- source handoff
+- wavelength discrimination
+- source-specific association
+
+A full physical coherent optical interference model is not required for the coarse simulator, but analog power superposition is.
+
+---
+
+# 3.7 Multi-candidate validation is still not actually multi-candidate
+
+The detector can produce multiple detections, and `TargetSelector` accepts a list.
+
+However, `AutonomySupervisor` still selects a single detection (`best_det`) and maintains a single pending validation snapshot:
+
+```python
+self._pending_validation_snap
 ```
 
-`chip_at(t)` may remain inside the **transmitter waveform generator**, but it must not be the receiver's measurement.
-
----
-
-## 3.8 BER Is Injected From Camera SNR Instead of Being Derived From the Photodiode Signal
-
-**Affected areas:**
-
-- `local_terminal/comm_receiver.py`
-- `local_terminal/supervisor.py`
-
-### Problem
-
-BER behavior is externally derived from the camera detection SNR rather than calculated from photodiode observations.
-
-### Consequence
-
-Camera and communication sensors are artificially coupled through an indirect shortcut instead of through the common optical channel.
-
-### Required change
-
-Derive link quality from the photodiode receiver model:
+Therefore the system is still effectively:
 
 ```text
-received optical power
-→ photocurrent
-→ noise variance
-→ sample SNR
-→ symbol decision statistics
-→ bit errors / CRC failures
+many detections
+    ↓
+choose one
+    ↓
+validate one
+    ↓
+select one
 ```
 
-Camera SNR and photodiode SNR should be separate measurements of the same physical optical source.
-
----
-
-## 3.9 Multi-Target Sensor Attribution Is Not Source-Specific
-
-**Affected areas:**
-
-- `local_terminal/comm_receiver.py`
-- validation / supervisor integration
-
-### Problem
-
-A dominant-source heuristic is used to select a single source, and CRC/validation state is not robustly associated with a specific visual candidate.
-
-### Consequence
-
-A frame or CRC result caused by one source can be attributed to another source when multiple emitters are present.
-
-### Required change
-
-Introduce a `SensorObservation` object carrying source-independent measurements:
+rather than:
 
 ```text
-observation_id
-frame_timestamp
-image centroid
-photodiode power
-spectral / wavelength estimate
-decoded bits (if any)
-CRC result
-signal quality
-candidate association ID
+many detections
+    ↓
+many candidate tracks
+    ↓
+many decode/identity observations
+    ↓
+many validation states
+    ↓
+selector
 ```
 
-Then associate observations with visual candidates using time, geometry, wavelength, and signal consistency.
+### Required architecture
+
+Implement `CandidateTrack` objects with:
+
+- candidate ID
+- centroid
+- motion state
+- validation state
+- TID
+- sequence history
+- strike count
+- wavelength evidence
+- photometric history
+- score
+- age/timeout
+
+Then let `TargetSelector` operate over all current candidate tracks.
 
 ---
 
-## 3.10 Validation Only Effectively Processes One Detection
+# 3.8 Ground-truth fallback is still mixed into the GUI target marker logic
 
-**Affected area:**
+**File:** `gui/core/renderer.py`
 
-- `local_terminal/supervisor.py`
-- `local_terminal/validator.py`
+The renderer first uses autonomy telemetry, but it also has a fallback path that directly projects the remote terminal telemetry into the camera FOV.
 
-### Problem
+That is useful for debugging, but it can visually resemble an autonomy estimate.
 
-Although the detector supports multiple candidates, supervisor logic largely feeds the first detection (`dets[0]`) into validation-related logic.
+### Required fix
 
-### Consequence
-
-The system is not a true multi-candidate validation pipeline.
-
-### Required change
-
-For every detector candidate:
+Label the overlays explicitly:
 
 ```text
-candidate → CandidateTrack → beacon observation → validation state → selector score
+TRUTH
+OBSERVATION
+ESTIMATE
+COMMAND
 ```
 
-The selector must then choose from all valid scored candidates.
+and allow the truth layer to be turned off.
+
+Ground-truth terminal positions should never be the implicit fallback for the autonomy tracker display in an operational-looking view.
 
 ---
 
-# 4. P1 — High-Priority Physics and Control Improvements
+# 4. P1 — Major Physics Deficiencies
 
-## 4.1 Implement Real Beam Coupling
+# 4.1 Pointing error should affect both power and beam position
 
-The received signal should include a coupling factor dependent on:
-
-- transmitter power
-- range
-- beam divergence
-- pointing offset
-- receiver aperture
-- target-plane footprint
-- atmospheric attenuation
-- turbulence/scintillation
-
-A simplified normalized Gaussian coupling model is sufficient initially.
-
----
-
-## 4.2 Add Receiver Aperture and Acceptance Geometry
-
-Camera/photodiode reception should have explicit physical limits:
-
-- aperture diameter
-- optical throughput
-- field-of-view / angular acceptance
-- spectral bandpass
-- detector responsivity
-- saturation level
-
-This prevents the communication model from seeing energy that the physical receiver cannot collect.
-
----
-
-## 4.3 Model Finite OOK Extinction Ratio at the Receiver
-
-The transmitter currently supports a non-zero low optical level in the beam model, but the receiver path reduces the waveform to a binary digital abstraction.
-
-Implement:
+Current improvement:
 
 ```text
-P_low = extinction_ratio × P_high
+pointing error → lower optical power
 ```
 
-and propagate that analog level through the photodiode model.
-
----
-
-## 4.4 Add Wavelength-Dependent Detector Response
-
-The receiver should include at minimum:
-
-- nominal wavelength
-- passband
-- optical filter response
-- detector responsivity versus wavelength
-- mismatch penalty
-
-This also makes the spoofer/wavelength rejection test physically meaningful.
-
----
-
-## 4.5 Model Camera Exposure and Temporal Integration
-
-A 30 Hz camera should not simply take an instantaneous snapshot of a waveform evolving at ~1 ms chip intervals.
-
-Implement:
+Still missing:
 
 ```text
-photons(t)
-→ integrate over exposure interval
-→ pixel charge
-→ readout
+pointing error → beam-center displacement at receiver plane
 ```
 
-Important parameters:
-
-- frame period
-- exposure time
-- rolling/global shutter choice
-- duty cycle
-- chip-to-frame phase
-
----
-
-## 4.6 Replace the Current PTZ First-Order Approximation With an Explicit Mechanical Model or Clearly Rename It
-
-Current PTZ behavior is principally an acceleration-limited velocity plant with a first-order lag.
-
-The code also uses terminology suggesting critical damping while the configured damping ratio is `0.707`.
-
-Two valid approaches exist:
-
-### Option A — Keep the simplified plant
-
-Explicitly document it as:
-
-> Acceleration-limited first-order actuator approximation.
-
-Remove incorrect second-order/critical-damping terminology.
-
-### Option B — Implement a second-order gimbal model
-
-Use:
+Use a geometric approximation such as:
 
 ```text
-J * theta_ddot + c * theta_dot + k * theta = tau_motor + tau_disturbance
+Δr = R × tan(θ_error)
 ```
 
-with explicit:
-
-- inertia
-- motor torque limit
-- damping
-- stiffness/load torque if applicable
-- rate limit
-- acceleration limit
-- hard stops
-- backlash
-- encoder model
-
-For a robust engineering simulator, Option B is preferable when the added complexity is acceptable.
+and use that offset in the received field calculation.
 
 ---
 
-## 4.7 Apply Optical Turbulence Per Beam / Per Source
+# 4.2 Beam-width convention is not yet fully calibrated
 
-A global image warp is useful as a camera-side approximation, but the physical optical path should also support per-source:
+`spot_size_mrad` is documented as a **full angular width**, but the coupling equation treats half the beam diameter as a Gaussian waist-like radius.
 
-- beam wander
-- beam spreading
-- scintillation
-- attenuation
-- temporal correlation
+For quantitative FSOC studies, explicitly define whether the width is:
 
-This is particularly important when multiple terminals have different ranges or pointing paths.
+- full geometric width
+- 1/e radius
+- 1/e² radius
+- FWHM
+- full divergence angle
+- half-angle divergence
+
+Then derive all downstream equations from that single convention.
 
 ---
 
-## 4.8 Implement a Physically Meaningful Power-Consistency Validation Score
+# 4.3 Camera image formation is still not radiometric
 
-The current power-consistency validation path does not receive a real expected received power and can fall back to temporal peak stability.
-
-The preferred score should compare measurement to model:
+Current path remains largely:
 
 ```text
-P_expected = f(P_tx, range, attenuation, beam footprint,
-               pointing error, aperture, optical efficiency)
+uint8 image intensity
+→ image disturbance
+→ detector
 ```
 
-Then evaluate a normalized residual:
+A higher-fidelity chain should be:
 
 ```text
-power_residual = |P_measured - P_expected| / P_expected
+received irradiance
+→ optical PSF / seeing
+→ exposure integration
+→ photons per pixel
+→ Poisson shot noise
+→ read noise
+→ dark current / background
+→ defects
+→ gain / offset
+→ ADC saturation / quantization
+→ observed image
 ```
 
-The score should account for model uncertainty rather than requiring perfect agreement.
+The current implementation has noise stages, but does not yet have a physically parameterized exposure/photon/gain/ADC chain.
 
 ---
 
-## 4.9 Make Loss Detection Chip-Aware
+# 4.4 Exposure time is still missing
 
-Target tracking and communication validity should account for whether a signal is physically expected during:
+The camera operates at 30 Hz, while the beacon chip timing is approximately 1 kHz.
 
-- OOK low symbols
-- PPM empty slots
-- CW emission
-- frame gaps
-- transmitter off intervals
+A camera frame therefore integrates over many chip intervals unless exposure is deliberately shorter.
 
-A low optical measurement should not automatically be treated as target disappearance.
-
----
-
-## 4.10 Improve Multi-Target Association
-
-Current nearest-neighbor / brightest-candidate logic can select a brighter distractor when candidates are close.
-
-Association cost should combine:
+The simulator should expose:
 
 ```text
-motion prediction error
-+ centroid distance
-+ spot-size consistency
-+ intensity consistency
-+ wavelength consistency
-+ beacon identity consistency
-+ sequence continuity
+frame_period_s
+exposure_time_s
+readout_time_s
+shutter_mode
 ```
 
-For a limited number of candidates, a gated Hungarian assignment or equivalent global association method is appropriate.
+and compute the optical energy collected during exposure.
 
 ---
 
-## 4.11 Add Feed-Forward to the PID Controller
+# 4.5 Turbulence and propagation are still not per-source causal fields
 
-The tracker already estimates target motion. Use the angular velocity estimate to reduce tracking lag:
+The disturbance library contains advanced optical functions, but the main image path still applies image-level effects after the remote Gaussian marker is generated.
+
+For multiple ranges and multiple beams, a stronger model is:
 
 ```text
-u = PID(error) + feed_forward(target_angular_rate)
+beam 1 → propagation 1 → field 1
+beam 2 → propagation 2 → field 2
+beam 3 → propagation 3 → field 3
+                         ↓
+                 sum received fields/powers
+                         ↓
+                  camera optics
 ```
 
-The feed-forward term should be bounded and should not bypass safety limits.
+This is especially important when terminals differ in range, beam width, wavelength, or pointing state.
 
 ---
 
-## 4.12 Add Explicit Control/Plant Latency Accounting
+# 4.6 Photodiode receiver FOV should be angular rather than an arbitrary pixel radius
 
-The current PID result is stored as pending output and applied on the next frame, creating approximately one frame of delay at 30 Hz.
+The current receiver uses:
 
-This should be represented explicitly in the simulator timing model rather than being an accidental side effect.
-
----
-
-# 5. P2 — Architecture, Consistency, and Correctness Improvements
-
-## 5.1 Enforce the Configured Camera Update Rate
-
-`CameraConfig.update_rate_hz = 30` currently behaves more like metadata because `dt` drives the simulation.
-
-Use independent clocks or scheduled update loops for:
-
-- physics
-- optical waveform/chips
-- photodiode sampling
-- camera exposure/frame generation
-- detection
-- tracking
-- PID
-- GUI rendering
-
-The exact rates should be configurable and deterministic.
-
----
-
-## 5.2 Implement Real Modulation Choices or Remove Unsupported Modes
-
-Configuration exposes:
-
-- CW
-- OOK
-- PPM
-
-but beacon generation currently always uses OOK encoding.
-
-Choose one:
-
-1. Implement CW, OOK, and PPM end-to-end, including receiver demodulation; or
-2. Remove unsupported configuration options until their implementations exist.
-
-Do not expose a mode that the simulator silently ignores.
-
----
-
-## 5.3 Fix Persistent Hot-Pixel Behavior
-
-The sensor disturbance code maintains a persistent hot-pixel cache, but the actual subset can be randomly sampled each frame when the requested number is smaller than the cache.
-
-### Required design
-
-Generate the persistent defect map once per sensor/pipeline reset:
-
-```text
-persistent_defects = fixed set
-transient_defects = newly sampled per frame
+```python
+rx_fov_radius_px=320
 ```
 
-Persistent defects must remain spatially fixed until an explicit reset.
-
----
-
-## 5.4 Make Protocol Timing Deterministic and Explicit
-
-Current frame/chip timing is not fully aligned with assumptions in the planning documentation.
-
-Current implementation uses a 1 ms chip interval, while frame size can vary with payload size.
-
-Do not hard-code assumptions such as:
-
-```text
-42 bytes
-336 chips
-336 ms/frame
-```
-
-unless the protocol specification actually freezes those values.
-
-Instead expose:
-
-```text
-chip_rate
-payload_length
-header_length
-CRC_length
-framing overhead
-frame_period
-```
-
-and derive watchdogs / dwell times / miss thresholds from them.
-
----
-
-## 5.5 Make Tracker Miss Thresholds Time-Based
-
-`10 misses` depends on frame rate.
+This ties the receiver geometry to a world-pixel distance rather than a physical optical acceptance angle.
 
 Prefer:
 
 ```text
-max_no_detection_time = 0.33 s
+receiver FOV half-angle
+camera/diode boresight angle
+source angular offset
 ```
 
-or a configurable time interval converted into frame counts by the active camera rate.
-
-This keeps behavior consistent when the camera rate changes.
+and derive acceptance from angle.
 
 ---
 
-## 5.6 Strengthen Beacon Identity Coupling
+# 4.7 Wavelength response is implemented but not end-to-end connected
 
-Once a candidate has a validated TID, subsequent visual observations should be associated with that identity.
+`CommReceiver` contains a wavelength-dependent filter response, but the normal integration path does not pass each terminal's wavelength into `CommSource`.
 
-Identity consistency can contribute to association cost and re-acquisition.
+Therefore a runtime wavelength mismatch can be invisible to the receiver.
 
-A re-acquired target should not be considered confirmed solely because a bright spot appears near the last location; it should re-establish identity evidence according to the selected confidence policy.
-
----
-
-## 5.7 Separate Truth, Observation, and Estimate in the GUI
-
-The GUI should visibly distinguish:
-
-### Ground truth
-
-- actual terminal position
-- actual pointing angle
-- actual emitted power
-- true target identity
-
-### Sensor observations
-
-- camera detections
-- photodiode measurements
-- decoded data
-
-### Estimator state
-
-- tracker estimate
-- predicted target position
-- estimated velocity
-- selected target
-
-Ground truth must never look like an autonomy output.
+This is directly related to the invalid spoofer acceptance test described later.
 
 ---
 
-## 5.8 Update `Plan.md` to Match the Actual Implementation
+# 4.8 OOK finite extinction exists in parts of the model but not in the actual analog receive waveform
 
-The current planning document contains assumptions that no longer match the code.
-
-Examples include:
-
-- tracking described as telemetry-driven even though image-driven tracking exists
-- physical power consistency described more strongly than implemented
-- reset behavior described as preserving state differently from code
-- camera update-rate enforcement not implemented
-- full-reset homing not integrated
-
-The plan should contain three clearly separated sections:
+`BeamModel` uses approximately:
 
 ```text
-Implemented
-Partially implemented
-Required / not yet implemented
+high = 1.0 × P
+low  = 0.45 × P
 ```
 
-This avoids planning drift.
+and `compute_photodiode_snr()` repeats the low-level assumption.
+
+The actual sampled waveform, however, is still generated as a digital chip from `chip_at(t)`.
+
+The analog low/high levels must exist in the receiver waveform before demodulation.
 
 ---
 
-# 6. P2 — Validation and Test Deficiencies
+# 4.9 CW and PPM remain exposed but beacon encoding is still OOK
 
-## 6.1 Current ROC Test Is Not a Real ROC Sweep
+`RemoteTerminalConfig` exposes:
 
-The acceptance suite contains a test described as an ROC sweep, but it effectively checks only a small number of cases rather than sweeping detector thresholds.
+```text
+CW
+OOK
+PPM
+```
 
-### Required change
+but `BeaconGenerator` still instantiates `OOKEncoder()` unconditionally.
 
-Perform parameter sweeps over combinations of:
+`BeamModel` can change the optical-power semantics based on the configured modulation, but that does not create a true CW or PPM protocol waveform.
+
+### Required action
+
+Either:
+
+1. implement CW/OOK/PPM end-to-end, including receiver demodulation; or
+2. remove unsupported choices from the GUI/configuration until implemented.
+
+Never present a mode as supported when it silently generates OOK data.
+
+---
+
+# 5. P1 — Current Control / Tracking Problems
+
+# 5.1 Re-acquisition Stage 1 checks distance from FOV center, not from the predicted target location
+
+**File:** `local_terminal/reacquisition.py`
+
+The code computes:
+
+```python
+pred_fov = FovPoint(pred_x, pred_y)
+```
+
+and slews toward it, but the detection gate is effectively:
+
+```text
+distance(detection, FOV_center) <= current_radius
+```
+
+rather than:
+
+```text
+distance(detection, predicted_target_location) <= current_radius
+```
+
+### Consequence
+
+A detection elsewhere in the FOV may be accepted simply because it is close to the camera boresight, even though it is far from the predicted target state.
+
+### Required fix
+
+Use:
+
+```python
+distance = hypot(
+    det.fov_x - pred_x,
+    det.fov_y - pred_y,
+)
+```
+
+and gate against the predicted position.
+
+---
+
+# 5.2 Provisional re-acquisition gate is weaker than the intended identity gate
+
+The current provisional gate is effectively:
+
+```text
+photometric detection
+        ↓
+wait for CRC of target TID
+```
+
+The intended robust gate should include at least:
+
+```text
+photometric detection
++ expected motion/location consistency
++ target identity evidence when available
++ communication confirmation
+```
+
+### Required behavior
+
+Do not allow a generic bright spot in the search region to become a strong provisional lock without geometric/motion consistency.
+
+---
+
+# 5.3 Multi-target tracking still uses brightest gated detection
+
+The tracker currently does approximately:
+
+```text
+predict
+→ gate detections
+→ choose brightest gated detection
+```
+
+That is vulnerable to a bright distractor entering the same gate.
+
+### Required association cost
+
+Use a combined score from:
+
+```text
+prediction distance
++ centroid continuity
++ spot size
++ intensity consistency
++ wavelength
++ TID
++ sequence continuity
+```
+
+For ≤8 candidates, a gated global assignment method is practical.
+
+---
+
+# 5.4 Identity is not yet used strongly enough during visual association
+
+The tracker now stores an active terminal ID, but detector association is still primarily geometric/photometric.
+
+The identity signal should actively constrain candidate matching after a target is validated.
+
+---
+
+# 5.5 PID feed-forward exists in the controller API but is not actually wired from tracker velocity
+
+`PIDController.compute_from_pixels()` accepts:
+
+```python
+target_vel_x_px_s
+target_vel_y_px_s
+```
+
+but the session/headless control calls do not populate these from the tracker model.
+
+Therefore the feed-forward mechanism exists structurally but is effectively unused in the normal path.
+
+### Required fix
+
+Pass the tracker/α-β velocity estimate into the PID call after converting to angular rate.
+
+---
+
+# 5.6 PID-to-camera latency is still implicit
+
+The control path has a pending command mechanism:
+
+```text
+frame k observation
+→ compute
+→ command applied around frame k+1
+```
+
+This is real latency, but it is not modeled as an explicit control-loop delay parameter.
+
+### Required improvement
+
+Make delay explicit and measurable:
+
+```text
+sensor latency
+controller latency
+actuator update latency
+```
+
+Then include those values in telemetry and controller tuning tests.
+
+---
+
+# 5.7 PTZ mechanical model remains a simplified kinematic/lag model
+
+**File:** `camera/ptz.py`
+
+The current axis update is still fundamentally:
+
+- command velocity
+- acceleration limit
+- velocity limit
+- first-order lag
+- backlash
+- position limits
+
+The comment refers to an “equivalent” mechanical model, but the time constant is derived using:
+
+```text
+inertia / damping_ratio
+```
+
+which is dimensionally inconsistent because a damping ratio is dimensionless, not a damping coefficient.
+
+### Required decision
+
+Either:
+
+### Option A — Keep the simplified model
+
+Document it honestly as:
+
+> acceleration-limited velocity actuator with first-order lag and backlash.
+
+Remove claims that it is a physically parameterized second-order gimbal.
+
+### Option B — Implement a real second-order plant
+
+Use a model such as:
+
+```text
+J θ¨ + c θ˙ + k θ = τ_motor + τ_disturbance
+```
+
+with explicit motor torque, damping, inertia, and limits.
+
+For an FSOC/PAT engineering simulator, Option B is preferred when the added complexity is acceptable.
+
+---
+
+# 5.8 Damping terminology is incorrect
+
+The configuration and preset text refer to approximately `0.707` as “critical damping.”
+
+For a conventional second-order system:
+
+```text
+ζ = 1.0 → critical damping
+ζ ≈ 0.707 → underdamped / Butterworth-like design point
+```
+
+This should be corrected throughout comments, presets, and documentation.
+
+---
+
+# 6. P2 — Timing and Protocol Deficiencies
+
+# 6.1 Camera update rate is still not independently enforced
+
+`CameraConfig.update_rate_hz = 30` is configured, but the simulation loop still advances according to its `dt`.
+
+This means the camera rate is not an independent clock.
+
+### Recommended timing domains
+
+```text
+physics clock
+optical chip clock
+photodiode sample clock
+camera frame clock
+tracker clock
+PID clock
+GUI/render clock
+```
+
+These do not all need different implementation threads; deterministic scheduled substeps are sufficient.
+
+---
+
+# 6.2 Beacon frame duration is payload-derived, but watchdog assumptions remain partly hard-coded
+
+Beacon frames are variable-length because payload size can vary with fields such as terminal ID.
+
+The receiver/supervisor contains values such as:
+
+```text
+0.672 s
+```
+
+which are described as approximately two beacon periods.
+
+### Required fix
+
+Derive watchdogs from the actual generated frame period:
+
+```text
+frame_period = chip_count × chip_duration
+watchdog = N × frame_period
+```
+
+or define the protocol as fixed-length and enforce that length.
+
+---
+
+# 6.3 Miss thresholds should be time-based
+
+A threshold such as:
+
+```text
+10 misses
+```
+
+changes meaning when the camera frame rate changes.
+
+The tracker now has a `max_no_detection_time_s` field, which is an improvement, but all higher-level watchdogs should consistently be expressed in physical time rather than hard-coded frame counts.
+
+---
+
+# 6.4 Receiver comments still say 4× oversampling while the implementation uses 8×
+
+`SUBS_PER_CHIP = 8`, but the module header still describes 4× oversampling in places.
+
+Update comments/docstrings so the implementation and documentation agree.
+
+---
+
+# 7. P1 — Validation Problems
+
+# 7.1 Physical power-consistency score is still incomplete
+
+The validator supports an `expected_peak` input, but the end-to-end supervisor does not currently supply an expected radiometric peak derived from the optical link model.
+
+Therefore the validator can still fall back to temporal peak stability rather than true physical power consistency.
+
+### Required fix
+
+Generate expected received power from the same authoritative link model used by the camera/photodiode:
+
+```text
+P_expected = LinkModel(P_tx, range, beam, pointing, atmosphere, receiver)
+```
+
+Then compare measured versus expected with an uncertainty-aware score.
+
+---
+
+# 7.2 Navigation/signature capabilities are not fully enforced
+
+The registry supports `require_nav`, but the validator's decode path does not fully enforce every expected capability/signature field.
+
+At minimum, validate the mission-defined signature set consistently:
+
+- TID
+- wavelength
+- sequence continuity
+- required capabilities
+- required navigation payload/state
+- self-ID rejection
+- CRC
+
+---
+
+# 7.3 CRC failures are still global rather than candidate-specific
+
+The supervisor obtains a single receiver parse result and a global CRC-failure counter.
+
+With multiple emitters, a CRC failure caused by one source can influence validation state associated with another visual candidate.
+
+### Required fix
+
+Tie communication observations to candidate tracks by:
+
+- time
+- source angle / centroid
+- wavelength
+- expected identity
+- photodiode signal strength
+
+before applying strikes.
+
+---
+
+# 8. P0 — Acceptance/Test Defects
+
+# 8.1 Spoofer rejection test does not actually pass the spoofed wavelength to `CommSource`
+
+**File:** `tests/test_acceptance.py`
+
+The spoofer creates:
+
+```python
+BeaconGenerator("RT-001", 1200.0)
+```
+
+but the `CommSource` used by the test only passes:
+
+```python
+position
+emitting
+power_w
+chip_at
+```
+
+and therefore defaults to the receiver's nominal wavelength.
+
+### Consequence
+
+The test does not actually exercise the intended 1200 nm wavelength mismatch.
+
+### Required fix
+
+Pass:
+
+```python
+wavelength_nm=1200.0
+```
+
+and preferably all other sensor-facing link parameters as well.
+
+---
+
+# 8.2 The ROC test is still not a ROC sweep
+
+The current test is described as a ROC sweep but only validates:
+
+- one clean Gaussian spot
+- one small-artifact rejection case
+
+It does not sweep the detector thresholds.
+
+### Required sweep
+
+Sweep at least:
 
 - peak threshold
 - sigma threshold
@@ -843,515 +1136,521 @@ Perform parameter sweeps over combinations of:
 - R² threshold
 - isolation threshold
 
-Evaluate at minimum:
+and calculate:
 
 ```text
 TPR / recall
 FPR
 precision
-false candidates per frame
-false acquisitions per scan
-miss probability
+false candidates / frame
+false acquisitions / scan
 ```
 
-Run the sweep across representative disturbance conditions.
+across multiple disturbance conditions.
 
 ---
 
-## 6.2 Add Multi-Target Acceptance Tests
+# 8.3 Missing multi-target acceptance tests
 
-Required scenarios:
+The current acceptance suite should add:
 
-1. Two valid terminals separated spatially
-2. Two terminals crossing in the FOV
-3. One valid target + one brighter distractor
-4. One valid target + spoofed wavelength
-5. One valid target + intermittent emitter
-6. Multiple valid targets with different beacon timing
-7. Target dropout while distractor remains visible
-
-The supervisor must keep target identity stable where expected.
-
----
-
-## 6.3 Add Re-acquisition Coordinate-Transform Tests
-
-Create deterministic unit tests for:
-
-```text
-world → FOV → world
-world → angle → world
-FOV → angle → FOV
-```
-
-Include points near:
-
-- image center
-- image edges
-- FOV corners
-- world boundaries
-- pan/tilt limits
-
-Tolerance should be explicit.
+1. two valid targets
+2. crossing targets
+3. bright distractor
+4. spoofed wavelength
+5. intermittent emitter
+6. target dropout with distractor present
+7. multiple valid beacon streams
+8. source handoff
 
 ---
 
-## 6.4 Add Physical Coupling Tests
+# 8.4 Missing full-reset camera-homing acceptance test
 
-Examples:
+Add a test that:
 
-### Pointing loss
+1. drives camera away from home;
+2. triggers `full_reset()`;
+3. steps the integrated simulation;
+4. verifies the actual `PTZCamera` state is at home/start;
+5. verifies velocity and acceleration are zero.
 
-Increasing transmitter pointing error must monotonically reduce coupling over the relevant operating range.
+---
 
-### Range loss
+# 8.5 Missing end-to-end physical coupling acceptance tests
 
-Increasing range must reduce received irradiance according to the configured propagation model.
+Required tests:
 
-### Extinction ratio
+### Range
 
-OOK low symbols must produce a measurable non-zero but reduced photodiode response when finite extinction is configured.
+Increasing range must reduce received signal.
 
-### Atmospheric attenuation
+### Pointing
 
-Increasing attenuation must reduce both camera and photodiode signal levels.
+Increasing pointing error must reduce received signal and move the beam footprint.
+
+### Atmosphere
+
+Increasing attenuation must reduce both camera and diode observations.
 
 ### Scintillation
 
-Scintillation should change the received intensity over time without directly changing beacon identity.
+Scintillation must vary received power temporally.
+
+### Wavelength
+
+A mismatched wavelength must reduce detector response and/or cause validation rejection according to the configured filter/mission rules.
 
 ---
 
-## 6.5 Add Camera Sensor Chain Tests
+# 8.6 Missing analog photodiode waveform tests
 
-Test the complete chain:
+The current tests verify a calculated SNR and that a parse can succeed, but do not test the full analog chain.
 
-```text
-received irradiance
-→ PSF
-→ pixel integration
-→ Poisson noise
-→ read noise
-→ defects
-→ ADC
-```
+Add tests for:
 
-Required checks:
-
-- photon-count variance scaling
-- read-noise variance
-- saturation behavior
-- dark/background level
-- fixed hot pixels
-- transient defects
-- exposure-time scaling
-- deterministic seeding
-
----
-
-## 6.6 Add Photodiode Receiver Tests
-
-Test:
-
-- wavelength mismatch
-- low-power loss
-- high-power saturation
-- shot noise
-- receiver bandwidth
-- symbol timing offset
-- CRC failure under controlled noise
-- finite extinction ratio
-- source separation
-- source handoff
-
----
-
-## 6.7 Add Deterministic Monte Carlo Tests
-
-Run repeated seeds over representative environmental cases.
-
-Recommended dimensions:
-
-```text
-seed
-range
-pointing error
-jitter amplitude
-platform motion
-atmospheric attenuation
-scintillation strength
-sensor noise
-background level
-number of targets
-```
-
-Record:
-
-- acquisition time
-- probability of acquisition
-- false acquisition rate
-- loss rate
-- re-acquisition time
-- tracking RMS error
-- maximum error
-- command saturation percentage
-- CRC success rate
-- false reset rate
-
----
-
-# 7. P3 — Robustness and Engineering Enhancements
-
-## 7.1 Add Fault Injection at Every Major Layer
-
-Fault cases should include:
-
-### Optical source
-
-- no emission
-- intermittent emission
-- incorrect wavelength
-- power drift
-- pointing bias
-
-### Propagation
-
-- severe attenuation
-- scintillation burst
-- turbulence burst
-- beam wander
-
-### Camera
-
-- frozen frame
-- dropped frame
-- hot pixel cluster
-- saturation
-- elevated read noise
-
-### Controller
-
-- actuator saturation
-- encoder bias
-- encoder dropout
-- backlash increase
-- hard-stop hit
-
-### Communication
-
+- high/low optical levels
+- finite extinction
+- shot-noise variance
+- thermal noise
+- threshold margin
 - timing offset
-- CRC corruption
-- missing chip samples
-- invalid TID
-- repeated sequence number
+- sample jitter
+- symbol errors
+- CRC failure probability
 
 ---
 
-## 7.2 Add Instrumentation and Telemetry
+# 8.7 No explicit camera exposure tests
 
-Every simulation run should be able to emit structured telemetry for:
+Add tests for:
+
+- exposure-time scaling
+- short exposure vs long exposure
+- target motion during exposure
+- chip-to-frame phase
+- saturation
+- dark background
+
+---
+
+# 9. P2 — GUI and Visualization Corrections
+
+The dual-viewport architecture is useful, but the visualization contract should explicitly distinguish:
+
+## Ground truth
+
+- terminal world position
+- true PTZ state
+- true pointing error
+- true emitted power
+- true beacon state
+
+## Sensor observation
+
+- observed image
+- detected spot
+- measured SNR
+- photodiode measurement
+- decoded beacon
+
+## Estimate
+
+- tracker position
+- tracker velocity
+- predicted position
+- validation state
+- selected target
+
+## Command
+
+- PID rate command
+- target angle command
+- reset/home command
+
+The operator-facing camera view should never silently substitute ground truth for missing autonomy data.
+
+---
+
+# 10. Recommended Correct Data Flow
+
+The target architecture should now be treated as:
 
 ```text
-simulation_time
-camera_truth_angle
-camera_estimated_angle
-camera_commanded_rate
-tracker_position
-tracker_velocity
-pixel_error
-PID terms
-beam pointing error
-received optical power
-photodiode SNR
-camera SNR
-validation score
-selected TID
-supervisor state
-reacquisition stage
-CRC result
+REMOTE TERMINAL
+    │
+    ├── trajectory / position
+    ├── pointing state
+    ├── beacon waveform
+    └── TX optical power
+          │
+          ▼
+PER-TERMINAL OPTICAL LINK MODEL
+    │
+    ├── range geometry
+    ├── beam divergence
+    ├── pointing displacement
+    ├── pointing coupling
+    ├── attenuation
+    ├── turbulence / wander
+    ├── scintillation
+    └── wavelength/filter effects
+          │
+          ├──────────────────────────────────┐
+          ▼                                  ▼
+CAMERA RECEIVER FIELD                PHOTODIODE RECEIVER
+    │                                  │
+    ├── aperture                       ├── aperture
+    ├── optics / PSF                   ├── optical filter
+    ├── seeing                         ├── wavelength response
+    ├── exposure                       ├── responsivity
+    ├── pixel integration              ├── shot noise
+    ├── photon noise                   ├── thermal noise
+    ├── read noise                     ├── bandwidth
+    ├── defects                        ├── analog gain/TIA
+    └── ADC                            └── ADC/sample
+    │                                  │
+    ▼                                  ▼
+IMAGE DETECTOR                    DEMODULATOR / CRC
+    │                                  │
+    └───────────────┬──────────────────┘
+                    ▼
+             OBSERVATION FUSION
+                    │
+                    ▼
+          CANDIDATE / IDENTITY TRACKS
+                    │
+                    ▼
+               TARGET SELECTOR
+                    │
+                    ▼
+                  TRACKER
+                    │
+                    ▼
+                   PID
+                    │
+                    ▼
+               PTZ ACTUATOR
+                    │
+                    └──────── feedback ────────► next camera frame
 ```
 
-This is necessary for debugging and quantitative controller tuning.
+### Key engineering rule
+
+The camera and photodiode must receive **two sensor-specific observations of the same propagated optical energy**.
+
+They must not be separately generated from unrelated shortcuts.
 
 ---
 
-## 7.3 Add Reproducibility Metadata
+# 11. Recommended Implementation Order
 
-Every acceptance/benchmark run should record:
+## Phase 1 — Close the remaining P0 integration gaps
 
-- random seed
-- configuration hash
-- git commit
-- simulator version
-- disturbance configuration
-- protocol configuration
-- camera configuration
-- controller gains
+1. Add complete `CommSource` physical metadata propagation from remote terminal runtime.
+2. Separate `tx_power_w` from `received_power_w` semantics.
+3. Connect `FULL_RESET` to an explicit `PTZCamera.reset()` command/event.
+4. Remove digital `chip_at()` as the receiver measurement and replace it with an analog received-power waveform.
+5. Make camera image generation use the per-terminal propagation model.
+6. Associate communication observations with specific candidate tracks.
+7. Implement true multi-candidate validation.
+8. Fix the wavelength-spoofer acceptance test.
 
-This allows any result to be reproduced exactly.
+## Phase 2 — Fix remaining re-acquisition/control logic
+
+9. Gate re-acquisition around the predicted target, not the FOV center.
+10. Strengthen provisional re-acquisition with geometric/motion consistency.
+11. Wire tracker velocity into PID feed-forward.
+12. Explicitly model sensor/controller/actuator latency.
+13. Improve target association beyond brightest-gated candidate.
+
+## Phase 3 — Complete sensor physics
+
+14. Add camera exposure integration.
+15. Add radiometric photon/gain/ADC units.
+16. Add receiver angular FOV.
+17. Define/calibrate beam-width convention.
+18. Add wavelength response end-to-end.
+19. Apply beam-center displacement from pointing error.
+20. Add per-terminal turbulence/scintillation to the received optical field.
+
+## Phase 4 — Protocol and timing
+
+21. Enforce independent simulation clocks.
+22. Derive watchdogs from actual beacon/frame timing.
+23. Implement or remove CW/PPM.
+24. Convert all critical miss/watchdog logic to time-based quantities.
+
+## Phase 5 — Verification
+
+25. Implement real detector threshold sweeps.
+26. Add multi-target acceptance tests.
+27. Add physical link-coupling tests.
+28. Add analog photodiode tests.
+29. Add full-reset homing tests.
+30. Run deterministic Monte Carlo campaigns.
+31. Update `Fixes.md` and `Plan.md` to separate `Implemented`, `Partial`, and `Not Implemented` claims.
 
 ---
 
-# 8. Recommended Data Model Changes
+# 12. Recommended Refactoring Targets
 
-A robust implementation should avoid passing independent primitive values between layers.
+## 12.1 Introduce a single authoritative sensor-facing optical source object
 
-## 8.1 Candidate Observation
+Example:
 
 ```python
 @dataclass
-class CandidateObservation:
-    observation_id: int
-    timestamp: float
-    centroid_fov: FovPoint
-    peak: float
-    sigma_px: float
-    r2: float
-    snr_db: float
-    background: float
-    confidence: float
+class OpticalLinkSource:
+    terminal_id: str
+    position_world: WorldPoint
+    tx_power_w: float
+    wavelength_nm: float
+    modulation: ModulationType
+    beam_diameter_m: float
+    range_m: float
+    pointing_error_deg: float
+    atmospheric_transmission: float
+    chip_at: Callable[[float], int]
 ```
 
-## 8.2 Candidate Track
+This object should be created once per terminal per simulation tick and reused by:
+
+- camera optical formation
+- photodiode receiver
+- telemetry
+
+That prevents the camera and communication paths from receiving inconsistent source physics.
+
+---
+
+## 12.2 Introduce `CandidateTrack`
+
+Recommended fields:
 
 ```python
 @dataclass
 class CandidateTrack:
     track_id: int
-    state: TrackLifecycle
-    position_fov: FovPoint
-    velocity_fov_px_s: Vector2
-    covariance: Matrix
-    last_seen_time: float
-    misses: int
-    tid: str | None
-    sequence: int | None
+    lifecycle: str
+    fov_position: FovPoint
+    world_position: WorldPoint | None
+    velocity_px_s: tuple[float, float]
+    uncertainty_px: float
+    terminal_id: str | None
+    last_sequence: int | None
+    wavelength_nm: float | None
     validation_score: float
-    strike_count: int
+    strikes: int
+    last_seen_s: float
+    last_decode_s: float | None
 ```
 
-## 8.3 Optical Observation
-
-```python
-@dataclass
-class OpticalObservation:
-    timestamp: float
-    source_hint: int | None
-    received_power_w: float
-    wavelength_nm: float
-    photodiode_current_a: float
-    photodiode_snr_db: float
-    sample_quality: float
-```
-
-## 8.4 Explicit Coordinate Types
-
-```python
-@dataclass(frozen=True)
-class FovPoint:
-    x_px: float
-    y_px: float
-
-@dataclass(frozen=True)
-class WorldPoint:
-    x_px: float
-    y_px: float
-
-@dataclass(frozen=True)
-class PtzAngles:
-    pan_deg: float
-    tilt_deg: float
-```
-
-This design makes coordinate-frame mistakes much harder to introduce.
+The selector should consume these objects rather than a single global validation snapshot.
 
 ---
 
-# 9. Recommended End-to-End Physical Architecture
+## 12.3 Separate link physics from sensor physics
 
-The target architecture should be:
+### Link model owns
+
+- TX power
+- beam divergence
+- range
+- pointing
+- atmospheric attenuation
+- beam wander
+- scintillation
+- received irradiance/power
+
+### Camera owns
+
+- aperture
+- optics
+- PSF
+- exposure
+- pixel integration
+- camera noise
+- ADC
+
+### Photodiode owns
+
+- aperture
+- filter
+- responsivity
+- bandwidth
+- shot noise
+- thermal noise
+- gain
+- ADC
+- demodulation
+
+This separation prevents duplicated attenuation or noise terms.
+
+---
+
+# 13. Definition of Done
+
+## Optical link
+
+- [ ] TX and RX power semantics are explicitly separated.
+- [ ] Range affects received power.
+- [ ] Pointing affects coupling.
+- [ ] Pointing shifts the received beam footprint.
+- [ ] Atmospheric attenuation affects received power.
+- [ ] Turbulence/scintillation affect the optical field.
+- [ ] Wavelength is carried end-to-end.
+
+## Camera
+
+- [ ] Camera observes propagated optical energy rather than ideal terminal markers.
+- [ ] Exposure time is modeled.
+- [ ] Pixel integration is modeled.
+- [ ] Photon statistics are tied to optical energy.
+- [ ] Read noise is modeled.
+- [ ] Persistent defects remain fixed.
+- [ ] ADC gain/offset/saturation are defined.
+
+## Photodiode
+
+- [ ] No direct transmitter-bit shortcut in the measurement path.
+- [ ] Analog receive power exists before demodulation.
+- [ ] Wavelength response is applied.
+- [ ] Receiver angular FOV is applied.
+- [ ] Aperture is applied.
+- [ ] Shot and thermal noise are applied.
+- [ ] Finite extinction ratio is applied to the waveform.
+- [ ] CRC errors emerge from sampled receiver degradation.
+
+## Autonomy
+
+- [ ] Multiple detections become multiple candidate tracks.
+- [ ] Multiple candidates can be independently validated.
+- [ ] Candidate identity is used in association.
+- [ ] Re-acquisition gates around predicted state.
+- [ ] Re-acquisition uses explicit coordinate frames.
+- [ ] Escalation preserves useful motion state.
+- [ ] Full reset physically homes the PTZ.
+
+## Controller
+
+- [ ] PTZ dynamics are either physically parameterized or explicitly documented as an approximation.
+- [ ] Damping terminology is correct.
+- [ ] Feed-forward is actually connected.
+- [ ] Latency is explicit.
+- [ ] Rate/acceleration/saturation behavior is tested.
+
+## Verification
+
+- [ ] Real ROC threshold sweeps exist.
+- [ ] Multi-target tests exist.
+- [ ] Wavelength-spoofer test passes the actual spoofed wavelength.
+- [ ] Re-acquisition coordinate tests exist.
+- [ ] Full-reset homing test exists.
+- [ ] Camera sensor-chain tests exist.
+- [ ] Photodiode analog tests exist.
+- [ ] Physical-link coupling tests exist.
+- [ ] Deterministic Monte Carlo tests exist.
+- [ ] Benchmark runs record seed, configuration, and git commit.
+
+---
+
+# 14. Final Re-check Conclusion
+
+The current `f12b70d` commit is **not merely the same implementation as the previous review**. Several recommended corrections have been implemented, especially coordinate handling, escalation behavior, pointing-power coupling, persistent sensor defects, and preliminary photodiode physics.
+
+However, the most important remaining problem is architectural:
+
+> **The simulator still contains multiple physical models that are not yet the authoritative source of the sensor observations used by the autonomy stack.**
+
+The three highest-risk gaps are now:
+
+1. **The actual end-to-end `CommSource` integration does not carry the physical terminal/link metadata needed by the new photodiode model.**
+2. **The photodiode receiver still decodes a digital `chip_at(t)` stream rather than demodulating an analog received optical waveform.**
+3. **The camera image is still generated from idealized rendered terminal spots rather than from the per-terminal propagated optical field.**
+
+Those should be resolved before using the simulator to make quantitative claims about FSOC/PAT acquisition probability, tracking robustness, false acquisition rate, communication reliability, or controller performance under realistic disturbances.
+
+Once those are corrected, the next validation step should be a deterministic multi-target Monte Carlo campaign combining:
 
 ```text
-REMOTE TERMINAL
-    │
-    ├── Motion state
-    ├── Pointing model
-    ├── Beacon waveform generation
-    └── Optical emission
-          │
-          ▼
-PROPAGATION / CHANNEL
-    │
-    ├── Range attenuation
-    ├── Beam divergence
-    ├── Pointing coupling
-    ├── Beam wander
-    ├── Beam spreading
-    ├── Turbulence
-    └── Scintillation
-          │
-          ├─────────────────────────────┐
-          ▼                             ▼
-CAMERA OPTICAL PATH              PHOTODIODE PATH
-    │                             │
-    ├── Receiver FOV              ├── Aperture
-    ├── PSF / seeing              ├── Filter
-    ├── Pixel integration         ├── Responsivity
-    ├── Exposure                  ├── Shot noise
-    ├── Poisson noise             ├── TIA / gain
-    ├── Read noise                ├── Receiver bandwidth
-    ├── Defects                   └── ADC / sampling
-    └── ADC                              │
-    │                                    ▼
-    ▼                              DEMODULATOR
-IMAGE FRAME                               │
-    │                                    ▼
-DETECTOR                            CRC / DECODER
-    │                                    │
-    └──────────────┬─────────────────────┘
-                   ▼
-            OBSERVATION FUSION
-                   │
-                   ▼
-          VALIDATION / IDENTITY
-                   │
-                   ▼
-              CANDIDATE TRACKS
-                   │
-                   ▼
-              TARGET SELECTOR
-                   │
-                   ▼
-               TRACKER
-                   │
-                   ▼
-                 PID
-                   │
-                   ▼
-              PTZ CAMERA
-                   │
-                   └────── feedback ──────► next frame
+range
++ pointing error
++ atmospheric attenuation
++ turbulence/scintillation
++ platform jitter
++ sensor noise
++ motion
++ multi-target clutter
++ wavelength spoofing
++ communication timing errors
 ```
 
-The key principle is that **both camera and communication observations must originate from the same propagated optical energy**, even though the sensor-specific noise, bandwidth, and response models differ.
+and reporting:
+
+```text
+acquisition probability
+acquisition time
+tracking RMS / max error
+loss probability
+re-acquisition time
+false acquisition rate
+CRC success rate
+controller saturation
+reset/fault rate
+```
+
+That is the point at which the simulator becomes a meaningful engineering benchmark rather than primarily a subsystem integration demonstrator.
 
 ---
 
-# 10. Recommended Implementation Order
+## Appendix A — Files Re-checked in the Current Commit
 
-## Phase 1 — Correctness Fixes
+### Core autonomy / tracking
 
-1. Introduce explicit coordinate-frame types.
-2. Fix re-acquisition world/FOV conversion.
-3. Correct tracker initialization after scan-based reacquisition.
-4. Add camera-home command to `FULL_RESET`.
-5. Separate tracker measurement reset from motion-model reset.
-6. Make validation multi-candidate rather than `dets[0]` only.
+- `local_terminal/supervisor.py`
+- `local_terminal/reacquisition.py`
+- `local_terminal/tracker.py`
+- `local_terminal/validator.py`
+- `local_terminal/selector.py`
+- `local_terminal/registry.py`
+- `local_terminal/comm_receiver.py`
 
-## Phase 2 — Physical Optical Coupling
+### Camera / controller
 
-7. Make per-terminal propagation authoritative for received power.
-8. Apply pointing-error coupling to the optical field.
-9. Build a physically meaningful camera optical path.
-10. Replace photodiode `chip_at(t)` shortcut with an analog receive signal.
-11. Derive communication errors from receiver SNR rather than camera SNR.
+- `camera/config.py`
+- `camera/constants.py`
+- `camera/pid_controller.py`
+- `camera/ptz.py`
 
-## Phase 3 — Sensor Fidelity
+### Remote optical source
 
-12. Add camera exposure/integration.
-13. Fix persistent hot-pixel behavior.
-14. Add receiver aperture/filter/responsivity.
-15. Add finite OOK extinction ratio.
-16. Add wavelength-dependent response.
+- `remote_terminal/config.py`
+- `remote_terminal/optics.py`
+- `remote_terminal/scenario.py`
+- `remote_terminal/beacon_encoder.py`
 
-## Phase 4 — Control and Estimation
+### Disturbances / simulation integration
 
-17. Decide between a documented first-order plant and a proper second-order PTZ model.
-18. Add explicit latency accounting.
-19. Add target-motion feed-forward.
-20. Improve multi-target association.
+- `disturbance/core/pipeline.py`
+- `disturbance/sensor/image_noise.py`
+- `simulation/fov_pipeline.py`
+- `simulation/headless.py`
+- `gui/application/session.py`
+- `gui/core/renderer.py`
 
-## Phase 5 — Protocol and Timing
+### Tests
 
-21. Separate simulation clocks.
-22. Make beacon timing explicit and deterministic.
-23. Implement supported modulation modes completely or remove unsupported modes.
-24. Convert miss/watchdog thresholds from hard-coded frame counts to time-based parameters.
-
-## Phase 6 — Verification
-
-25. Add coordinate transform tests.
-26. Add physical coupling tests.
-27. Add camera and photodiode sensor tests.
-28. Replace the pseudo-ROC test with a real threshold sweep.
-29. Add Monte Carlo acceptance tests.
-30. Update `Plan.md` so implementation state and remaining work match the code.
+- `tests/test_acceptance.py`
+- `tests/test_coordinates.py`
+- `tests/test_optical_coupling.py`
+- `tests/test_photodiode_receiver.py`
+- `tests/test_reacquisition_coords.py`
 
 ---
 
-# 11. Definition of Done
+## Appendix B — Verification Limitation
 
-The simulator should not be considered complete until all of the following are true:
+This review is a **source-level re-check against the current GitHub commit**. The repository's GitHub connector returned no CI status entries for `f12b70d`, and the current execution environment could not clone the repository directly from GitHub. Therefore this document does **not** claim that the entire test suite was executed successfully.
 
-### Optical physics
-
-- [ ] Pointing error changes received optical power.
-- [ ] Range changes received optical power.
-- [ ] Atmospheric attenuation changes received optical power.
-- [ ] Beam spreading/wander/scintillation affect received signal.
-- [ ] Camera and photodiode observe the same propagated optical source.
-
-### Camera
-
-- [ ] Explicit FOV/world/angle coordinate transformations exist.
-- [ ] Exposure/integration is modeled.
-- [ ] Photon noise and read noise are modeled.
-- [ ] Persistent sensor defects remain persistent.
-- [ ] Saturation behavior is defined.
-
-### Communication receiver
-
-- [ ] Photodiode sees analog received power rather than direct transmitter bits.
-- [ ] Wavelength response is modeled.
-- [ ] Receiver aperture/FOV is modeled.
-- [ ] OOK extinction ratio is modeled.
-- [ ] Demodulation and CRC operate on sampled receiver data.
-- [ ] Communication errors are not injected directly from camera SNR.
-
-### Tracking
-
-- [ ] Tracker coordinates are explicitly FOV-local.
-- [ ] Re-acquisition converts all scan/world coordinates before locking.
-- [ ] Motion model is preserved during appropriate escalation stages.
-- [ ] Multi-target association is source/candidate specific.
-- [ ] Identity information can contribute to candidate association.
-
-### Supervisor
-
-- [ ] FULL_RESET actually homes the PTZ camera.
-- [ ] Search/detect/validate/select/track/re-acquire transitions are deterministic.
-- [ ] Timeouts are derived from configured rates/protocol timing.
-- [ ] Reset rate limiting is tested.
-
-### Verification
-
-- [ ] Real ROC/threshold sweeps exist.
-- [ ] Multi-target tests exist.
-- [ ] Re-acquisition transform tests exist.
-- [ ] Physical coupling tests exist.
-- [ ] Camera sensor tests exist.
-- [ ] Photodiode tests exist.
-- [ ] Monte Carlo robustness tests exist.
-- [ ] Runs record seeds/configuration/git commit.
-
----
-
-# 12. Final Engineering Assessment
-
-The simulator has a substantial subsystem foundation and is suitable for continued development, but its current end-to-end behavior should not yet be treated as a physically faithful FSOC/PAT coarse-alignment reference.
-
-The most consequential architectural issue is that the simulator contains sophisticated disturbance and propagation components without consistently making their outputs the causal inputs to the camera and communication sensors. The second major issue is coordinate-frame ambiguity between image/FOV, world, and PTZ angle spaces. The third is the limited source-specific treatment of multiple candidates.
-
-The implementation should therefore prioritize **causal signal coupling, explicit coordinate systems, sensor-specific observation models, and multi-candidate identity association** before extensive controller tuning or performance claims are made.
-
-Once those foundations are corrected, PID tuning, disturbance sweeps, acquisition-time optimization, and ROC/Monte Carlo benchmarking will provide meaningful engineering results rather than tuning around simulator shortcuts.
+The test files were inspected for logical correctness, and several test/setup defects were identified directly from their source.

@@ -29,13 +29,15 @@ def test_reacquisition_provisional_and_confirm():
     """Plan.md §8.2: provisional resume gate on detection -> confirmed on CRC pass."""
     mgr = ReacquisitionManager(ReacquisitionConfig(initial_radius_px=50.0, radius_step_px=20.0))
     model = AlphaBetaFilter2D()
-    model.update(1000.0, 1000.0, 1 / 30)
+    # Predicted target location (FOV frame) — the Stage-1 gate measures
+    # detections from the prediction (Fixes.md 5.1), not the FOV center.
+    model.update(330.0, 250.0, 1 / 30)
 
     mgr.start("RT-001", (1000.0, 1000.0), model, now_s=0.0)
     assert mgr.active
     assert mgr.stage == EscalationStage.LOCAL_SEARCH
 
-    # Step 1: Candidate detected within 50 px -> provisional gate passed
+    # Step 1: Candidate detected within 50 px of prediction -> provisional gate passed
     det = Detection(fov_x=320.0, fov_y=240.0, peak=150.0, sigma_px=3.5, snr_db=15.0, compactness_r2=0.9, pixel_count=20)
     pool = StandbyPool()
     scan = ScanController()

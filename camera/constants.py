@@ -36,7 +36,7 @@ CAMERA_LIMITS: dict[str, tuple[float, float]] = {
     "home_tilt_deg": (-90.0, 90.0),
     
     # Physical / Mechanical Characteristics
-    "damping_ratio": (0.1, 2.0),           # Damping ratio zeta (0.7 = critically damped)
+    "damping_ratio": (0.1, 2.0),           # Damping ratio zeta (1.0 = critical; 0.707 = Butterworth/underdamped)
     "inertia_kg_m2": (0.001, 1.0),         # Rotational inertia (kg*m^2)
     "backlash_deg": (0.0, 0.5),            # Gear backlash / dead-zone (deg)
     "encoder_bits": (10, 24),              # Encoder resolution in bits
@@ -71,7 +71,7 @@ CAMERA_DEFAULTS: dict[str, Any] = {
     "home_pan_deg": 0.0,
     "home_tilt_deg": 0.0,
     
-    "damping_ratio": 0.707,                # Standard Butterworth critical damping
+    "damping_ratio": 0.707,                # Butterworth design point (underdamped; critical = 1.0)
     "inertia_kg_m2": 0.02,
     "backlash_deg": 0.005,                 # 18 arcsec backlash
     "encoder_bits": 16,                    # 16-bit encoder (~0.0055° resolution)

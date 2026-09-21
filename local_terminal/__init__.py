@@ -14,6 +14,7 @@ from local_terminal.comm_receiver import (
     CommSource,
     ber_from_snr_db,
 )
+from local_terminal.config import LocalTerminalConfig, make_default_local_terminal
 from local_terminal.detector import Detection, DetectorConfig, detect_candidates
 from local_terminal.motion import AlphaBetaAxis, AlphaBetaConfig, AlphaBetaFilter2D
 from local_terminal.registry import (
@@ -61,6 +62,8 @@ __all__ = [
     "Detection",
     "DetectorConfig",
     "detect_candidates",
+    "LocalTerminalConfig",
+    "make_default_local_terminal",
     "AlphaBetaAxis",
     "AlphaBetaConfig",
     "AlphaBetaFilter2D",

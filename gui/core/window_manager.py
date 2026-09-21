@@ -91,6 +91,7 @@ class WindowManager:
             self._settings.cameraChanged.connect(self._parent._on_camera_config)
             self._settings.controlChanged.connect(self._parent._on_control_config)
             self._settings.remoteTerminalChanged.connect(self._parent._on_remote_config)
+            self._settings.localTerminalChanged.connect(self._parent._on_local_config)
             self._settings.environmentChanged.connect(self._parent._on_environment_config)
             self._settings.disturbancesChanged.connect(self._parent._on_disturbances_config)
         try:

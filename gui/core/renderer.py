@@ -171,6 +171,8 @@ class Renderer:
                 return (x, y, color, label, None, None)
 
             # 2. Direct remote terminals pipeline with camera FOV projection
+            # GROUND-TRUTH fallback (Fixes.md 3.8): never label as an
+            # autonomy estimate — explicit TRUTH prefix.
             if camera is not None and "terminals" in telemetry:
                 term_list = telemetry.get("terminals", [])
                 if isinstance(term_list, list) and term_list:
@@ -186,7 +188,7 @@ class Renderer:
                         is_em = bool(active_t.get("emitting", False))
                         color = (74, 222, 128) if is_em else (148, 163, 184)
                         tid = str(active_t.get("id", "RT"))
-                        label = f"{tid} (ACTIVE)" if is_em else tid
+                        label = f"TRUTH {tid} (ACTIVE)" if is_em else f"TRUTH {tid}"
                         heading_rad = float(active_t.get("heading_rad", 0.0)) if "heading_rad" in active_t else None
                         speed = float(active_t.get("velocity_m_s", 0.0)) if "velocity_m_s" in active_t else None
                         return (fx, fy, color, label, heading_rad, speed)

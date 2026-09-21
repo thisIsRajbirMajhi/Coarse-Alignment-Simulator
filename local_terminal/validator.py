@@ -190,6 +190,17 @@ class TrackValidator:
             self.reject_reason = "unknown_id"
             self.drop_track = True
             return self.snapshot()
+        # Mission-defined signature enforcement (Fixes.md 7.2): required
+        # navigation extension must be present when the registry demands it.
+        try:
+            _entry = self.registry.entries.get(tid)
+            _need_nav = bool(getattr(_entry, "require_nav", False))
+        except AttributeError:
+            _need_nav = False
+        if _need_nav and not bytes(getattr(payload, "nav", b"") or b""):
+            self._strike(tid, now)
+            self._reject(tid, "missing_nav")
+            return self.snapshot()
         try:
             seq = int(getattr(payload, "seq", -1)) % SEQUENCE_MODULUS
         except (TypeError, ValueError):

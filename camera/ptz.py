@@ -18,10 +18,16 @@ log = logging.getLogger(__name__)
 class PTZCamera:
     """
     Virtual PTZ Camera for Coarse Alignment Simulator.
-    
+
+    Simplified actuator model (Fixes.md C-15, Option A): an
+    acceleration-limited velocity actuator with first-order lag and gear
+    backlash hysteresis — NOT a physically parameterized second-order
+    gimbal plant (no motor torque / stiffness identification).
+
     Features:
     - 2-axis gimbal kinematics with rate and acceleration limits
-    - Realistic mechanical dynamics: inertia, damping, backlash hysteresis
+    - First-order mechanical lag (inertia/damping tune the time constant),
+      backlash hysteresis
     - Optical encoder quantization and measurement noise
     - Exact FOV viewport extraction from world scene with boundary padding
     - Strict monochrome output (per user specifications)
@@ -236,8 +242,9 @@ class PTZCamera:
         new_vel = current_vel + actual_delta_vel
         accel = actual_delta_vel / max(1e-6, dt)
 
-        # Damping & inertia lag filter (first-order equivalent of second-order mechanical system)
-        # tau_mech ~ inertia / (damping_ratio * 2 * sqrt(inertia * k))
+        # Damping & inertia lag filter (first-order approximation of the
+        # slower mechanical response — Fixes.md C-15: this is a tuned lag,
+        # not a derivation from a J/c/k second-order plant).
         tau_mech = max(0.005, self.config.inertia_kg_m2 / max(0.01, self.config.damping_ratio))
         alpha = dt / (tau_mech + dt)
         filtered_vel = current_vel + alpha * (new_vel - current_vel)

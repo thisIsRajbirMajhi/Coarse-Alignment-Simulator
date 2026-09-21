@@ -34,7 +34,7 @@ class SimulationSession:
     """
 
     def __init__(self, env_config=None, disturbance_config=None, scenario_config=None,
-                 camera_config=None, pid_config=None, seed: int = 42, **kwargs):
+                  camera_config=None, pid_config=None, seed: int = 42, **kwargs):
         from camera.config import CameraConfig, PIDConfig
         from disturbance.core.config import DisturbanceConfig
         from environment.config import EnvironmentConfig
@@ -47,6 +47,11 @@ class SimulationSession:
         self.scenario_config = (scenario_config or make_default_scenario()).validate()
         self.camera_config = (camera_config or CameraConfig()).validate()
         self.pid_config = (pid_config or PIDConfig()).validate()
+        local_config = kwargs.get("local_terminal_config") or kwargs.get("local_config")
+        if local_config is None:
+            from local_terminal.config import make_default_local_terminal
+            local_config = make_default_local_terminal()
+        self.local_terminal_config = local_config.validate()
         self._built = False
         self._frame_id = 0
         self._last_dt = 1 / 30
@@ -84,7 +89,10 @@ class SimulationSession:
         )
         self.controller = PIDController(config=self.pid_config)
         from local_terminal import AutonomySupervisor, SignatureRegistry
-        self.supervisor = AutonomySupervisor(registry=SignatureRegistry.from_scenario(self.scenario_config))
+        self.supervisor = AutonomySupervisor(
+            registry=SignatureRegistry.from_scenario(self.scenario_config),
+            local_config=self.local_terminal_config,
+        )
         self._apply_expected_payload_to_registry()
         self._apply_scan_start_index()
         self.tracker = self.supervisor.tracker
@@ -93,6 +101,7 @@ class SimulationSession:
         self._pending_track_error: tuple[float, float] | None = None
         self._pending_pid_active: bool = False
         self._pending_target_angles: tuple[float, float] | None = None
+        self._pending_target_vel: tuple[float, float] | None = None
         self._last_disturbed_center: tuple[float, float] | None = None
         self._last_val_snr_db = 6.0
         self._sim_time_s = 0.0
@@ -217,6 +226,14 @@ class SimulationSession:
         self._apply_expected_payload_to_registry()
         self.validator = self.supervisor.validator
 
+    def apply_local_terminal_config(self, config) -> None:
+        self.ensure_built()
+        self.local_terminal_config = config.validate()
+        self.supervisor.apply_local_config(self.local_terminal_config)
+        self.tracker = self.supervisor.tracker
+        self.comm_rx = self.supervisor.comm_rx
+        self.validator = self.supervisor.validator
+
     # -- stepping ------------------------------------------------------
     def _disturbance_pipeline_for(self, dt: float):
         from disturbance.core import DisturbanceContext, DisturbancePipeline
@@ -263,12 +280,15 @@ class SimulationSession:
         cmd_pan, cmd_tilt = 0.0, 0.0
         if self.controller.config.mode == "AUTO" and self._pending_pid_active and self._pending_track_error is not None:
             ex, ey = self._pending_track_error
+            tvx, tvy = self._pending_target_vel or (0.0, 0.0)
             cmd_pan, cmd_tilt = self.controller.compute_from_pixels(
                 error_x_px=ex,
                 error_y_px=ey,
                 deg_per_px_h=self.camera.config.deg_per_px_h,
                 deg_per_px_v=self.camera.config.deg_per_px_v,
                 dt=dt_eff,
+                target_vel_x_px_s=float(tvx),
+                target_vel_y_px_s=float(tvy),
             )
             self.camera.update(dt_eff, cmd_pan_vel=cmd_pan, cmd_tilt_vel=cmd_tilt)
         elif self.controller.config.mode == "AUTO" and self._pending_target_angles is not None:
@@ -312,11 +332,21 @@ class SimulationSession:
         sources = []
         for term in getattr(self.remote, "terminals", []):
             try:
+                rt = term.runtime
                 sources.append(CommSource(
                     position=(float(term.position_m.x), float(term.position_m.y)),
-                    emitting=bool(term.runtime.effective_emission_enabled),
-                    power_w=float(term.runtime.instantaneous_power_w),
+                    emitting=bool(rt.effective_emission_enabled),
+                    # TX high-chip source power BEFORE link losses (Fixes.md
+                    # 3.5): the receiver applies pointing/aperture/filter
+                    # coupling itself. runtime.instantaneous_power_w already
+                    # includes pointing coupling + chip extinction, so it
+                    # must NOT be passed as P_tx (double-count).
+                    power_w=float(term.config.optical_power_w),
                     chip_at=term.generator.chip_at,
+                    pointing_error_deg=float(rt.pointing_error_deg),
+                    wavelength_nm=float(term.config.wavelength_nm),
+                    beam_diameter_m=float(rt.beam_diameter_m),
+                    range_m=float(rt.range_m),
                 ))
             except (AttributeError, TypeError, ValueError):
                 continue
@@ -336,6 +366,18 @@ class SimulationSession:
         self._pending_pid_active = sup_out.pid_active
         self._pending_track_error = sup_out.track_error_px
         self._pending_target_angles = sup_out.camera_target_angles
+        self._pending_target_vel = getattr(sup_out, "target_vel_px_s", None)
+        # Explicit PTZ homing on full reset (Fixes.md C-04): synchronous
+        # reset to configured home/start with zero rate/accel.
+        if bool(getattr(sup_out, "camera_reset_requested", False)):
+            try:
+                self.camera.reset()
+            except (AttributeError, TypeError, ValueError) as e:
+                log.debug("full-reset camera homing skipped: %s", e)
+            self._pending_track_error = None
+            self._pending_pid_active = False
+            self._pending_target_angles = None
+            self._pending_target_vel = None
 
         self._frame_id += 1
         cam_st = self.camera.get_state()

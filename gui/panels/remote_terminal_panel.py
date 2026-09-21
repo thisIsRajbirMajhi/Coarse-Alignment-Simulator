@@ -241,6 +241,55 @@ class RemoteTerminalPanel(BaseConfigPanel):
         )
         root.addWidget(term_box)
 
+        # BEACON PAYLOAD card (wire identity fields).
+        pay_box, pay_grid = self._make_group("BEACON PAYLOAD")
+        self.edit_token = QLineEdit("")
+        self.edit_token.setPlaceholderText("Empty = follow Terminal ID")
+        self.edit_token.setToolTip(_tooltip("token"))
+        self.spin_network = QSpinBox()
+        self.spin_network.setRange(int(_meta("network_id")["min"]),
+                                   int(_meta("network_id")["max"]))
+        self.spin_network.setToolTip(_tooltip("network_id"))
+        self.chk_nav = QCheckBox("ON")
+        self.chk_nav.setToolTip(_tooltip("enable_nav"))
+        pay_grid.addWidget(self._label("Token"), 0, 0)
+        pay_grid.addWidget(self.edit_token, 0, 1)
+        pay_grid.addWidget(self._label("Network ID"), 1, 0)
+        pay_grid.addWidget(self.spin_network, 1, 1)
+        nav_row = QHBoxLayout()
+        nav_row.addWidget(self._label("NAV Extension"))
+        nav_row.addWidget(self.chk_nav)
+        nav_row.addStretch(1)
+        pay_grid.addLayout(nav_row, 2, 0, 1, 2)
+        pay_grid.addWidget(
+            self._hint("Token empty follows the TID. Network 0 = omitted "
+                       "(legacy-compatible). NAV off sends ID-only frames."),
+            3, 0, 1, 2,
+        )
+        root.addWidget(pay_box)
+
+        # POINTING card (beam direction error model, §47).
+        pt_box, pt_grid = self._make_group("POINTING")
+        self.spin_bias = QDoubleSpinBox()
+        self.spin_bias.setRange(float(_meta("pointing_bias_deg")["min"]),
+                                float(_meta("pointing_bias_deg")["max"]))
+        self.spin_bias.setSingleStep(float(_meta("pointing_bias_deg")["step"]))
+        self.spin_bias.setDecimals(3)
+        self.spin_bias.setSuffix(" deg")
+        self.spin_bias.setToolTip(_tooltip("pointing_bias_deg"))
+        self.spin_jitter = QDoubleSpinBox()
+        self.spin_jitter.setRange(float(_meta("pointing_jitter_sigma_deg")["min"]),
+                                  float(_meta("pointing_jitter_sigma_deg")["max"]))
+        self.spin_jitter.setSingleStep(float(_meta("pointing_jitter_sigma_deg")["step"]))
+        self.spin_jitter.setDecimals(3)
+        self.spin_jitter.setSuffix(" deg")
+        self.spin_jitter.setToolTip(_tooltip("pointing_jitter_sigma_deg"))
+        pt_grid.addWidget(self._label("Pointing Bias"), 0, 0)
+        pt_grid.addWidget(self.spin_bias, 0, 1)
+        pt_grid.addWidget(self._label("Pointing Jitter σ"), 1, 0)
+        pt_grid.addWidget(self.spin_jitter, 1, 1)
+        root.addWidget(pt_box)
+
         # TELEMETRY card (read-only, §56).
         tele_box, tele_grid = self._make_group("TELEMETRY — read-only")
         self.tele_labels: dict[str, QLabel] = {}
@@ -276,6 +325,11 @@ class RemoteTerminalPanel(BaseConfigPanel):
         self.spin_start_y.valueChanged.connect(self._on_formation_changed)
         self.combo_terminal.currentIndexChanged.connect(self._on_terminal_selected)
         self.edit_tid.editingFinished.connect(self._on_terminal_edited)
+        self.edit_token.editingFinished.connect(self._on_terminal_edited)
+        self.spin_network.valueChanged.connect(self._on_terminal_edited)
+        self.chk_nav.toggled.connect(self._on_terminal_edited)
+        self.spin_bias.valueChanged.connect(self._on_terminal_edited)
+        self.spin_jitter.valueChanged.connect(self._on_terminal_edited)
         self.chk_power.toggled.connect(self._on_terminal_edited)
         self.chk_beacon.toggled.connect(self._on_terminal_edited)
         self.combo_state.currentIndexChanged.connect(self._on_terminal_edited)
@@ -358,6 +412,11 @@ class RemoteTerminalPanel(BaseConfigPanel):
                 wavelength_nm=float(_random.choice(_RANDOM_WAVELENGTHS)),
                 modulation=_random.choice(list(ModulationType)),
                 spot_size_mrad=round(_random.uniform(0.2, 5.0), 2),
+                token="",
+                network_id=_random.randint(0, 5),
+                enable_nav=_random.random() < 0.9,
+                pointing_bias_deg=round(_random.uniform(-0.01, 0.01), 4),
+                pointing_jitter_sigma_deg=round(_random.uniform(0.0, 0.005), 4),
             )
             for i in range(count)
         ]
@@ -427,6 +486,11 @@ class RemoteTerminalPanel(BaseConfigPanel):
         self.spin_wavelength.setValue(float(t.wavelength_nm))
         self._set_combo(self.combo_mod, t.modulation.value)
         self.spin_spot.setValue(float(t.spot_size_mrad))
+        self.edit_token.setText(str(getattr(t, "token", "") or ""))
+        self.spin_network.setValue(int(getattr(t, "network_id", 0) or 0))
+        self.chk_nav.setChecked(bool(getattr(t, "enable_nav", True)))
+        self.spin_bias.setValue(float(getattr(t, "pointing_bias_deg", 0.005)))
+        self.spin_jitter.setValue(float(getattr(t, "pointing_jitter_sigma_deg", 0.002)))
 
     def _read_terminal_editor(self) -> None:
         if not self._config.terminals:
@@ -442,6 +506,11 @@ class RemoteTerminalPanel(BaseConfigPanel):
         t.optical_power_w = float(self.spin_opt_power.value())
         t.wavelength_nm = float(self.spin_wavelength.value())
         t.spot_size_mrad = float(self.spin_spot.value())
+        t.token = self.edit_token.text().strip()
+        t.network_id = int(self.spin_network.value())
+        t.enable_nav = bool(self.chk_nav.isChecked())
+        t.pointing_bias_deg = float(self.spin_bias.value())
+        t.pointing_jitter_sigma_deg = float(self.spin_jitter.value())
 
     def _sync_terminal_count(self, count: int) -> None:
         terms = self._config.terminals

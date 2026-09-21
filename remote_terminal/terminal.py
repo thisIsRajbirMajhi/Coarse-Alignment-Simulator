@@ -31,9 +31,15 @@ class RemoteTerminal:
             initial_delay_s=max(0, int(terminal_index))
             * FIRST_FRAME_STAGGER_CHIPS
             * CHIP_DURATION_S,
+            token=self.config.effective_token(),
+            network_id=self.config.network_id,
+            enable_nav=self.config.enable_nav,
         )
         self._geometry = GeometryEngine()
-        self._pointing = PointingModel()
+        self._pointing = PointingModel(
+            bias_deg=self.config.pointing_bias_deg,
+            jitter_sigma_deg=self.config.pointing_jitter_sigma_deg,
+        )
         self._beam = BeamModel()
         self.position_m = Vector2(0.0, 0.0)
         self.velocity_mps = Vector2(0.0, 0.0)
@@ -149,6 +155,11 @@ class RemoteTerminal:
             "optical_power_w": float(self.config.optical_power_w),
             "wavelength_nm": self.config.wavelength_nm,
             "modulation": self.config.modulation.value,
+            "token": self.config.effective_token(),
+            "network_id": int(self.config.network_id),
+            "nav_enabled": bool(self.config.enable_nav),
+            "pointing_bias_deg": float(self.config.pointing_bias_deg),
+            "pointing_jitter_sigma_deg": float(self.config.pointing_jitter_sigma_deg),
             "beacon_sequence": r.beacon_sequence,
             "has_beacon_frame": self._has_frame,
             "beacon_navigation": nav,

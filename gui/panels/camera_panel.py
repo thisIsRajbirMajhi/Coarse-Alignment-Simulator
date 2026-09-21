@@ -178,7 +178,7 @@ class CameraPanel(BaseConfigPanel):
 
         # Damping Ratio (0.1 .. 2.0)
         self.slider_damping, self.lbl_damping, self.factor_damping = self._make_float_slider(
-            0.1, 2.0, 0.71, decimals=2, suffix="", tooltip="Damping ratio zeta (0.7 = critically damped)"
+            0.1, 2.0, 0.71, decimals=2, suffix="", tooltip="Damping ratio zeta (1.0 = critical; 0.707 = Butterworth)"
         )
         mech_grid.addWidget(self._label("Damping Ratio"), 1, 0)
         mech_grid.addWidget(self.slider_damping, 1, 1)

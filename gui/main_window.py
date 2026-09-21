@@ -457,6 +457,15 @@ class MainWindow(QMainWindow):
             return True
         self._schedule_config("remote_terminal", _apply)
 
+    def _on_local_config(self, cfg) -> None:
+        def _apply():
+            ok = self.controller.apply_config(ApplyConfigCommand(section="local_terminal", config=cfg))
+            if ok is False:
+                return False
+            self.windows.sync_dialog(self.session)
+            return True
+        self._schedule_config("local_terminal", _apply)
+
     # -- compat adapters --------------------------------------------
     def closeEvent(self, event) -> None:  # noqa: N802
         try:

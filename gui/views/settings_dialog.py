@@ -65,7 +65,7 @@ class SettingsDialog(QDialog):
         title.setStyleSheet("font-size:16px; font-weight:700; color:#ffffff;")
         title_block.addWidget(title)
 
-        sub = QLabel("Remote Terminal • Environment • Disturbances", header)
+        sub = QLabel("Remote Terminal • Local Terminal • Environment • Disturbances", header)
         sub.setStyleSheet("font-size:11px; color:#e2e8f0;")
         sub.setWordWrap(True)
         sub.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -150,6 +150,7 @@ class SettingsDialog(QDialog):
         from gui.panels.controller_panel import ControllerPanel
         from gui.panels.disturbances_panel import DisturbancesPanel
         from gui.panels.environment_panel import EnvironmentPanel
+        from gui.panels.local_terminal_panel import LocalTerminalPanel
         from gui.panels.remote_terminal_panel import RemoteTerminalPanel
 
         # 1. Camera & PTZ Panel
@@ -161,14 +162,19 @@ class SettingsDialog(QDialog):
         # 3. Remote Terminal Panel
         self.remote_panel = RemoteTerminalPanel(initial=session.scenario_config)
 
-        # 4. Environment Panel
+        # 4. Local Terminal Panel
+        self.local_panel = LocalTerminalPanel(
+            initial=getattr(session, "local_terminal_config", None))
+
+        # 5. Environment Panel
         self.env_panel = EnvironmentPanel(initial=session.env_config)
 
-        # 5. Disturbances Panel
+        # 6. Disturbances Panel
         self.dist_panel = DisturbancesPanel(initial=session.disturbance_config)
 
         # Wrap each panel in a scroll area with custom clean background
         self._add_scrolled_tab(self.remote_panel, "Remote Terminal")
+        self._add_scrolled_tab(self.local_panel, "Local Terminal")
         self._add_scrolled_tab(self.env_panel, "Environment")
         self._add_scrolled_tab(self.dist_panel, "Disturbances")
         self._add_scrolled_tab(self.camera_panel, "Camera & PTZ")
@@ -178,6 +184,7 @@ class SettingsDialog(QDialog):
         self.camera_panel.configChanged.connect(self.cameraChanged.emit)
         self.controller_panel.configChanged.connect(self.controlChanged.emit)
         self.remote_panel.configChanged.connect(self.remoteTerminalChanged.emit)
+        self.local_panel.configChanged.connect(self.localTerminalChanged.emit)
         self.env_panel.configChanged.connect(self.environmentChanged.emit)
         self.dist_panel.configChanged.connect(self.disturbancesChanged.emit)
 
@@ -223,6 +230,11 @@ class SettingsDialog(QDialog):
             self.controller_panel.set_config(PIDConfig().validate(), emit=True)
         except Exception as e:
             log.debug("camera/controller reset skipped: %s", e)
+        try:
+            from local_terminal.config import make_default_local_terminal
+            self.local_panel.set_config(make_default_local_terminal(), emit=True)
+        except Exception as e:
+            log.debug("local terminal reset skipped: %s", e)
         try:
             from remote_terminal import make_default_scenario
             self.remote_panel.set_config(make_default_scenario(), emit=True)
@@ -303,6 +315,11 @@ class SettingsDialog(QDialog):
             self.remote_panel.set_config(session.scenario_config, emit=False)
         except Exception as e:
             log.debug("remote terminal sync skipped: %s", e)
+        try:
+            if hasattr(session, "local_terminal_config"):
+                self.local_panel.set_config(session.local_terminal_config, emit=False)
+        except Exception as e:
+            log.debug("local terminal sync skipped: %s", e)
         try:
             self.env_panel.set_config(session.env_config, emit=False)
         except Exception as e:

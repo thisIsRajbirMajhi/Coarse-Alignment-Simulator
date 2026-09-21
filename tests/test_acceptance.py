@@ -104,7 +104,13 @@ def test_acceptance_3_spoofer_rejection():
     from remote_terminal.beacon_encoder import BeaconGenerator
 
     spoofer_gen = BeaconGenerator("RT-001", 1200.0)
-    src = CommSource(position=(1000.0, 1000.0), emitting=True, power_w=0.5, chip_at=spoofer_gen.chip_at)
+    # Full sensor-facing link metadata (Fixes.md 8.1/C-11): the receiver's
+    # wavelength filter, aperture collection, and pointing coupling must see
+    # the spoofed values, not nominal defaults.
+    src = CommSource(position=(1000.0, 1000.0), emitting=True, power_w=0.5,
+                     chip_at=spoofer_gen.chip_at, wavelength_nm=1200.0,
+                     beam_diameter_m=1.0, range_m=1000.0,
+                     pointing_error_deg=0.0)
 
     img = np.zeros((480, 640, 3), dtype=np.uint8)
     yy, xx = np.mgrid[0:480, 0:640]

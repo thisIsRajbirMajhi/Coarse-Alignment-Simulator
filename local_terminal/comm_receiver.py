@@ -11,10 +11,10 @@
 # Clock recovery (real): the receiver clock is NOT synchronized to the
 # transmitter — float truncation alone corrupts int()-indexed sampling, and
 # any fixed phase assumption breaks. The receiver therefore oversamples at
-# 4× (0.25 ms), acquires chip phase by correlating the known 16-bit
-# preamble/sync marker across the four sub-phases (exactly what the marker
+# 8× (0.125 ms), acquires chip phase by correlating the known 16-bit
+# preamble/sync marker across the eight sub-phases (exactly what the marker
 # is for), then slices chips on the recovered grid. Mid-grid quantization is
-# ≤1/8 chip, immune to float error. Loss of parses triggers re-acquisition.
+# ≤1/16 chip, immune to float error. Loss of parses triggers re-acquisition.
 #
 # Simplification (documented): capture effect — the nearest-to-boresight
 # emitter dominates. Multi-emitter chip superposition is Stage-4 work.

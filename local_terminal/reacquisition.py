@@ -197,11 +197,13 @@ class ReacquisitionManager:
             target_ptz = fov_to_angles(pred_fov, curr_angles, px_per_deg, fov_size)
             angles = (target_ptz.pan_deg, target_ptz.tilt_deg)
 
-            # Check detections within current search radius (§8.2 step 2)
+            # Check detections within current search radius of the PREDICTED
+            # target location (Fixes.md 5.1): gating around the FOV center
+            # would accept any boresight-near distractor far from prediction.
             matching_det = None
             if detections:
                 for d in detections:
-                    dist = math.hypot(d.fov_x - (fov_size[0] / 2.0), d.fov_y - (fov_size[1] / 2.0))
+                    dist = math.hypot(d.fov_x - pred_x, d.fov_y - pred_y)
                     if dist <= self.current_radius_px:
                         matching_det = d
                         break

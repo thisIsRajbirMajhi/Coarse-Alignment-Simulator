@@ -204,8 +204,17 @@ class RemoteTerminalConfig:
     operational_state: OperationalState = OperationalState.BEACONING
     optical_power_w: float = 0.5
     wavelength_nm: float = 1550.0
+    # NOTE (Fixes.md 4.9): BeaconGenerator always emits OOK frames; CW/PPM
+    # currently select emitted-power semantics in BeamModel only.
     modulation: ModulationType = ModulationType.OOK
     spot_size_mrad: float = 1.0
+    # Beacon payload identity (wire fields): empty token follows the TID.
+    token: str = ""
+    network_id: int = 0
+    enable_nav: bool = True
+    # Pointing (per-terminal beam direction error model, §47).
+    pointing_bias_deg: float = 0.005
+    pointing_jitter_sigma_deg: float = 0.002
 
     def validate(self) -> RemoteTerminalConfig:
         tid = str(self.terminal_id or "").strip()
@@ -232,7 +241,31 @@ class RemoteTerminalConfig:
         spot = _require_number("Spot size", self.spot_size_mrad)
         if spot <= 0:
             raise ValueError("Spot size must be greater than zero.")
+        tok = str(self.token or "").strip()
+        if len(tok.encode("utf-8")) > 255:
+            raise ValueError("Token must be <= 255 bytes.")
+        self.token = tok
+        try:
+            net = int(self.network_id)
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"Network ID must be an integer, got {self.network_id!r}.") from e
+        if isinstance(self.network_id, bool) or not 0 <= net <= 255:
+            raise ValueError(f"Network ID {self.network_id!r} outside [0, 255].")
+        self.network_id = net
+        self.enable_nav = bool(self.enable_nav)
+        bias = _require_number("Pointing bias", self.pointing_bias_deg)
+        if not -1.0 <= bias <= 1.0:
+            raise ValueError(f"Pointing bias {bias}° outside [-1, 1]°.")
+        jit = _require_number("Pointing jitter", self.pointing_jitter_sigma_deg)
+        if not 0.0 <= jit <= 1.0:
+            raise ValueError(f"Pointing jitter {jit}° outside [0, 1]°.")
+        self.pointing_bias_deg = float(bias)
+        self.pointing_jitter_sigma_deg = float(jit)
         return self
+
+    def effective_token(self) -> str:
+        """Wire token: explicit token or the TID when empty."""
+        return str(self.token or "").strip() or str(self.terminal_id).strip()
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> RemoteTerminalConfig:
@@ -251,6 +284,11 @@ class RemoteTerminalConfig:
                     ModulationType, data.get("modulation", "ook"), "modulation"
                 ),
                 spot_size_mrad=float(data.get("spot_size_mrad", 1.0)),
+                token=str(data.get("token", "")),
+                network_id=int(data.get("network_id", 0)),
+                enable_nav=bool(data.get("enable_nav", True)),
+                pointing_bias_deg=float(data.get("pointing_bias_deg", 0.005)),
+                pointing_jitter_sigma_deg=float(data.get("pointing_jitter_sigma_deg", 0.002)),
             ).validate()
         except (TypeError, ValueError, KeyError, AttributeError) as e:
             raise ValueError(f"Invalid terminal configuration: {e}") from e
@@ -386,12 +424,39 @@ FIELD_METADATA: dict[str, dict[str, Any]] = {
     "modulation": {
         "label": "Modulation", "control": "dropdown", "unit": "",
         "min": None, "max": None, "step": None, "group": "Optical",
-        "description": "Beacon modulation format (default OOK).",
+        "description": "Beacon modulation format (default OOK). NOTE (Fixes.md 4.9): "
+                       "only OOK has an end-to-end protocol waveform; CW/PPM currently "
+                       "affect emitted-power semantics only and still generate OOK frames.",
     },
     "spot_size_mrad": {
         "label": "Spot Size", "control": "float", "unit": "mrad",
         "min": 0.01, "max": 50.0, "step": 0.05, "group": "Optical",
         "description": "Full angular beam width/divergence (not FWHM, radius, or half-angle).",
+    },
+    "token": {
+        "label": "Token", "control": "text", "unit": "",
+        "min": None, "max": None, "step": None, "group": "Beacon Payload",
+        "description": "Beacon auth token (empty follows the Terminal ID).",
+    },
+    "network_id": {
+        "label": "Network ID", "control": "int", "unit": "",
+        "min": 0, "max": 255, "step": 1, "group": "Beacon Payload",
+        "description": "Wire network ID (0 = omitted, legacy-compatible).",
+    },
+    "enable_nav": {
+        "label": "NAV Extension", "control": "bool", "unit": "",
+        "min": None, "max": None, "step": None, "group": "Beacon Payload",
+        "description": "Attach the 12-byte navigation extension (timestamp + X/Y).",
+    },
+    "pointing_bias_deg": {
+        "label": "Pointing Bias", "control": "float", "unit": "deg",
+        "min": -1.0, "max": 1.0, "step": 0.001, "group": "Pointing",
+        "description": "Static beam-pointing bias added to the LOS angle.",
+    },
+    "pointing_jitter_sigma_deg": {
+        "label": "Pointing Jitter", "control": "float", "unit": "deg",
+        "min": 0.0, "max": 1.0, "step": 0.001, "group": "Pointing",
+        "description": "1-sigma Gaussian beam-pointing jitter.",
     },
 }
 

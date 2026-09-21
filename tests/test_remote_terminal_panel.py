@@ -111,12 +111,13 @@ def test_control_deck_hosts_remote_terminal_tab(qapp):
     session.ensure_built()
     dlg = SettingsDialog(session)
     try:
-        assert dlg.tabs.count() == 5
+        assert dlg.tabs.count() == 6
         assert dlg.tabs.tabText(0) == "Remote Terminal"
-        assert dlg.tabs.tabText(1) == "Environment"
-        assert dlg.tabs.tabText(2) == "Disturbances"
-        assert dlg.tabs.tabText(3) == "Camera & PTZ"
-        assert dlg.tabs.tabText(4) == "PID Controller"
+        assert dlg.tabs.tabText(1) == "Local Terminal"
+        assert dlg.tabs.tabText(2) == "Environment"
+        assert dlg.tabs.tabText(3) == "Disturbances"
+        assert dlg.tabs.tabText(4) == "Camera & PTZ"
+        assert dlg.tabs.tabText(5) == "PID Controller"
         dlg.sync_from_session(session)
         assert dlg.remote_panel.spin_count.value() >= 1
     finally:

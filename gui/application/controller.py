@@ -187,6 +187,8 @@ class ApplicationController(QObject):
                 self.session.apply_disturbance_config(cmd.config)
             elif cmd.section == "remote_terminal":
                 self.session.apply_remote_config(cmd.config)
+            elif cmd.section == "local_terminal":
+                self.session.apply_local_terminal_config(cmd.config)
             else:
                 raise ValueError(f"unknown config section: {cmd.section}")
         except Exception as e:

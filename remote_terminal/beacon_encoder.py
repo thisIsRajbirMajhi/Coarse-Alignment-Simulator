@@ -73,11 +73,21 @@ class BeaconGenerator:
         terminal_id: str,
         wavelength_nm: float,
         initial_delay_s: float = 0.0,
+        token: str = "",
+        network_id: int = 0,
+        enable_nav: bool = True,
     ):
         self.terminal_id = str(terminal_id)
         self.wavelength_nm = float(wavelength_nm)
         # First-frame delay staggers co-clocked terminals (see above).
         self.initial_delay_s = max(0.0, float(initial_delay_s))
+        self.token = str(token or "").strip()
+        try:
+            net = int(network_id)
+        except (TypeError, ValueError):
+            net = 0
+        self.network_id = max(0, min(255, net))
+        self.enable_nav = bool(enable_nav)
         self.sequence = 0
         self.current: GeneratedBeacon | None = None
         self._ook = OOKEncoder()
@@ -96,13 +106,15 @@ class BeaconGenerator:
                 f"navigation must be NavigationState2D, got {type(navigation).__name__}."
             )
         seq = int(self.sequence) % SEQUENCE_MODULUS
+        nav = encode_navigation_state(navigation) if self.enable_nav else b""
         payload = BeaconPayload(
             tid=self.terminal_id,
-            token=self.terminal_id,
+            token=(self.token or self.terminal_id),
             wl=int(round(self.wavelength_nm)),
             seq=seq,
-            capabilities=CAP_NAVIGATION_STATE,
-            nav=encode_navigation_state(navigation),
+            network_id=int(self.network_id),
+            capabilities=(CAP_NAVIGATION_STATE if self.enable_nav else 0),
+            nav=nav,
         )
         frame = BeaconFrame(payload=payload)
         wire = frame.to_bytes()  # CRC covers the extended frame (§83)

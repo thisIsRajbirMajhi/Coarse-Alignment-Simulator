@@ -68,6 +68,12 @@ class SupervisorOutput:
     track_error_px: tuple[float, float] | None = None
     active_target_id: str | None = None
     telemetry: dict = field(default_factory=dict)
+    # Explicit PTZ homing event (Fixes.md C-04): True on the tick full_reset()
+    # ran. Integrators must call PTZCamera.reset() — do NOT rely on target
+    # angles alone, which can be None and never guarantee zero rate/accel.
+    camera_reset_requested: bool = False
+    # Target image-plane velocity (px/s) for PID feed-forward (Fixes.md 5.5).
+    target_vel_px_s: tuple[float, float] | None = None
 
 
 class AutonomySupervisor:
@@ -82,17 +88,43 @@ class AutonomySupervisor:
         validation_config: ValidationConfig | None = None,
         reacq_config: ReacquisitionConfig | None = None,
         detector_config: DetectorConfig | None = None,
+        local_config=None,
     ):
-        self.config = (config or SupervisorConfig()).validate()
+        # Aggregated local-terminal config wins over individual sub-configs
+        # when both are given (GUI path); direct sub-configs stay for tests.
+        lc = None
+        if local_config is not None:
+            try:
+                lc = local_config.validate()
+            except AttributeError:
+                lc = local_config
+        self.config = (lc.supervisor if lc is not None else None) or (config or SupervisorConfig()).validate()
         self.registry = registry or SignatureRegistry()
-        self.detector_config = (detector_config or DetectorConfig()).validate()
+        self.detector_config = ((lc.detector if lc is not None else None)
+                                or (detector_config or DetectorConfig())).validate()
 
         # Core modules
-        self.scan_ctrl = ScanController(scan_config)
-        self.tracker = ImageTracker(tracker_config)
-        self.validator = TrackValidator(self.registry, validation_config)
+        self.scan_ctrl = ScanController((lc.scan if lc is not None else None) or scan_config)
+        self.tracker = ImageTracker((lc.tracker if lc is not None else None) or tracker_config)
+        if lc is not None:
+            try:
+                m = lc.motion.validate()
+                self.tracker.model.ax.config = m
+                self.tracker.model.ay.config = m
+            except (AttributeError, TypeError, ValueError):
+                pass
+        self.validator = TrackValidator(
+            self.registry, (lc.validation if lc is not None else None) or validation_config)
         self.selector = TargetSelector()
-        self.reacq_mgr = ReacquisitionManager(reacq_config)
+        if lc is not None:
+            try:
+                self.selector.score_min = float(lc.validation.score_min)
+                self.selector.standby_pool.max_age_s = float(lc.standby_max_age_s)
+                self.selector.standby_pool.max_size = int(lc.standby_max_size)
+            except (AttributeError, TypeError, ValueError):
+                pass
+        self.reacq_mgr = ReacquisitionManager(
+            (lc.reacquisition if lc is not None else None) or reacq_config)
         self.comm_rx = CommReceiver()
 
         # State tracking
@@ -117,10 +149,46 @@ class AutonomySupervisor:
         # Current frame cache
         self._current_dets: list[Detection] = []
         self._pending_validation_snap: ValidationSnapshot | None = None
+        # Explicit PTZ homing event, consumed once per full_reset (Fixes.md C-04).
+        self._camera_reset_pending: bool = False
 
     def set_registry(self, registry: SignatureRegistry) -> None:
         self.registry = registry
         self.validator.set_registry(registry)
+
+    def apply_local_config(self, local_config) -> None:
+        """Hot-reload all autonomy sub-configs from a LocalTerminalConfig.
+
+        Preserves scan geometry (world/fov size) and the live schedule order;
+        only dwell/pattern change. Never resets track/validation state.
+        """
+        lc = local_config.validate()
+        self.config = lc.supervisor.validate()
+        self.detector_config = lc.detector.validate()
+        # Scan: keep geometry + schedule, reload dwell/pattern.
+        try:
+            keep_geom = (self.scan_ctrl.config.world_w, self.scan_ctrl.config.world_h,
+                         self.scan_ctrl.config.fov_w, self.scan_ctrl.config.fov_h)
+        except AttributeError:
+            keep_geom = (2000, 2000, 640, 480)
+        sc = lc.scan.validate()
+        sc.world_w, sc.world_h, sc.fov_w, sc.fov_h = keep_geom
+        self.scan_ctrl.config = sc
+        self.tracker.config = lc.tracker.validate()
+        try:
+            m = lc.motion.validate()
+            self.tracker.model.ax.config = m
+            self.tracker.model.ay.config = m
+        except (AttributeError, TypeError, ValueError):
+            pass
+        self.validator.config = lc.validation.validate()
+        try:
+            self.selector.score_min = float(self.validator.config.score_min)
+            self.selector.standby_pool.max_age_s = float(lc.standby_max_age_s)
+            self.selector.standby_pool.max_size = int(lc.standby_max_size)
+        except (AttributeError, TypeError, ValueError):
+            pass
+        self.reacq_mgr.config = lc.reacquisition.validate()
 
     def _transition(self, new_state: AutonomyState, reason: str) -> None:
         if new_state != self.state:
@@ -161,6 +229,8 @@ class AutonomySupervisor:
         self.reacq_mgr.reset()
         self.comm_rx.reset()
         self._hold_target_angles = (0.0, 0.0)
+        # Explicit homing event for the integrator (Fixes.md C-04).
+        self._camera_reset_pending = True
 
         self._transition(AutonomyState.SEARCH, "full_reset")
         return True
@@ -357,6 +427,20 @@ class AutonomySupervisor:
         # Build comprehensive telemetry
         tel = self.autonomy_telemetry()
 
+        # Consume the explicit homing event once (Fixes.md C-04).
+        reset_req = bool(getattr(self, "_camera_reset_pending", False))
+        self._camera_reset_pending = False
+
+        # Target velocity for PID feed-forward (Fixes.md 5.5): α-β model
+        # velocity in FOV px/s, same axes as track_error_px.
+        tgt_vel: tuple[float, float] | None = None
+        if track_error is not None:
+            try:
+                vx, vy = self.tracker.model.velocity
+                tgt_vel = (float(vx), float(vy))
+            except (AttributeError, TypeError, ValueError):
+                tgt_vel = None
+
         return SupervisorOutput(
             state=self.state,
             camera_target_angles=target_angles,
@@ -364,6 +448,8 @@ class AutonomySupervisor:
             track_error_px=track_error,
             active_target_id=self.tracker.active_terminal_id,
             telemetry=tel,
+            camera_reset_requested=reset_req,
+            target_vel_px_s=tgt_vel,
         )
 
     def autonomy_telemetry(self) -> dict:

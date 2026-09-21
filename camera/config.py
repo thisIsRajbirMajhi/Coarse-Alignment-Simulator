@@ -41,7 +41,7 @@ class CameraConfig(BaseValidatedConfig):
     home_tilt_deg: float = 0.0
     
     # Dynamics & Sensors
-    damping_ratio: float = 0.707         # Critical damping ratio
+    damping_ratio: float = 0.707         # Damping ratio zeta (1.0 = critical; 0.707 = Butterworth)
     inertia_kg_m2: float = 0.02          # Gimbal moment of inertia
     backlash_deg: float = 0.005          # Gear backlash (hysteresis on reversal)
     encoder_bits: int = 16               # Optical encoder quantization
