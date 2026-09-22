@@ -54,9 +54,11 @@ class KalmanFilter2D:
         self.P = np.eye(4, dtype=float) * 100.0
         self._initialised = False
 
-    def initialise(self, x: float, y: float) -> None:
-        self.x = np.array([[float(x)], [float(y)], [0.0], [0.0]], dtype=float)
-        self.P = np.diag([4.0, 4.0, 25.0, 25.0])
+    def initialise(self, x: float, y: float, vx: float = 0.0, vy: float = 0.0) -> None:
+        self.x = np.array([[float(x)], [float(y)], [float(vx)], [float(vy)]], dtype=float)
+        # If velocity provided (reacq), keep moderate velocity uncertainty; else high
+        vel_var = 25.0 if (abs(float(vx)) < 1e-6 and abs(float(vy)) < 1e-6) else 12.0
+        self.P = np.diag([4.0, 4.0, vel_var, vel_var])
         self._initialised = True
 
     def shift(self, dx: float, dy: float) -> None:
@@ -86,6 +88,15 @@ class KalmanFilter2D:
         z = np.array([[float(zx)], [float(zy)]], dtype=float)
         y = z - H @ self.x
         S = H @ self.P @ H.T + R
+        # Adaptive: large innovation ( >3sigma) indicates maneuver -> inflate P slightly to adapt faster
+        try:
+            nis = float(y.T @ np.linalg.inv(S) @ y)
+            if nis > 9.0:  # chi2 2dof 99% ~9.21
+                # Mild process noise boost for next predict by inflating velocity covariance
+                self.P[2,2] *= 1.35
+                self.P[3,3] *= 1.35
+        except Exception:
+            pass
         try:
             K = self.P @ H.T @ np.linalg.inv(S)
         except np.linalg.LinAlgError:
@@ -93,6 +104,13 @@ class KalmanFilter2D:
         self.x = self.x + K @ y
         I = np.eye(4)
         self.P = (I - K @ H) @ self.P
+        # Enforce positive diagonal (numeric safety)
+        try:
+            for i in range(4):
+                if self.P[i,i] < 1e-4:
+                    self.P[i,i] = 1e-4
+        except Exception:
+            pass
         self._initialised = True
         return float(self.x[0, 0]), float(self.x[1, 0])
 
@@ -137,9 +155,21 @@ class KalmanTracker:
         self.status = "LOST"
         self.last_beacon_t = None
 
-    def lock(self, tid: str, x: float, y: float, t: float, p_rx_w: float = 0.0) -> None:
+    def lock(self, tid: str, x: float, y: float, t: float, p_rx_w: float = 0.0, vx: float | None = None, vy: float | None = None) -> None:
         self.active_tid = str(tid)
-        self.kf.initialise(float(x), float(y))
+        # Preserve prior velocity if available (reacq): avoids zero-velocity lag for maneuvering targets
+        if vx is None or vy is None:
+            try:
+                pvx, pvy = self.kf.velocity
+                # Only preserve if previously initialized and not absurd
+                if self.kf._initialised and abs(pvx) < 500 and abs(pvy) < 500:
+                    vx = float(pvx) * 0.7  # decay slightly, target may have turned
+                    vy = float(pvy) * 0.7
+                else:
+                    vx, vy = 0.0, 0.0
+            except Exception:
+                vx, vy = 0.0, 0.0
+        self.kf.initialise(float(x), float(y), float(vx), float(vy))
         self.misses = 0
         self.last_meas_t = float(t)
         self.p_rx_w = float(p_rx_w)

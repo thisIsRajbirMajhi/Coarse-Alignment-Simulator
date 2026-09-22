@@ -85,12 +85,33 @@ class SupervisorV2:
         self._search_start_t: float = 0.0
         self._full_resets: int = 0
         self._camera_reset_pending: bool = False
+        # Hardening: debounce counters and acquisition pending (no ground-truth leakage)
+        self._assoc_pending: TargetObservation | None = None
+        self._assoc_pending_t: float = 0.0
+        self._track_miss_streak: int = 0
+        self._track_hit_streak: int = 0
 
     def _go(self, nxt: V2State, reason: str) -> None:
         if nxt is not self.state:
             # Track search start for acquisition duration
             if nxt == V2State.SEARCH:
                 self._search_start_t = float(self.sim_time)
+                # Priority search: if we have a last known predict, seed scan around it (reduces 20-cell blind raster)
+                try:
+                    if self.tracker.active_tid is not None:
+                        px, py = self.tracker.kf.position
+                        # Map FOV predict ~320,240 to world ~boresight_world unavailable here; use FOV as proxy offset from center
+                        # Provide predicted world approx via boresight world not yet; so skip world-based priority in _go and handle in step
+                        pass
+                    # Reset debounce on new search
+                    self._track_miss_streak = 0
+                    self._track_hit_streak = 0
+                    self._assoc_pending = None
+                except Exception:
+                    pass
+            if nxt in (V2State.TRACK, V2State.COAST):
+                # entering track resets debounce to require 2 hits/misses
+                pass
             self.transitions.append((self.sim_time, self.state.value, nxt.value, reason))
             log.info("V2 @ %.3f %s -> %s (%s)", self.sim_time,
                      self.state.value, nxt.value, reason)
@@ -134,6 +155,10 @@ class SupervisorV2:
         self._pending_beacon = None
         self._pending_tid = None
         self._first_lock_t = None
+        self._assoc_pending = None
+        self._assoc_pending_t = 0.0
+        self._track_miss_streak = 0
+        self._track_hit_streak = 0
         self._full_resets = int(getattr(self, "_full_resets", 0)) + 1
         self._camera_reset_pending = True
         self._go(V2State.SEARCH, "full_reset")
@@ -275,53 +300,75 @@ class SupervisorV2:
                         self._pending_beacon = None
                 except Exception:
                     fresh_beacon = self._pending_beacon
-            # Require confirmed spots for acquisition (not raw fallback)
+            # Require confirmed spots for acquisition (not raw fallback) — sensor-only, no ground truth
             cands = confirmed if confirmed else []
             assoc = associate_acquisition(
                 cands, fresh_beacon, (fw, fh),
                 gate_px=float(self.cfg.association_gate_px))
-            # World-distance check for acquisition: spot must be near beacon's terminal world pos
-            if assoc.observation is not None and fresh_beacon is not None and comm_sources:
-                try:
-                    spot_world_x = float(boresight_world[0]) - fw/2 + float(assoc.observation.fov_x)
-                    spot_world_y = float(boresight_world[1]) - fh/2 + float(assoc.observation.fov_y)
-                    # Find beacon's terminal world pos
-                    best_dist = 1e9
-                    for s in comm_sources:
-                        try:
-                            sx, sy = float(s.position[0]), float(s.position[1])
-                            d = math.hypot(sx - spot_world_x, sy - spot_world_y)
-                            if d < best_dist:
-                                best_dist = d
-                        except Exception:
-                            continue
-                    if best_dist > 120:
-                        assoc.observation = None
-                        assoc.reason = "acq_spot_beacon_mismatch"
-                except Exception as e:
-                    import logging
-                    logging.getLogger(__name__).info(f"ACQ world check exception {e}")
-                    pass
+            # Hardening: 2-frame acquisition confirmation (star near boresight rarely repeats)
+            # No world-position leakage: rely on temporal consistency + beacon freshness
             if assoc.observation is not None:
                 o = assoc.observation
-                tid = select_active_v2([o], self.cfg.active_target_policy,
-                                       self.mission_priority) or o.terminal_id
-                self.tracker.lock(tid, o.fov_x, o.fov_y, self.sim_time, o.p_rx_w)
-                self._pending_beacon = None
-                self._pending_tid = None
-                self._coast_since = None
-                if self._first_lock_t is None:
-                    self._first_lock_t = self.sim_time
-                self._go(V2State.TRACK, "spot_associated")
-                pid_active = True
-                track_err = self.tracker.error_px(fw, fh)
+                # If pending exists, require second frame within 25px and 0.3s window
+                if self._assoc_pending is not None and self._assoc_pending.terminal_id == o.terminal_id:
+                    age = float(self.sim_time - self._assoc_pending_t)
+                    dist = math.hypot(float(o.fov_x - self._assoc_pending.fov_x), float(o.fov_y - self._assoc_pending.fov_y))
+                    if age <= 0.35 and dist <= 25.0:
+                        tid = select_active_v2([o], self.cfg.active_target_policy,
+                                               self.mission_priority) or o.terminal_id
+                        self.tracker.lock(tid, o.fov_x, o.fov_y, self.sim_time, o.p_rx_w)
+                        self._assoc_pending = None
+                        self._pending_beacon = None
+                        self._pending_tid = None
+                        self._coast_since = None
+                        self._track_miss_streak = 0
+                        self._track_hit_streak = 0
+                        if self._first_lock_t is None:
+                            self._first_lock_t = self.sim_time
+                        self._go(V2State.TRACK, "spot_associated_confirmed")
+                        pid_active = True
+                        track_err = self.tracker.error_px(fw, fh)
+                    else:
+                        # Too far / stale -> reset pending to current
+                        self._assoc_pending = o
+                        self._assoc_pending_t = float(self.sim_time)
+                        target_angles = curr_angles
+                else:
+                    # First sighting — store and wait one more frame for confirmation
+                    # If confirmer already required 2 frames, this makes total 3-frame chain -> very low false rate
+                    if self._assoc_pending is None:
+                        # Also allow immediate lock if SNR very high (>=14dB) — beacon bright vs star dim
+                        if float(o.snr_db) >= 14.0:
+                            tid = select_active_v2([o], self.cfg.active_target_policy,
+                                                   self.mission_priority) or o.terminal_id
+                            self.tracker.lock(tid, o.fov_x, o.fov_y, self.sim_time, o.p_rx_w)
+                            self._assoc_pending = None
+                            self._pending_beacon = None
+                            self._pending_tid = None
+                            self._coast_since = None
+                            if self._first_lock_t is None:
+                                self._first_lock_t = self.sim_time
+                            self._go(V2State.TRACK, "spot_associated_bright")
+                            pid_active = True
+                            track_err = self.tracker.error_px(fw, fh)
+                        else:
+                            self._assoc_pending = o
+                            self._assoc_pending_t = float(self.sim_time)
+                            target_angles = curr_angles
+                    else:
+                        self._assoc_pending = o
+                        self._assoc_pending_t = float(self.sim_time)
             else:
-                # Stay in ASSOCIATE briefly, but if no confirmed spots, return to IDENTIFY
-                # If beacon stale, go back to SEARCH
+                # No valid assoc this frame — keep pending for short grace (0.35s) else fail
+                if self._assoc_pending is not None and (float(self.sim_time - self._assoc_pending_t) > 0.35):
+                    self._assoc_pending = None
                 if fresh_beacon is None:
+                    self._assoc_pending = None
                     self._go(V2State.SEARCH, "assoc_no_fresh_beacon")
                 else:
-                    self._go(V2State.IDENTIFY, f"assoc_fail:{assoc.reason}")
+                    if self._assoc_pending is None:
+                        self._go(V2State.IDENTIFY, f"assoc_fail:{assoc.reason}")
+                    # else stay in ASSOCIATE waiting for second frame
 
         elif self.state in (V2State.TRACK, V2State.COAST):
             pid_active = True
@@ -361,36 +408,17 @@ class SupervisorV2:
                 self.tracker.active_tid or "", assoc_beacon,
                 pred_var=pred_var,
                 r_base=r, mahal_threshold=self.cfg.association_mahal_threshold)
-            # World-distance validation: spot must be near beacon's terminal world pos
-            # Prevents star false lock when God view shows FOV far from true terminals (image 1/2)
-            if assoc.observation is not None and assoc_beacon is not None and comm_sources:
+            # Sensor-only validation: no ground-truth leakage. Stars drift vs beacon prediction already gated by Mahalanobis.
+            # Additional photometric sanity: if association SNR < 7dB and P_rx indicates strong link, still accept (fading), but if spot area spikes >180, likely haze artifact
+            if assoc.observation is not None:
                 try:
-                    # Find beacon's terminal world pos from comm_sources
-                    beacon_pos = None
-                    for src in comm_sources:
-                        # CommSource has position, check if it matches beacon TID via chip? Use first emitting
-                        # For now, use boresight distance: spot world vs FOV center + spot offset
-                        # Spot world = boresight_world + (spot - FOV_center)
-                        spot_world_x = float(boresight_world[0]) - fw/2 + float(assoc.observation.fov_x)
-                        spot_world_y = float(boresight_world[1]) - fh/2 + float(assoc.observation.fov_y)
-                        # Find closest source to spot_world
-                        best_dist = 1e9
-                        best_src = None
-                        for s in comm_sources:
-                            try:
-                                sx, sy = float(s.position[0]), float(s.position[1])
-                                d = math.hypot(sx - spot_world_x, sy - spot_world_y)
-                                if d < best_dist:
-                                    best_dist = d
-                                    best_src = s
-                            except Exception:
-                                continue
-                        # If best source is far (>80px), this is likely a star, not the beacon's terminal
-                        if best_src is not None and best_dist > 120:
-                            # Reject this association - likely false star
-                            assoc.observation = None
-                            assoc.reason = "spot_beacon_world_mismatch"
-                            self._rejected += 1
+                    # Reject large diffuse blobs (haze) that slipped through area gate under high variance
+                    for s in cands:
+                        if abs(float(s.x - assoc.observation.fov_x)) < 1.5 and abs(float(s.y - assoc.observation.fov_y)) < 1.5:
+                            if int(s.area_px) > 180 and float(s.snr_db) < 9.0:
+                                assoc.observation = None
+                                assoc.reason = "diffuse_haze_blob"
+                            break
                 except Exception:
                     pass
             self._rejected = assoc.rejected_outliers
@@ -431,20 +459,34 @@ class SupervisorV2:
             track_err = self.tracker.error_px(fw, fh)
             unc = track.uncertainty_px
             since = self.sim_time - track.last_measurement_time_s
+            # Debounced TRACK/COAST hysteresis: 2 consecutive misses -> COAST, 2 hits -> TRACK
             if assoc.observation is not None:
+                self._track_miss_streak = 0
+                self._track_hit_streak += 1
                 self._coast_since = None
-                if self.state == V2State.COAST:
-                    self._go(V2State.TRACK, "spot_recovered")
+                # Only transition COAST->TRACK after 2 hits (single hit could be star coincidence)
+                if self.state == V2State.COAST and self._track_hit_streak >= 2:
+                    self._go(V2State.TRACK, "spot_recovered_debounced")
+                    self._track_hit_streak = 0
+                elif self.state == V2State.COAST and self._track_hit_streak == 1:
+                    pass  # stay COAST one more frame, keep pid_active True
             else:
-                if self.state == V2State.TRACK:
-                    self._go(V2State.COAST, "spot_missing")
+                self._track_hit_streak = 0
+                self._track_miss_streak += 1
+                # Require 2 misses before leaving TRACK (suppress single S&P dropout)
+                if self.state == V2State.TRACK and self._track_miss_streak >= 2:
+                    self._go(V2State.COAST, "spot_missing_debounced")
                     self._coast_since = self.sim_time
+                elif self.state == V2State.TRACK and self._track_miss_streak == 1:
+                    pass  # stay TRACK for one frame grace
                 if unc > self.cfg.lost_uncertainty_threshold_px and since > self.cfg.lost_timeout_s:
                     self.loss_count += 1
                     self.tracker.status = "LOST"
                     self._go(V2State.LOST, "uncertainty_timeout")
                     pid_active = False
                     track_err = None
+                    self._track_miss_streak = 0
+                    self._track_hit_streak = 0
             if self.state in (V2State.TRACK, V2State.COAST):
                 target_angles = None
 
@@ -452,7 +494,12 @@ class SupervisorV2:
             pid_active = False
             track_err = None
             if self.tracker.active_tid:
-                self.reacq.start(self.tracker.active_tid)
+                try:
+                    vx, vy = self.tracker.kf.velocity
+                    unc = float(self.tracker.effective_uncertainty_px())
+                    self.reacq.start(self.tracker.active_tid, (float(vx), float(vy)), unc)
+                except Exception:
+                    self.reacq.start(self.tracker.active_tid)
                 self.reacq_start = self.sim_time
             self._go(V2State.REACQUIRE, "track_timeout")
 

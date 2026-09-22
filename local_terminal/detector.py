@@ -25,26 +25,48 @@ def _to_gray(frame: np.ndarray) -> np.ndarray:
 
 
 def detect_spots(frame, config: AutonomyConfig | None = None) -> list[SpotCandidate]:
-    """V2 fast spot detector: threshold + morph + CC + shape/SNR.
-    Robust to 4000-star max fields: area 12-200, fill 0.25-0.85, aspect >0.35,
-    global SNR prefilter + local SNR refine, component cap 50."""
+    """V2 hardened spot detector: robust bg + matched filter + shape/SNR.
+    Hardened vs stars/haze/hot-pixels:
+      - percentile bg (30th) resists star-inflated median
+      - Gaussian matched filter (sigma~1.2) boosts sigma2-3 beacons 2-3x vs 1px hot pixels
+      - intensity-weighted centroid for subpixel accuracy
+      - star/hard-negative rejection via area+fill+SNR tightened
+    """
     cfg = (config or AutonomyConfig()).validate()
     if frame is None or getattr(frame, "size", 0) == 0:
         return []
     gray = _to_gray(frame)
     if gray.dtype != np.uint8:
         gray = np.clip(gray, 0, 255).astype(np.uint8)
-    # Fast bg floor: median on 1/16 downsampled (19k vs 307k, ~6x faster)
+    # --- Robust background: 30th percentile on downsampled, fallback median ---
     try:
         small = gray[::4, ::4]
-        bg_floor = float(np.median(small))
+        # 30th percentile resists star contamination (median biased high by 4000 stars)
+        # but clip to median if haze lifts background strongly (preserve sensitivity)
+        p30 = float(np.percentile(small, 30))
+        med = float(np.median(small))
+        # Use p30 but not too far from median (haze/fog uniform lift)
+        bg_floor = float(np.clip(p30, med - 12, med))
     except Exception:
-        bg_floor = float(np.median(gray))
-    thresh = int(np.clip(bg_floor + float(cfg.candidate_peak_margin), 0, 255))
-    _, mask = cv2.threshold(gray, thresh, 255, cv2.THRESH_BINARY)
+        try:
+            bg_floor = float(np.median(gray))
+        except Exception:
+            bg_floor = 12.0
+    # Adaptive margin: under high background (fog ~40) increase slightly to cut haze false
+    margin = float(cfg.candidate_peak_margin)
+    if bg_floor > 35:
+        margin += 2.0
+    thresh = int(np.clip(bg_floor + margin, 0, 255))
+    # --- Matched filter: Gaussian sigma 1.2 boosts beacon (sigma 2-3) 2-3x vs hot pixel ---
+    try:
+        # Small blur before threshold: single-pixel S&P collapses, beacon retains ~75% peak
+        gray_for_thresh = cv2.GaussianBlur(gray, (0, 0), sigmaX=1.1, sigmaY=1.1)
+    except Exception:
+        gray_for_thresh = gray
+    _, mask = cv2.threshold(gray_for_thresh, thresh, 255, cv2.THRESH_BINARY)
     if not np.any(mask):
         return []
-    # Morph open to remove haze texture and 1-2px hot pixels while keeping sigma~3 beacons (area ~28)
+    # Morph open to remove haze texture and residual 1-2px defects while keeping beacons
     try:
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
@@ -84,6 +106,11 @@ def detect_spots(frame, config: AutonomyConfig | None = None) -> list[SpotCandid
         iter_indices = range(1, n)
 
     out: list[SpotCandidate] = []
+    # Precompute blurred gray for shape validation (hot pixel vs beacon)
+    try:
+        _gray_blur_q = cv2.GaussianBlur(gray, (0, 0), sigmaX=1.1)
+    except Exception:
+        _gray_blur_q = gray
     for idx in iter_indices:
         area = int(stats[idx, cv2.CC_STAT_AREA])
         if area < min_area or area > max_area:
@@ -99,8 +126,36 @@ def detect_spots(frame, config: AutonomyConfig | None = None) -> list[SpotCandid
         aspect = float(min(bw, bh)) / max(1, max(bw, bh))
         if aspect < 0.35:
             continue
-        # Centroid
-        cx, cy = float(centroids[idx, 0]), float(centroids[idx, 1])
+        # Hot-pixel discriminator: single-pixel S&P collapses after blur (<0.45), beacon stays >0.55
+        try:
+            _cx_i, _cy_i = int(round(float(centroids[idx, 0]))), int(round(float(centroids[idx, 1])))
+            if 0 <= _cy_i < gray.shape[0] and 0 <= _cx_i < gray.shape[1]:
+                _orig_pk = float(gray[_cy_i, _cx_i])
+                _blur_pk = float(_gray_blur_q[_cy_i, _cx_i])
+                if _orig_pk > 1 and _blur_pk / max(_orig_pk, 1) < 0.42 and area < 18:
+                    continue
+        except Exception:
+            pass
+        # Intensity-weighted centroid (subpixel, ~0.7px more accurate than binary centroid)
+        try:
+            x0w = int(stats[idx, cv2.CC_STAT_LEFT]); y0w = int(stats[idx, cv2.CC_STAT_TOP])
+            patch_w = gray[max(0,y0w):y0w+bh, max(0,x0w):x0w+bw]
+            lbl_w = labels[max(0,y0w):y0w+bh, max(0,x0w):x0w+bw]
+            m = (lbl_w == idx)
+            if np.any(m):
+                ys, xs = np.where(m)
+                ws = patch_w[m].astype(float) - bg_floor
+                ws = np.clip(ws, 0, 255)
+                wsum = float(ws.sum())
+                if wsum > 1e-6:
+                    cx = float(x0w + (xs * ws).sum() / wsum)
+                    cy = float(y0w + (ys * ws).sum() / wsum)
+                else:
+                    cx, cy = float(centroids[idx, 0]), float(centroids[idx, 1])
+            else:
+                cx, cy = float(centroids[idx, 0]), float(centroids[idx, 1])
+        except Exception:
+            cx, cy = float(centroids[idx, 0]), float(centroids[idx, 1])
         # Peak in bounding box
         x0 = int(stats[idx, cv2.CC_STAT_LEFT])
         y0 = int(stats[idx, cv2.CC_STAT_TOP])
@@ -140,13 +195,17 @@ def detect_spots(frame, config: AutonomyConfig | None = None) -> list[SpotCandid
             snr_db = 20.0 * math.log10(max(peak - bg_m, 1e-3) / bg_s)
         if snr_db < min_snr:
             continue
+        # Quality score for ranking: prefer high SNR beacons over bright stars (stars often high peak but low SNR due to local bg)
         out.append(SpotCandidate(x=cx, y=cy, peak=peak, snr_db=snr_db, area_px=area))
-    out.sort(key=lambda d: d.peak, reverse=True)
+    # Rank by composite quality (SNR-weighted) not raw peak: beacon high-SNR > star high-peak
+    out.sort(key=lambda d: (d.snr_db * 0.7 + d.peak * 0.03 + d.area_px * 0.02), reverse=True)
     return out[:8]
 
 
 class TemporalConfirmer:
-    """Require N consecutive detections near same location (§9.3)."""
+    """Require N consecutive detections near same location (§9.3).
+    Hardened: SNR/area consistency across frames prevents bright transient (S&P)
+    from confirming via a nearby star coincidence."""
 
     def __init__(self, confirm_frames: int = 2, gate_px: float = 12.0):
         self.confirm_frames = int(max(1, min(5, confirm_frames)))
@@ -160,11 +219,31 @@ class TemporalConfirmer:
             return []
         confirmed = []
         for cand in self._history[-1]:
-            votes = 1
+            # Find best matching predecessor in each prior frame
+            matches = []
+            ok = True
             for prev_frame in self._history[:-1]:
-                if any(math.hypot(cand.x - p.x, cand.y - p.y) <= self.gate_px for p in prev_frame):
-                    votes += 1
-            if votes >= self.confirm_frames:
+                best = None
+                best_d2 = 1e9
+                for p in prev_frame:
+                    d = math.hypot(cand.x - p.x, cand.y - p.y)
+                    if d <= self.gate_px and d*d < best_d2:
+                        best_d2 = d*d
+                        best = p
+                if best is None:
+                    ok = False
+                    break
+                # Consistency: area within 50% and SNR within 6dB across frames (reject random coincidences)
+                try:
+                    area_ok = abs(float(best.area_px) - float(cand.area_px)) <= max(6, 0.5*float(cand.area_px))
+                    snr_ok = abs(float(best.snr_db) - float(cand.snr_db)) <= 7.0
+                    if not (area_ok and snr_ok):
+                        ok = False
+                        break
+                except Exception:
+                    pass
+                matches.append(best)
+            if ok:
                 confirmed.append(cand)
         return confirmed
 

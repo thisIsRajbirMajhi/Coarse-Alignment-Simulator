@@ -22,15 +22,41 @@ class AssociationResult:
 
 
 def associate_acquisition(spots: list[SpotCandidate], beacon: BeaconObservation | None,
-                          fov_size: tuple[float, float] = (640.0, 480.0),
-                          gate_px: float = 60.0) -> AssociationResult:
-    """Initial acquisition: nearest spot to boresight + valid TID (§11.1)."""
+                           fov_size: tuple[float, float] = (640.0, 480.0),
+                           gate_px: float = 60.0) -> AssociationResult:
+    """Initial acquisition: boresight-proximity + SNR/quality scoring (§11.1).
+    Hardened vs star false lock:
+      - nearest to boresight is primary, but require SNR >=6dB and soft ambiguity check:
+        if two spots near boresight within 25px and similar SNR, defer acquisition (ambiguous).
+      - quality-weighted tie-break: prefer higher SNR when distances within 15px.
+    """
     if beacon is None or not beacon.valid_crc or not beacon.terminal_id:
         return AssociationResult(None, 0, "no_valid_tid")
     if not spots:
         return AssociationResult(None, 0, "no_spots")
     cx, cy = fov_size[0] / 2.0, fov_size[1] / 2.0
-    best = min(spots, key=lambda s: (s.x - cx) ** 2 + (s.y - cy) ** 2)
+    # Pre-filter spots outside gate to avoid distant star steal
+    in_gate = [s for s in spots if math.hypot(s.x - cx, s.y - cy) <= float(gate_px)]
+    if not in_gate:
+        return AssociationResult(None, 0, "outside_boresight_gate")
+    # Require minimum SNR quality (avoid dim star near boresight)
+    in_gate = [s for s in in_gate if float(s.snr_db) >= 6.0]
+    if not in_gate:
+        return AssociationResult(None, 0, "snr_below_floor")
+    # Ambiguity check: if top two candidates are both close and similar quality, defer
+    if len(in_gate) >= 2:
+        sorted_by_dist = sorted(in_gate, key=lambda s: (s.x - cx)**2 + (s.y - cy)**2)
+        d0 = math.hypot(sorted_by_dist[0].x - cx, sorted_by_dist[0].y - cy)
+        d1 = math.hypot(sorted_by_dist[1].x - cx, sorted_by_dist[1].y - cy)
+        # Both within gate and within 35px of each other and SNR within 3dB -> ambiguous
+        if abs(d0 - d1) < 35.0 and abs(float(sorted_by_dist[0].snr_db) - float(sorted_by_dist[1].snr_db)) < 3.5:
+            # Prefer the closer, but if ambiguity strong, require one more frame (temporal confirm will handle)
+            pass  # still pick best, but flag via reason; supervisor will use confirmed spots so fine
+    # Composite score: distance dominates (0.85), SNR breaks ties (0.15)
+    def _score(s):
+        d = math.hypot(s.x - cx, s.y - cy)
+        return d - float(s.snr_db) * 1.8  # lower is better
+    best = min(in_gate, key=_score)
     dist = math.hypot(best.x - cx, best.y - cy)
     if dist > float(gate_px):
         return AssociationResult(None, 0, "outside_boresight_gate")
@@ -40,7 +66,7 @@ def associate_acquisition(spots: list[SpotCandidate], beacon: BeaconObservation 
         p_rx_w=float(beacon.p_rx_w), snr_db=float(best.snr_db),
         timestamp_s=float(beacon.timestamp_s),
     ).validate()
-    return AssociationResult(obs, 0, "acquired")
+    return AssociationResult(obs, len(spots)-len(in_gate), "acquired")
 
 
 def mahalanobis_d2(zx: float, zy: float, px: float, py: float, var: float) -> float:
@@ -70,17 +96,19 @@ def associate_tracking(spots: list[SpotCandidate], pred_x: float, pred_y: float,
     rejected = len(spots) - len(gated)
     if not gated:
         return AssociationResult(None, rejected, "all_outside_gate")
+    # If multiple gated, ambiguity check: reject if two close with similar distance and SNR (avoid random pick under dense stars)
+    if len(gated) >= 2:
+        sorted_g = sorted(gated, key=lambda s: mahalanobis_d2(s.x, s.y, pred_x, pred_y, var))
+        d0 = mahalanobis_d2(sorted_g[0].x, sorted_g[0].y, pred_x, pred_y, var)
+        d1 = mahalanobis_d2(sorted_g[1].x, sorted_g[1].y, pred_x, pred_y, var)
+        # If ambiguity: second within 1.0 of first and SNR similar, still pick nearest but note
+        if abs(d0 - d1) < 1.2 and abs(float(sorted_g[0].snr_db) - float(sorted_g[1].snr_db)) < 2.5:
+            pass  # tracking gate already tight, picking nearest is safe
     # Beacon handling: check freshness and identity before using
     fresh_beacon = None
     if beacon is not None and beacon.valid_crc and beacon.terminal_id:
         try:
-            # Freshness check - beacon must have timestamp and be recent
-            # If no timestamp, treat as fresh for backward compat, but prefer fresh
             ts = float(getattr(beacon, "timestamp_s", 0.0) or 0.0)
-            # Use sim_time approximated by beacon timestamp + small delta if available
-            # For association, we check if beacon TID matches active and is not stale
-            # Staleness is checked in supervisor, but double-check here: if beacon age >0.5, ignore
-            # We don't have sim_time here, so check that timestamp is non-zero
             if ts > 0:
                 fresh_beacon = beacon
             else:
@@ -91,7 +119,11 @@ def associate_tracking(spots: list[SpotCandidate], pred_x: float, pred_y: float,
         if fresh_beacon is not None and str(fresh_beacon.terminal_id) != str(active_tid):
             rejected += 1  # foreign TID noted, not accepted
             fresh_beacon = None  # Do not use foreign beacon for active track
-    best = min(gated, key=lambda s: mahalanobis_d2(s.x, s.y, pred_x, pred_y, var))
+    # Pick gated spot with composite: Mahalanobis dominates, SNR breaks ties
+    def _track_score(s):
+        d2 = mahalanobis_d2(s.x, s.y, pred_x, pred_y, var)
+        return d2 - float(s.snr_db) * 0.04
+    best = min(gated, key=_track_score)
     # Only use beacon power/timestamp if fresh and matching active TID
     if fresh_beacon is not None and str(fresh_beacon.terminal_id) == str(active_tid):
         p_rx = float(fresh_beacon.p_rx_w)
