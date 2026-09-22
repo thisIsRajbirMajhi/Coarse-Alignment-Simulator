@@ -45,7 +45,7 @@ class SimulationView(QWidget):
         )
 
         # --- LEFT PANEL: Camera FOV Screen ---
-        self.fov_label = QLabel("Camera FOV — press Start", splitter)
+        self.fov_label = QLabel("Camera FOV ", splitter)
         self.fov_label.setObjectName("simFovView")
         self.fov_label.setAlignment(Qt.AlignCenter)
         self.fov_label.setMinimumSize(320, 240)
@@ -53,7 +53,7 @@ class SimulationView(QWidget):
         self.fov_label.setStyleSheet("background:#000000; color:#64748b; border:1px solid #1e293b; border-radius:6px;")
 
         # --- RIGHT PANEL: God Screen (World Scene) ---
-        self.world_label = QLabel("God Screen — press Start", splitter)
+        self.world_label = QLabel("World Screen", splitter)
         self.world_label.setObjectName("simWorldView")
         self.world_label.setAlignment(Qt.AlignCenter)
         self.world_label.setMinimumSize(320, 240)
