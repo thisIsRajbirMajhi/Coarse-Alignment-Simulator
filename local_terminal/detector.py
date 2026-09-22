@@ -91,11 +91,13 @@ def detect_spots(frame, config: AutonomyConfig | None = None) -> list[SpotCandid
         bg_mean_g, bg_std_g = bg_floor, 3.0
 
     min_snr = float(cfg.candidate_min_snr_db)
-    # Enforce selective area even if config is permissive (4-4000) - beacons are 12-200
+    # BUG-03 fix: configuration directly drives detector. No silent hard-override.
+    # Validation ensures values are sane; if hard safety bounds are needed, they must be
+    # explicit config fields, not hidden max(12,..)/min(250,..) inside detector.
     cfg_min_area = int(cfg.candidate_min_area_px)
     cfg_max_area = int(cfg.candidate_max_area_px)
-    min_area = max(12, cfg_min_area)
-    max_area = min(250, cfg_max_area)
+    min_area = int(cfg_min_area)
+    max_area = int(cfg_max_area)
 
     # Cap components for 4000-star fields
     if n - 1 > 60:

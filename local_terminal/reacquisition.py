@@ -11,6 +11,11 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+try:
+    import numpy as np
+except Exception:
+    np = None  # type: ignore
+
 
 @dataclass
 class V2ReacqResult:
@@ -24,11 +29,14 @@ class V2ReacqResult:
 
 
 class V2Reacquisition:
-    """Hardened V2 recovery: velocity-aware start radius + 2-frame confirm to kill single-frame S&P/star."""
+    """Hardened V2 recovery: fully uncertainty-driven radii + 2-frame confirm (BUG-11/B-12 fix).
+    Ladder is staged but radii scale with Kalman uncertainty, velocity, and FOV — not fixed 50..800 alone.
+    Hard max 800 and full-scan fallback retained."""
 
     def __init__(self, radii=None, full_scan_enabled: bool = True,
                  frames_per_level: int = 10):
-        self.radii = [float(r) for r in (radii or [50.0, 100.0, 200.0, 400.0, 800.0])]
+        self._base_radii = [float(r) for r in (radii or [50.0, 100.0, 200.0, 400.0, 800.0])]
+        self.radii = list(self._base_radii)  # may be dynamically scaled per start()
         self.full_scan_enabled = bool(full_scan_enabled)
         self.frames_per_level = int(max(1, frames_per_level))
         self.active = False
@@ -37,20 +45,61 @@ class V2Reacquisition:
         self._dwell = 0
         self._confirm_pos: tuple[float,float] | None = None
         self._confirm_tid: str | None = None
+        self._dynamic = False
 
-    def start(self, target_id: str, velocity_hint: tuple[float,float] | None = None, uncertainty_px: float | None = None) -> None:
+    def start(self, target_id: str, velocity_hint: tuple[float,float] | None = None, uncertainty_px: float | None = None,
+              fov_size: tuple[float,float] | None = None) -> None:
         self.active = True
         self.target_id = str(target_id)
         self._level = 0
         self._dwell = 0
         self._confirm_pos = None
         self._confirm_tid = None
-        # Velocity-aware jump: fast target after 0.5s needs larger initial radius
+        # BUG-11/B-12: uncertainty-driven dynamic ladder (∝ predicted positional uncertainty)
+        # need = v*0.5 + unc + margin, scaled by FOV, then generate ladder around it while retaining hard max and staged fallback
         if velocity_hint is not None and uncertainty_px is not None:
             try:
                 v = math.hypot(float(velocity_hint[0]), float(velocity_hint[1]))
                 unc = float(uncertainty_px)
-                # Predicted drift during loss: v * 0.5s + unc; pick first radius covering it
+                # FOV scale (640 base) — larger FOV needs larger absolute search
+                fov_scale = 1.0
+                if fov_size is not None:
+                    try:
+                        fov_scale = float(fov_size[0]) / 640.0
+                    except Exception:
+                        fov_scale = 1.0
+                need = (v * 0.5 + unc + 20.0) * fov_scale
+                # Dynamic ladder: base, 1.8x, 3.2x, 6x, 12x of need, clipped 50..800, sorted unique
+                dyn = []
+                for mult in (1.0, 1.8, 3.2, 6.0, 12.0):
+                    if np is not None:
+                        r = float(np.clip(need * mult, 50.0, 800.0))
+                    else:
+                        r = float(min(max(need * mult, 50.0), 800.0))
+                    if not dyn or abs(r - dyn[-1]) > 5.0:
+                        dyn.append(r)
+                # Merge with base to retain at least 5 levels, sorted, unique
+                if len(dyn) < 5:
+                    dyn = sorted(set(dyn + self._base_radii))[:5]
+                else:
+                    dyn = sorted(dyn)[:5]
+                self.radii = dyn
+                self._dynamic = True
+                # Pick level covering need (usually 0)
+                for i, r in enumerate(self.radii):
+                    if r >= need:
+                        self._level = max(0, i)
+                        break
+                else:
+                    self._level = len(self.radii) - 1
+                return
+            except Exception:
+                pass
+        # Fallback: velocity-aware pick among base radii (previous behavior)
+        if velocity_hint is not None and uncertainty_px is not None:
+            try:
+                v = math.hypot(float(velocity_hint[0]), float(velocity_hint[1]))
+                unc = float(uncertainty_px)
                 need = v * 0.5 + unc + 20.0
                 for i, r in enumerate(self.radii):
                     if r >= need:

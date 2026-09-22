@@ -191,12 +191,13 @@ class AutonomyConfig:
     search_extended_dwell_frames: int = 10
     search_start_index: int = 0  # scan grid start cell 0..19 (migrated from CameraConfig)
 
-    # Detection
+    # Detection — BUG-03 fix: detector now respects these directly (no hidden max(12,)/min(250,) override).
+    # Defaults set to star-robust beacon range (12-250) so nominal behavior preserved; user can still configure 4-4000-wide range.
     candidate_min_snr_db: float = 6.0
     candidate_peak_margin: float = 8.0
     candidate_confirm_frames: int = 2
-    candidate_min_area_px: int = 4
-    candidate_max_area_px: int = 4000
+    candidate_min_area_px: int = 12
+    candidate_max_area_px: int = 250
 
     # Association - gate must be large enough for initial acquisition when FOV is 100+px off (scan offset)
     # 60 was too small for 115px offset seen in headless tests (640 gate was too large, 60 too small)

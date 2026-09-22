@@ -217,16 +217,17 @@ class SimulationSession:
 
     def apply_local_terminal_config(self, config) -> None:
         self.ensure_built()
-        # Accept AutonomyConfig (V2) or legacy LocalTerminalConfig shim
-        try:
+        # V2 only: AutonomyConfig is sole authoritative (BUG-13/14 fix — legacy removed)
+        from local_terminal.models import AutonomyConfig
+        if not isinstance(config, AutonomyConfig):
+            import warnings
+            warnings.warn(
+                "apply_local_terminal_config: legacy LocalTerminalConfig removed — AutonomyConfig required. Using default AutonomyConfig.",
+                DeprecationWarning, stacklevel=2,
+            )
+            cfg = AutonomyConfig().validate()
+        else:
             cfg = config.validate()
-        except AttributeError:
-            from local_terminal.models import AutonomyConfig
-            cfg = AutonomyConfig().validate()
-        # If legacy LocalTerminalConfig, ignore old fields and use AutonomyConfig
-        if hasattr(cfg, "detector"):
-            from local_terminal.models import AutonomyConfig
-            cfg = AutonomyConfig().validate()
         self.autonomy_config = cfg
         try:
             self.supervisor.apply_local_config(cfg)

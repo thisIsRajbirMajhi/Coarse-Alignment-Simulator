@@ -115,12 +115,50 @@ class KalmanFilter2D:
         return float(self.x[0, 0]), float(self.x[1, 0])
 
     def gate_var(self, r_var: float) -> float:
+        """Legacy scalar gate var (deprecated) — kept for backward compat. Prefer innovation_cov()."""
         return float(max(self.P[0, 0], self.P[1, 1]) + max(float(r_var), 1e-6))
 
+    def innovation_cov(self, r_var: float) -> np.ndarray:
+        """Full 2x2 innovation covariance S = H P H^T + R  (BUG-05 fix)."""
+        _, _, H = self._matrices(1.0 / 30.0)
+        R = np.eye(2) * max(float(r_var), 1e-6)
+        try:
+            S = H @ self.P @ H.T + R
+        except Exception:
+            # Fallback to scalar-based diagonal
+            v = self.gate_var(r_var)
+            S = np.eye(2) * v
+        # Ensure positive definite
+        try:
+            S[0, 0] = max(float(S[0, 0]), 1e-6)
+            S[1, 1] = max(float(S[1, 1]), 1e-6)
+        except Exception:
+            pass
+        return S
+
     def mahalanobis_d2(self, zx: float, zy: float, r_var: float) -> float:
+        """Legacy scalar Mahalanobis (dx²+dy²)/var. Kept for compat; use mahalanobis_d2_full for 2D."""
         dx = float(zx) - float(self.x[0, 0])
         dy = float(zy) - float(self.x[1, 0])
         return (dx * dx + dy * dy) / self.gate_var(r_var)
+
+    def mahalanobis_d2_full(self, zx: float, zy: float, r_var: float) -> float:
+        """Full 2D Mahalanobis d² = νᵀ S⁻¹ ν with S = HPHᵀ + R (BUG-05)."""
+        dx = float(zx) - float(self.x[0, 0])
+        dy = float(zy) - float(self.x[1, 0])
+        y = np.array([[dx], [dy]], dtype=float)
+        S = self.innovation_cov(r_var)
+        try:
+            invS = np.linalg.inv(S)
+            d2 = float((y.T @ invS @ y).item())
+        except np.linalg.LinAlgError:
+            # Fallback to scalar
+            d2 = (dx*dx + dy*dy) / max(float(np.trace(S)/2.0), 1e-6)
+        return float(d2)
+
+    def normalized_innovation_squared(self, zx: float, zy: float, r_var: float) -> float:
+        """Alias for mahalanobis_d2_full — NIS for innovation monitoring."""
+        return self.mahalanobis_d2_full(zx, zy, r_var)
 
     @property
     def position(self) -> tuple[float, float]:
@@ -204,8 +242,32 @@ class KalmanTracker:
         return float(self.kf.uncertainty_px) + (margin if self.misses else 0.0)
 
     def gate_pred_var(self) -> float:
+        """Legacy scalar gate var (coast margin added). For full 2D use gate_innovation_cov()."""
         margin = min(float(self.misses) * self.config.coast_growth_px_per_frame, self.config.coast_margin_cap_px)
         return float(max(self.kf.P[0, 0], self.kf.P[1, 1]) + margin * margin)
+
+    def gate_innovation_cov(self, r_var: float) -> np.ndarray:
+        """Full 2x2 innovation covariance with coast margin (BUG-05): S = HPHᵀ + R + margin²·I."""
+        S = self.kf.innovation_cov(r_var)
+        try:
+            margin = min(float(self.misses) * self.config.coast_growth_px_per_frame, self.config.coast_margin_cap_px)
+            if margin > 1e-6:
+                S = S + np.eye(2) * (margin * margin)
+        except Exception:
+            pass
+        return S
+
+    def mahalanobis_d2_full(self, zx: float, zy: float, r_var: float) -> float:
+        """Full 2D Mahalanobis via Kalman filter (includes coast margin)."""
+        dx = float(zx) - float(self.kf.x[0, 0])
+        dy = float(zy) - float(self.kf.x[1, 0])
+        y = np.array([[dx], [dy]], dtype=float)
+        S = self.gate_innovation_cov(r_var)
+        try:
+            invS = np.linalg.inv(S)
+            return float((y.T @ invS @ y).item())
+        except np.linalg.LinAlgError:
+            return float((dx*dx + dy*dy) / max(float(np.trace(S)/2.0), 1e-6))
 
     def error_px(self, fov_w: float = 640.0, fov_h: float = 480.0):
         if self.active_tid is None or self.status == "LOST":

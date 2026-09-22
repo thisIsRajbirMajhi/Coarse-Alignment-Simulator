@@ -35,6 +35,31 @@ class V2State(enum.Enum):
     FAULT = "FAULT"
 
 
+# Authoritative FSM transition graph — single source of truth for V2 lifecycle.
+# Deep-headless test and any validator MUST import this rather than maintaining a duplicate.
+# Self-loops are implicit (no transition counted). Any edge not listed is invalid.
+V2_VALID_TRANSITIONS: dict[str, set[str]] = {
+    "SEARCH":    {"IDENTIFY", "SEARCH"},
+    "IDENTIFY":  {"ASSOCIATE", "SEARCH", "IDENTIFY"},
+    "ASSOCIATE": {"TRACK", "SEARCH", "IDENTIFY", "ASSOCIATE"},
+    "TRACK":     {"COAST", "LOST", "TRACK"},
+    "COAST":     {"TRACK", "LOST", "COAST"},
+    "LOST":      {"REACQUIRE", "LOST"},
+    "REACQUIRE": {"TRACK", "SEARCH", "REACQUIRE"},
+    "FAULT":     {"SEARCH", "FAULT"},
+}
+
+
+def is_valid_transition(src: str, dst: str) -> bool:
+    """Check if src→dst is allowed per authoritative V2 graph. Self-loop is always valid."""
+    if src == dst:
+        return True
+    allowed = V2_VALID_TRANSITIONS.get(src)
+    if allowed is None:
+        return False
+    return dst in allowed
+
+
 @dataclass
 class V2Output:
     state: V2State
@@ -165,7 +190,8 @@ class SupervisorV2:
         return True
 
     def apply_local_config(self, cfg) -> None:
-        # V2 direct: AutonomyConfig
+        # V2 authoritative config is AutonomyConfig — single source, no duplicate path (BUG-13/14 fix)
+        # Legacy LocalTerminalConfig has been removed. Any legacy object is rejected with guidance to migrate.
         if isinstance(cfg, AutonomyConfig):
             self.cfg = cfg.validate()
             self.identity.config.p_rx_threshold_w = self.cfg.p_rx_threshold_w
@@ -178,23 +204,16 @@ class SupervisorV2:
             self.reacq = V2Reacquisition(list(self.cfg.reacq_radii_px), self.cfg.reacq_full_scan_enabled)
             self.confirmer = TemporalConfirmer(self.cfg.candidate_confirm_frames)
             return
-        # Legacy shim: LocalTerminalConfig (deprecated)
-        try:
-            lc = cfg.validate()
-        except AttributeError:
-            return
-        try:
-            self.cfg.search_dwell_frames = int(lc.scan.default_dwell_frames)
-            self.cfg.search_extended_dwell_frames = int(lc.scan.decoding_dwell_frames)
-        except (AttributeError, TypeError, ValueError):
-            pass
-        try:
-            self.cfg.candidate_min_snr_db = float(lc.detector.snr_min_db)
-            self.cfg.association_gate_px = float(lc.tracker.associate_gate_px)
-            self.cfg.lost_timeout_s = float(lc.tracker.max_no_detection_time_s)
-        except (AttributeError, TypeError, ValueError):
-            pass
-        self.cfg.validate()
+        # Removed: legacy LocalTerminalConfig shim (BUG-13/14). Previously mapped scan/detector/tracker fields,
+        # but that created duplicate authoritative paths. Now we fail fast with migration guidance.
+        import warnings
+        warnings.warn(
+            "apply_local_config received non-AutonomyConfig (legacy LocalTerminalConfig). "
+            "Legacy config has been removed — migrate to AutonomyConfig. Ignoring.",
+            DeprecationWarning, stacklevel=2,
+        )
+        log.warning("Legacy config rejected — AutonomyConfig is sole authoritative V2 config")
+        return
 
     def step(self, fov_frame: np.ndarray, dt: float, sim_time_s: float,
              comm_sources: list[CommSource] | None = None,
@@ -214,6 +233,21 @@ class SupervisorV2:
 
         spots = detect_spots(fov_frame, self.cfg)
         self._last_spots = spots
+        # BUG-12: scale temporal confirmation gate by measurement uncertainty and FOV
+        # 12px base for 640x480, scaled by FOV and Kalman uncertainty (tracking) or fixed for acquisition
+        try:
+            fov_scale = float(fw) / 640.0
+            # Use tracker uncertainty when tracking/coasting, else base
+            if self.state in (V2State.TRACK, V2State.COAST) and self.tracker.active_tid is not None:
+                unc = float(self.tracker.effective_uncertainty_px())
+                # Scale 12px -> 12*(1+unc/60) capped 12-20, so high uncertainty allows larger temporal gate (motion)
+                scaled_gate = 12.0 * fov_scale * (1.0 + min(unc, 30.0) / 60.0)
+                self.confirmer.gate_px = float(np.clip(scaled_gate, 8.0, 20.0))
+            else:
+                # Acquisition: base gate scaled only by FOV
+                self.confirmer.gate_px = float(np.clip(12.0 * fov_scale, 8.0, 16.0))
+        except Exception:
+            pass
         confirmed = self.confirmer.update(spots)
 
         curr_angles = ((boresight_world[0] - cam_home[0]) / px_per_deg[0],
@@ -302,9 +336,41 @@ class SupervisorV2:
                     fresh_beacon = self._pending_beacon
             # Require confirmed spots for acquisition (not raw fallback) — sensor-only, no ground truth
             cands = confirmed if confirmed else []
+            # BUG-06/12: context-dependent effective gate (beacon/temporal/FOV) — never expand beyond base (200) to avoid star-field false lock
+            base_gate = float(self.cfg.association_gate_px)
+            fov_scale = float(fw) / 640.0  # scale for different FOV/magnification
+            # Beacon factor: fresh bright beacon allows full base gate, missing/low SNR shrinks gate (reduces star false lock)
+            if fresh_beacon is None:
+                beacon_factor = 0.35  # no identity -> only very close spots (star near boresight) considered, but assoc will fail anyway (no_valid_tid)
+            else:
+                try:
+                    snr_b = float(getattr(fresh_beacon, "snr_db", 6.0) or 6.0)
+                    if snr_b >= 10.0:
+                        beacon_factor = 1.0
+                    elif snr_b >= 8.0:
+                        beacon_factor = 0.9
+                    elif snr_b >= 6.0:
+                        beacon_factor = 0.75
+                    else:
+                        beacon_factor = 0.55
+                except Exception:
+                    beacon_factor = 1.0
+            # Temporal factor: confirmed persistence (2-frame) vs single-frame transient
+            if not confirmed:
+                temporal_factor = 0.5
+            elif len(confirmed) >= 2:
+                temporal_factor = 1.0
+            else:
+                temporal_factor = 0.85
+            # Scan factor: keep 1.0 (boresight already is scan center); no expansion beyond base
+            scan_factor = 1.0
+            effective_gate = float(np.clip(base_gate * fov_scale * beacon_factor * temporal_factor * scan_factor, 40.0, base_gate))
+            # Boresight is fov center; scan_center same for acquisition (could use scan.current_position center mapped to FOV, but boresight approx)
             assoc = associate_acquisition(
                 cands, fresh_beacon, (fw, fh),
-                gate_px=float(self.cfg.association_gate_px))
+                gate_px=effective_gate,
+                scan_center=None,
+                temporal_history=getattr(self.confirmer, "_history", None))
             # Hardening: 2-frame acquisition confirmation (star near boresight rarely repeats)
             # No world-position leakage: rely on temporal consistency + beacon freshness
             if assoc.observation is not None:
@@ -382,9 +448,13 @@ class SupervisorV2:
             pred = self.tracker.kf.position
             # Use only confirmed detections for TRACK/COAST (not raw fallback)
             cands = confirmed if confirmed else []
-            # Gate var after predict (not before)
+            # Gate after predict — use full 2D innovation covariance S = HPHᵀ+R+margin (BUG-05)
             r = r_for_snr(spots[0].snr_db if spots else 6.0, self.tracker.config) if cands else 4.0
-            pred_var = self.tracker.gate_pred_var()
+            pred_var = self.tracker.gate_pred_var()  # legacy scalar for fallback/logging
+            try:
+                S_gating = self.tracker.gate_innovation_cov(r)
+            except Exception:
+                S_gating = None
             # Beacon freshness: ignore stale beacons >0.5s old
             fresh_beacon = None
             if self._pending_beacon is not None:
@@ -407,7 +477,8 @@ class SupervisorV2:
                 cands, pred[0], pred[1],
                 self.tracker.active_tid or "", assoc_beacon,
                 pred_var=pred_var,
-                r_base=r, mahal_threshold=self.cfg.association_mahal_threshold)
+                r_base=r, mahal_threshold=self.cfg.association_mahal_threshold,
+                S=S_gating)
             # Sensor-only validation: no ground-truth leakage. Stars drift vs beacon prediction already gated by Mahalanobis.
             # Additional photometric sanity: if association SNR < 7dB and P_rx indicates strong link, still accept (fading), but if spot area spikes >180, likely haze artifact
             if assoc.observation is not None:
@@ -422,6 +493,19 @@ class SupervisorV2:
                 except Exception:
                     pass
             self._rejected = assoc.rejected_outliers
+            # Innovation monitoring (BUG-05): large NIS indicates wrong association / maneuver / corruption
+            if assoc.observation is not None:
+                try:
+                    # NIS before update (S_gating is S before update)
+                    nis = self.tracker.mahalanobis_d2_full(
+                        float(assoc.observation.fov_x), float(assoc.observation.fov_y),
+                        r_for_snr(float(getattr(assoc.observation, "snr_db", 6.0)), self.tracker.config))
+                    if nis > 16.0:  # 2-dof 99.9% ~13.8, 16 is strong outlier
+                        log.debug("V2 large innovation NIS=%.2f @ %.3f state=%s pred=(%.1f,%.1f) obs=(%.1f,%.1f)",
+                                  nis, self.sim_time, self.state.value, float(pred[0]), float(pred[1]),
+                                  float(assoc.observation.fov_x), float(assoc.observation.fov_y))
+                except Exception:
+                    pass
             # Update tracker: already predicted, now only update if observation found
             if assoc.observation is not None:
                 try:
@@ -497,9 +581,12 @@ class SupervisorV2:
                 try:
                     vx, vy = self.tracker.kf.velocity
                     unc = float(self.tracker.effective_uncertainty_px())
-                    self.reacq.start(self.tracker.active_tid, (float(vx), float(vy)), unc)
+                    self.reacq.start(self.tracker.active_tid, (float(vx), float(vy)), unc, fov_size=(fw, fh))
                 except Exception:
-                    self.reacq.start(self.tracker.active_tid)
+                    try:
+                        self.reacq.start(self.tracker.active_tid, fov_size=(fw, fh))
+                    except Exception:
+                        self.reacq.start(self.tracker.active_tid)
                 self.reacq_start = self.sim_time
             self._go(V2State.REACQUIRE, "track_timeout")
 
@@ -661,4 +748,4 @@ SupervisorConfig = AutonomyConfig
 SupervisorOutput = V2Output
 AutonomySupervisor = SupervisorV2
 
-__all__ = ["V2State", "V2Output", "SupervisorV2", "AutonomyState", "SupervisorConfig", "SupervisorOutput", "AutonomySupervisor"]
+__all__ = ["V2State", "V2Output", "SupervisorV2", "V2_VALID_TRANSITIONS", "is_valid_transition", "AutonomyState", "SupervisorConfig", "SupervisorOutput", "AutonomySupervisor"]
