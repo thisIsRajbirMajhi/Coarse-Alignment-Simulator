@@ -65,7 +65,7 @@ class SettingsDialog(QDialog):
         title.setStyleSheet("font-size:16px; font-weight:700; color:#ffffff;")
         title_block.addWidget(title)
 
-        sub = QLabel("Presets • Remote Terminal • Local Terminal • Environment • Disturbances", header)
+        sub = QLabel("4 Cards: Formation/Motion • Optical • Camera/PID+AI • Disturbance (+ Presets/Environment)", header)
         sub.setStyleSheet("font-size:11px; color:#e2e8f0;")
         sub.setWordWrap(True)
         sub.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
