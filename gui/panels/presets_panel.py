@@ -163,8 +163,8 @@ _GROUP_HELP: dict[str, str] = {
 _PARAM_HELP: dict[str, str] = {
     # formation
     "terminal_count": "Number of beacons in the scene (1–8). More = harder association.",
-    "formation_shape": "Geometric layout — SINGLE, LINE, GRID, etc. Sets inter-terminal geometry.",
-    "motion_profile": "Trajectory of formation centre (CONSTANT_VELOCITY, LINEAR, CIRCULAR, SINUSOIDAL, RANDOM…).",
+    "formation_shape": "Geometric layout — SINGLE, LINE, CIRCLE (pruned per Plan).",
+    "motion_profile": "Trajectory — REST, CONSTANT_VELOCITY, CIRCULAR, FIGURE_8, RANDOM.",
     "terminal_spacing_m": "Nominal separation between neighbouring terminals (metres). Tight spacing challenges association gate.",
     "speed_mps": "Formation-centre speed (m/s). High speed tests TRACK prediction and PID bandwidth.",
     "heading_deg": "Travel heading (0°=+X, 90°=+Y). Rotates formation and direction vector.",
@@ -175,8 +175,8 @@ _PARAM_HELP: dict[str, str] = {
     "optical_power_w": "Emitted optical power (W). Dim = harder detection; bright = easier false steal.",
     "wavelength_nm": "Carrier wavelength (nm). All presets use 1550 nm (eye-safe FSOC band).",
     "spot_size_mrad": "Full angular beam width/divergence (mrad). Small = dimmer apparent spot at range.",
-    "operational_state": "BEACONING allows emission; OFF/STANDBY/FAULT inhibit it.",
-    "modulation": "OOK is the only end-to-end waveform; CW/PPM affect power semantics.",
+    "operational_state": "BEACONING (emit) or FAULT (inhibit).",
+    "modulation": "OOK only — locked per Plan.",
     "pointing_bias_deg": "Static beam pointing offset (deg).",
     "pointing_jitter_sigma_deg": "1σ Gaussian beam pointing jitter (deg).",
     # camera
@@ -477,7 +477,7 @@ def _build_bundles():
             "scenario": RemoteScenarioConfig(
                 formation=_far_formation(
                     terminal_count=3, formation_shape=FormationShape.LINE,
-                    motion_profile=MotionProfile.LINEAR, terminal_spacing_m=150.0, speed_mps=6.0, heading_deg=15.0),
+                    motion_profile=MotionProfile.CONSTANT_VELOCITY, terminal_spacing_m=150.0, speed_mps=6.0, heading_deg=15.0),
                 terminals=[
                     RemoteTerminalConfig(terminal_id="RT-001", optical_power_w=0.45, wavelength_nm=1550.0, spot_size_mrad=1.0),
                     RemoteTerminalConfig(terminal_id="RT-002", optical_power_w=0.55, wavelength_nm=1550.0, spot_size_mrad=1.0),
@@ -501,7 +501,7 @@ def _build_bundles():
             "scenario": RemoteScenarioConfig(
                 formation=_far_formation(
                     terminal_count=3, formation_shape=FormationShape.LINE,
-                    motion_profile=MotionProfile.LINEAR, terminal_spacing_m=100.0, speed_mps=8.0, heading_deg=10.0),
+                    motion_profile=MotionProfile.CONSTANT_VELOCITY, terminal_spacing_m=100.0, speed_mps=8.0, heading_deg=10.0),
                 terminals=[
                     RemoteTerminalConfig(terminal_id="RT-001", optical_power_w=0.85, wavelength_nm=1550.0, spot_size_mrad=1.0),
                     RemoteTerminalConfig(terminal_id="RT-002", optical_power_w=0.55, wavelength_nm=1550.0, spot_size_mrad=1.0),
@@ -525,7 +525,7 @@ def _build_bundles():
         return {
             "scenario": RemoteScenarioConfig(
                 formation=_far_formation(terminal_count=2, formation_shape=FormationShape.LINE,
-                                         terminal_spacing_m=200.0, motion_profile=MotionProfile.SINUSOIDAL, speed_mps=10.0),
+                                         terminal_spacing_m=200.0, motion_profile=MotionProfile.FIGURE_8, speed_mps=10.0),
                 terminals=[
                     RemoteTerminalConfig(terminal_id="RT-001", optical_power_w=0.6),
                     RemoteTerminalConfig(terminal_id="RT-002", optical_power_w=0.9),
@@ -566,7 +566,7 @@ def _build_bundles():
     def mixed_max():
         return {
             "scenario": RemoteScenarioConfig(
-                formation=_far_formation(terminal_count=4, formation_shape=FormationShape.GRID,
+                formation=_far_formation(terminal_count=4, formation_shape=FormationShape.LINE,
                                          terminal_spacing_m=120.0, motion_profile=MotionProfile.RANDOM, speed_mps=10.0, heading_deg=25.0),
                 terminals=[
                     RemoteTerminalConfig(terminal_id="RT-001", optical_power_w=0.35, wavelength_nm=1550.0, spot_size_mrad=1.0),

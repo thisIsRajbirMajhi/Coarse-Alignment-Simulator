@@ -33,20 +33,6 @@ class ModulationType(str, Enum):
     OOK = "ook"
 
 
-# Backward-compat aliases for pruned enums (so old tests/scripts don't crash on attribute access)
-MotionProfile.LINEAR = MotionProfile.CONSTANT_VELOCITY  # type: ignore
-MotionProfile.SINUSOIDAL = MotionProfile.FIGURE_8  # type: ignore
-FormationShape.GRID = FormationShape.LINE  # type: ignore
-FormationShape.RECTANGLE = FormationShape.LINE  # type: ignore
-FormationShape.V_FORMATION = FormationShape.LINE  # type: ignore
-FormationShape.ARC = FormationShape.LINE  # type: ignore
-OperationalState.OFF = OperationalState.BEACONING  # type: ignore
-OperationalState.STANDBY = OperationalState.BEACONING  # type: ignore
-OperationalState.LINKED = OperationalState.BEACONING  # type: ignore
-ModulationType.CW = ModulationType.OOK  # type: ignore
-ModulationType.PPM = ModulationType.OOK  # type: ignore
-
-
 FORMATION_SHAPE_LABELS: dict[str, str] = {
     FormationShape.SINGLE.value: "Single",
     FormationShape.LINE.value: "Line",

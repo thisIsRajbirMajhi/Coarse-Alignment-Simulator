@@ -92,23 +92,8 @@ class SupervisorV2:
                                      self.cfg.reacq_full_scan_enabled)
         self.comm = CommReceiver()
         self.confirmer = TemporalConfirmer(self.cfg.candidate_confirm_frames)
-        # Hybrid-AI optional modules (lazy, one-frame fallback to classical)
-        self.ai_verifier = None
-        self.ai_scorer = None
-        self.ai_predictor = None
-        self.ai_ranker = None
-        if bool(getattr(self.cfg, "ai_enabled", False)):
-            try:
-                from local_terminal.ai.verifier import TinyCNNVerifier
-                from local_terminal.ai.scorer import MLPScorer
-                from local_terminal.ai.predictor import TemporalMLPPredictor
-                from local_terminal.ai.tuner import ScanRanker
-                self.ai_verifier = TinyCNNVerifier(threshold=float(getattr(self.cfg, "ai_verifier_threshold", 0.6)))
-                self.ai_scorer = MLPScorer()
-                self.ai_predictor = TemporalMLPPredictor()
-                self.ai_ranker = ScanRanker()
-            except Exception:
-                pass
+        self.ai_verifier = self.ai_scorer = self.ai_predictor = self.ai_ranker = None
+        self._init_ai()
         self.state = V2State.SEARCH
         self.sim_time = 0.0
         self.transitions: list[tuple[float, str, str, str]] = []
@@ -132,6 +117,22 @@ class SupervisorV2:
         self._assoc_pending_t: float = 0.0
         self._track_miss_streak: int = 0
         self._track_hit_streak: int = 0
+
+    def _init_ai(self) -> None:
+        """Lazy AI init — one-frame fallback to classical if missing."""
+        if not bool(getattr(self.cfg, "ai_enabled", False)):
+            return
+        try:
+            from local_terminal.ai.verifier import TinyCNNVerifier
+            from local_terminal.ai.scorer import MLPScorer
+            from local_terminal.ai.predictor import TemporalMLPPredictor
+            from local_terminal.ai.tuner import ScanRanker
+            self.ai_verifier = TinyCNNVerifier(threshold=float(getattr(self.cfg, "ai_verifier_threshold", 0.6)))
+            self.ai_scorer = MLPScorer()
+            self.ai_predictor = TemporalMLPPredictor()
+            self.ai_ranker = ScanRanker()
+        except Exception:
+            self.ai_verifier = self.ai_scorer = self.ai_predictor = self.ai_ranker = None
 
     def _go(self, nxt: V2State, reason: str) -> None:
         if nxt is not self.state:
@@ -218,20 +219,8 @@ class SupervisorV2:
             ))
             self.reacq = V2Reacquisition(list(self.cfg.reacq_radii_px), self.cfg.reacq_full_scan_enabled)
             self.confirmer = TemporalConfirmer(self.cfg.candidate_confirm_frames)
-            # Re-init AI modules on config change
             self.ai_verifier = self.ai_scorer = self.ai_predictor = self.ai_ranker = None
-            if bool(getattr(self.cfg, "ai_enabled", False)):
-                try:
-                    from local_terminal.ai.verifier import TinyCNNVerifier
-                    from local_terminal.ai.scorer import MLPScorer
-                    from local_terminal.ai.predictor import TemporalMLPPredictor
-                    from local_terminal.ai.tuner import ScanRanker
-                    self.ai_verifier = TinyCNNVerifier(threshold=float(getattr(self.cfg, "ai_verifier_threshold", 0.6)))
-                    self.ai_scorer = MLPScorer()
-                    self.ai_predictor = TemporalMLPPredictor()
-                    self.ai_ranker = ScanRanker()
-                except Exception:
-                    pass
+            self._init_ai()
             return
         # Removed: legacy LocalTerminalConfig shim (BUG-13/14). Previously mapped scan/detector/tracker fields,
         # but that created duplicate authoritative paths. Now we fail fast with migration guidance.
