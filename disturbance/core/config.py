@@ -287,68 +287,8 @@ class DisturbanceConfig(BaseValidatedConfig):
     platform: PlatformMotionConfig = field(default_factory=PlatformMotionConfig)
 
     def validate(self) -> "DisturbanceConfig":
-        # Accept ownership-aligned construction while retaining legacy keyword
-        # compatibility. Explicit nested values override untouched old defaults.
-        if self.turbulence == DISTURBANCE_DEFAULTS["turbulence"]:
-            self.turbulence = self.optical.turbulence
-        if self.vibration == DISTURBANCE_DEFAULTS["vibration"]:
-            self.vibration = self.camera.vibration
-        if self.camera_motion == DISTURBANCE_DEFAULTS["camera_motion"]:
-            self.camera_motion = self.camera.camera_motion
-        if self.camera_jitter == DISTURBANCE_DEFAULTS["camera_jitter"]:
-            self.camera_jitter = self.camera.camera_jitter
-        if self.platform_profile == DISTURBANCE_DEFAULTS["platform_profile"]:
-            self.platform_profile = self.camera.platform_profile
-        if self.platform_speed == DISTURBANCE_DEFAULTS["platform_speed"]:
-            self.platform_speed = self.camera.platform_speed
-        if self.atmospheric_preset == DISTURBANCE_DEFAULTS["atmospheric_preset"]:
-            self.atmospheric_preset = self.environment.atmospheric_preset
-        if self.atmospheric_contrast == DISTURBANCE_DEFAULTS["atmospheric_contrast"]:
-            self.atmospheric_contrast = self.environment.atmospheric_contrast
-        if self.atmospheric_brightness == DISTURBANCE_DEFAULTS["atmospheric_brightness"]:
-            self.atmospheric_brightness = self.environment.atmospheric_brightness
-        for name in ("noise", "enable_salt_pepper", "enable_gaussian", "enable_poisson", "salt_pepper_density", "salt_pepper_ratio", "gaussian_sigma", "gaussian_sigma_max", "poisson_scale", "poisson_peak", "max_noise_std"):
-            if getattr(self, name) == DISTURBANCE_DEFAULTS[name]:
-                setattr(self, name, getattr(self.sensor, name))
-        # Nested-first sync for new channel/platform/jitter fields (same pattern).
-        try:
-            _ch = self.optical.channel
-            if self.channel_enabled == DISTURBANCE_DEFAULTS["channel_enabled"]:
-                self.channel_enabled = bool(getattr(_ch, "enabled", True))
-            if self.channel_severity == DISTURBANCE_DEFAULTS["channel_severity"]:
-                self.channel_severity = float(getattr(_ch, "severity", 1.0))
-            if self.channel_attenuation_enabled == DISTURBANCE_DEFAULTS["channel_attenuation_enabled"]:
-                self.channel_attenuation_enabled = bool(getattr(_ch, "attenuation_enabled", True))
-            if self.channel_attenuation_strength == DISTURBANCE_DEFAULTS["channel_attenuation_strength"]:
-                self.channel_attenuation_strength = float(getattr(_ch, "attenuation_strength", 1.0))
-            if self.channel_attenuation_model == DISTURBANCE_DEFAULTS["channel_attenuation_model"]:
-                self.channel_attenuation_model = str(getattr(_ch, "attenuation_model", "Atmospheric"))
-            if self.channel_beam_wander == DISTURBANCE_DEFAULTS["channel_beam_wander"]:
-                self.channel_beam_wander = float(getattr(_ch, "beam_wander", 1.0))
-            if self.channel_beam_spread == DISTURBANCE_DEFAULTS["channel_beam_spread"]:
-                self.channel_beam_spread = float(getattr(_ch, "beam_spread", 1.0))
-            if self.channel_intensity_fluctuation == DISTURBANCE_DEFAULTS["channel_intensity_fluctuation"]:
-                self.channel_intensity_fluctuation = float(getattr(_ch, "intensity_fluctuation", 1.0))
-        except Exception:
-            pass
-        try:
-            _pl = self.platform
-            if self.platform_enabled == DISTURBANCE_DEFAULTS["platform_enabled"]:
-                self.platform_enabled = bool(getattr(_pl, "enabled", True))
-            if self.platform_amplitude_x == DISTURBANCE_DEFAULTS["platform_amplitude_x"]:
-                self.platform_amplitude_x = float(getattr(_pl, "amplitude_x", 110.0))
-            if self.platform_amplitude_y == DISTURBANCE_DEFAULTS["platform_amplitude_y"]:
-                self.platform_amplitude_y = float(getattr(_pl, "amplitude_y", 110.0))
-            if self.platform_direction == DISTURBANCE_DEFAULTS["platform_direction"]:
-                self.platform_direction = float(getattr(_pl, "direction", 0.0))
-            if self.platform_frequency == DISTURBANCE_DEFAULTS["platform_frequency"]:
-                self.platform_frequency = float(getattr(_pl, "frequency", 1.0))
-            if self.platform_phase == DISTURBANCE_DEFAULTS["platform_phase"]:
-                self.platform_phase = float(getattr(_pl, "phase", 0.0))
-            if self.global_enabled == DISTURBANCE_DEFAULTS["global_enabled"]:
-                self.global_enabled = bool(getattr(self.global_, "enabled", True))
-        except Exception:
-            pass
+        # Flat fields are authoritative (Plan §3 — drop not pixel/SNR/TID).
+        # Nested views (global_/environment/camera/optical/sensor/platform) are synced at end, not bidirectionally.
 
         # legacy turbulence/noise stay int; vibration/camera_motion are float
         # (fractional mount intensities must survive validation).
