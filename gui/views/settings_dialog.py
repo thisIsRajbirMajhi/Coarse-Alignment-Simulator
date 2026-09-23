@@ -184,7 +184,7 @@ class SettingsDialog(QDialog):
         # Preserve Presets as utility tab; keep original panels accessible via Advanced toggle if needed
         self._add_scrolled_tab(self.presets_panel, "Presets")
         # Card 1+2 combined: Remote Terminal already groups Formation/Motion (Card1) + Optical (Card2) with Advanced collapsed
-        self._add_scrolled_tab(self.remote_panel, "Card 1·2 — Formation & Optical")
+        self._add_scrolled_tab(self.remote_panel, "Card 1+2 - Formation & Optical")
         # Card 3: stack Camera, PID, Local (AI) vertically
         card3 = QWidget(self)
         card3_layout = QVBoxLayout(card3)
@@ -194,7 +194,7 @@ class SettingsDialog(QDialog):
         card3_layout.addWidget(self.controller_panel)
         card3_layout.addWidget(self.local_panel)
         card3_layout.addStretch(1)
-        self._add_scrolled_tab(card3, "Card 3 — Camera/PID + AI")
+        self._add_scrolled_tab(card3, "Card 3 - Camera/PID + AI")
         # Card 4: stack Disturbances + Environment (atmosphere/starfield collapsed Advanced)
         card4 = QWidget(self)
         card4_layout = QVBoxLayout(card4)
@@ -203,7 +203,7 @@ class SettingsDialog(QDialog):
         card4_layout.addWidget(self.dist_panel)
         card4_layout.addWidget(self.env_panel)
         card4_layout.addStretch(1)
-        self._add_scrolled_tab(card4, "Card 4 — Disturbance")
+        self._add_scrolled_tab(card4, "Card 4 - Disturbance")
         # Keep legacy tabs hidden but accessible for debugging (not added to QTabWidget to satisfy 4-card spec)
         # To debug legacy 7-tab layout, temporarily re-add above _add_scrolled_tab lines
 

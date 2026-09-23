@@ -288,15 +288,19 @@ class RemoteTerminalPanel(BaseConfigPanel):
         )
         av.addWidget(pay_box)
 
-        # POINTING + MODULATION (Advanced)
+        # POINTING + MODULATION (Advanced) — bias 0.005 internal per Plan §1, not GUI
         pt_box, pt_grid = self._make_group("POINTING & MODULATION — Advanced")
         self.spin_bias = QDoubleSpinBox()
-        self.spin_bias.setRange(float(_meta("pointing_bias_deg")["min"]),
-                                float(_meta("pointing_bias_deg")["max"]))
-        self.spin_bias.setSingleStep(float(_meta("pointing_bias_deg")["step"]))
+        self.spin_bias.setRange(-1.0, 1.0)
+        self.spin_bias.setSingleStep(0.001)
         self.spin_bias.setDecimals(3)
         self.spin_bias.setSuffix(" deg")
-        self.spin_bias.setToolTip(_tooltip("pointing_bias_deg"))
+        self.spin_bias.setToolTip("Internal pointing bias 0.005 deg (not pixel/SNR/TID)")
+        self.spin_bias.setEnabled(False)
+        self.spin_bias.hide()
+        # keep hidden for compat; value still synced via _load/_read but not user-editable
+        self._lbl_bias = self._label("Pointing Bias")
+        self._lbl_bias.hide()
         self.spin_jitter = QDoubleSpinBox()
         self.spin_jitter.setRange(float(_meta("pointing_jitter_sigma_deg")["min"]),
                                   float(_meta("pointing_jitter_sigma_deg")["max"]))
@@ -304,10 +308,10 @@ class RemoteTerminalPanel(BaseConfigPanel):
         self.spin_jitter.setDecimals(3)
         self.spin_jitter.setSuffix(" deg")
         self.spin_jitter.setToolTip(_tooltip("pointing_jitter_sigma_deg"))
-        # combo_mod already created in TERMINAL primary — reuse it; add row here instead
         pt_grid.addWidget(self._label("Modulation"), 0, 0)
         pt_grid.addWidget(self.combo_mod, 0, 1)
-        pt_grid.addWidget(self._label("Pointing Bias"), 1, 0)
+        # bias hidden per Plan, only jitter is user-visible
+        pt_grid.addWidget(self._lbl_bias, 1, 0)
         pt_grid.addWidget(self.spin_bias, 1, 1)
         pt_grid.addWidget(self._label("Pointing Jitter σ"), 2, 0)
         pt_grid.addWidget(self.spin_jitter, 2, 1)
