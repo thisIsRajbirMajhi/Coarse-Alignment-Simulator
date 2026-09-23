@@ -269,6 +269,24 @@ class KalmanTracker:
         except np.linalg.LinAlgError:
             return float((dx*dx + dy*dy) / max(float(np.trace(S)/2.0), 1e-6))
 
+    def predict_with_ai(self) -> tuple[float, float]:
+        """AI residual wrapper: KF position + 0.3*Δ from Temporal-MLP (NIS>16 ignored by caller)."""
+        try:
+            from local_terminal.ai.predictor import TemporalMLPPredictor as _Pred
+            # Use singleton stored on tracker if available, else heuristic
+            pred = getattr(self, "_ai_predictor", None)
+            if pred is None:
+                pred = _Pred()
+                self._ai_predictor = pred
+            # Push current state
+            x, y = self.kf.position
+            vx, vy = self.kf.velocity
+            pred.push(float(x), float(y), float(vx), float(vy))
+            return pred.predict_with_ai(self.kf.position, self.kf.velocity)
+        except Exception:
+            x, y = self.kf.position
+            return (float(x), float(y))
+
     def error_px(self, fov_w: float = 640.0, fov_h: float = 480.0):
         if self.active_tid is None or self.status == "LOST":
             return None

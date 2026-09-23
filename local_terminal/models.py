@@ -183,13 +183,15 @@ class TargetTrack:
 
 @dataclass
 class AutonomyConfig:
-    """Single source of all V2 autonomy tuning parameters (§6.5, §19.2)."""
+    """Single source of all V2 autonomy tuning parameters (Plan Hybrid-AI §2)."""
 
-    # Search
-    search_pattern: str = "systematic"  # systematic | last_known | predicted
+    # Search (pattern removed — AI ranker owns scheduling; keep dwell)
     search_dwell_frames: int = 1
     search_extended_dwell_frames: int = 10
-    search_start_index: int = 0  # scan grid start cell 0..19 (migrated from CameraConfig)
+    search_start_index: int = 0
+    # AI toggles (Plan Hybrid-AI §2)
+    ai_enabled: bool = False
+    ai_verifier_threshold: float = 0.6
 
     # Detection — BUG-03 fix: detector now respects these directly (no hidden max(12,)/min(250,) override).
     # Defaults set to star-robust beacon range (12-250) so nominal behavior preserved; user can still configure 4-4000-wide range.
@@ -229,9 +231,12 @@ class AutonomyConfig:
     p_rx_threshold_w: float = 0.0
 
     def validate(self) -> "AutonomyConfig":
-        self.search_pattern = str(self.search_pattern or "systematic").lower()
-        if self.search_pattern not in ("systematic", "last_known", "predicted"):
-            self.search_pattern = "systematic"
+        # Backward compat: ignore old search_pattern if present
+        if hasattr(self, "search_pattern"):
+            try:
+                delattr(self, "search_pattern")
+            except Exception:
+                pass
         self.search_dwell_frames = int(max(1, self.search_dwell_frames))
         self.search_extended_dwell_frames = int(max(self.search_dwell_frames, self.search_extended_dwell_frames))
         self.candidate_min_snr_db = float(max(0.0, self.candidate_min_snr_db))
@@ -272,6 +277,8 @@ class AutonomyConfig:
             self.mission_priority = []
         self.p_rx_threshold_w = float(max(0.0, self.p_rx_threshold_w))
         self.search_start_index = int(max(0, min(int(self.search_start_index), 19)))
+        self.ai_enabled = bool(getattr(self, "ai_enabled", False))
+        self.ai_verifier_threshold = float(max(0.0, min(float(getattr(self, "ai_verifier_threshold", 0.6)), 1.0)))
         return self
 
     def to_dict(self) -> dict:

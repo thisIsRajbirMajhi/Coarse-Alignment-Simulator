@@ -275,4 +275,46 @@ class ClassicalSpotDetector(SpotDetector):
         self.confirmer.reset()
 
 
-__all__ = ["detect_spots", "TemporalConfirmer", "SpotDetector", "ClassicalSpotDetector"]
+class AISpotDetector(SpotDetector):
+    """Hybrid: classical proposals + Tiny-CNN verifier. Fallback to classical top-8 if p<0.6."""
+
+    def __init__(self, config=None, confirm_frames: int = 2, gate_px: float = 12.0, threshold: float = 0.6):
+        self.config = config
+        self.threshold = float(threshold)
+        self.confirmer = TemporalConfirmer(confirm_frames, gate_px)
+        self.verifier = None
+        try:
+            from local_terminal.ai.verifier import TinyCNNVerifier
+            self.verifier = TinyCNNVerifier(threshold=threshold)
+        except Exception:
+            self.verifier = None
+
+    def detect(self, frame, config=None) -> list:
+        cfg = config if config is not None else self.config
+        # Classical proposals (unconfirmed) then verify
+        proposals = detect_spots(frame, cfg)
+        if not proposals or self.verifier is None:
+            return self.confirmer.update(proposals)
+        # Score each candidate; boost SNR if verified, drop if not but keep classical top
+        kept = []
+        for c in proposals:
+            p = self.verifier.verify(frame, c)
+            if p >= self.threshold:
+                # Boost SNR by 3dB (Plan) to favor beacons in ranking
+                try:
+                    c.snr_db = float(c.snr_db) + 3.0
+                except Exception:
+                    pass
+                kept.append(c)
+            else:
+                # Keep but deprioritize — will be sorted lower
+                kept.append(c)
+        # Re-sort by boosted SNR and take top 8, then temporal
+        kept.sort(key=lambda d: (d.snr_db * 0.7 + d.peak * 0.03), reverse=True)
+        return self.confirmer.update(kept[:8])
+
+    def reset(self) -> None:
+        self.confirmer.reset()
+
+
+__all__ = ["detect_spots", "TemporalConfirmer", "SpotDetector", "ClassicalSpotDetector", "AISpotDetector"]

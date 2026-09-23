@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('local_terminal/ai/models/*.onnx', 'local_terminal/ai/models')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

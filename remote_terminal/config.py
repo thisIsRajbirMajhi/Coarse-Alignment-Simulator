@@ -14,68 +14,60 @@ class FormationShape(str, Enum):
     SINGLE = "single"
     LINE = "line"
     CIRCLE = "circle"
-    ARC = "arc"
-    GRID = "grid"
-    RECTANGLE = "rectangle"
-    V_FORMATION = "v_formation"
 
 
 class MotionProfile(str, Enum):
     REST = "rest"
     CONSTANT_VELOCITY = "constant_velocity"
-    LINEAR = "linear"
     CIRCULAR = "circular"
-    SINUSOIDAL = "sinusoidal"
     FIGURE_8 = "figure_8"
     RANDOM = "random"
 
 
 class OperationalState(str, Enum):
-    OFF = "off"
-    STANDBY = "standby"
     BEACONING = "beaconing"
-    LINKED = "linked"
     FAULT = "fault"
 
 
 class ModulationType(str, Enum):
-    CW = "cw"
     OOK = "ook"
-    PPM = "ppm"
+
+
+# Backward-compat aliases for pruned enums (so old tests/scripts don't crash on attribute access)
+MotionProfile.LINEAR = MotionProfile.CONSTANT_VELOCITY  # type: ignore
+MotionProfile.SINUSOIDAL = MotionProfile.FIGURE_8  # type: ignore
+FormationShape.GRID = FormationShape.LINE  # type: ignore
+FormationShape.RECTANGLE = FormationShape.LINE  # type: ignore
+FormationShape.V_FORMATION = FormationShape.LINE  # type: ignore
+FormationShape.ARC = FormationShape.LINE  # type: ignore
+OperationalState.OFF = OperationalState.BEACONING  # type: ignore
+OperationalState.STANDBY = OperationalState.BEACONING  # type: ignore
+OperationalState.LINKED = OperationalState.BEACONING  # type: ignore
+ModulationType.CW = ModulationType.OOK  # type: ignore
+ModulationType.PPM = ModulationType.OOK  # type: ignore
 
 
 FORMATION_SHAPE_LABELS: dict[str, str] = {
     FormationShape.SINGLE.value: "Single",
     FormationShape.LINE.value: "Line",
     FormationShape.CIRCLE.value: "Circle",
-    FormationShape.ARC.value: "Arc",
-    FormationShape.GRID.value: "Grid",
-    FormationShape.RECTANGLE.value: "Rectangle",
-    FormationShape.V_FORMATION.value: "V Formation",
 }
 
 MOTION_PROFILE_LABELS: dict[str, str] = {
     MotionProfile.REST.value: "Rest",
     MotionProfile.CONSTANT_VELOCITY.value: "Constant Velocity",
-    MotionProfile.LINEAR.value: "Linear",
     MotionProfile.CIRCULAR.value: "Circular",
-    MotionProfile.SINUSOIDAL.value: "Sinusoidal",
     MotionProfile.FIGURE_8.value: "Figure-8",
     MotionProfile.RANDOM.value: "Random",
 }
 
 OPERATIONAL_STATE_LABELS: dict[str, str] = {
-    OperationalState.OFF.value: "OFF",
-    OperationalState.STANDBY.value: "STANDBY",
     OperationalState.BEACONING.value: "BEACONING",
-    OperationalState.LINKED.value: "LINKED",
     OperationalState.FAULT.value: "FAULT",
 }
 
 MODULATION_LABELS: dict[str, str] = {
-    ModulationType.CW.value: "CW",
     ModulationType.OOK.value: "OOK",
-    ModulationType.PPM.value: "PPM",
 }
 
 # Simulator-supported wavelength window (nm). The optical chain is
@@ -90,7 +82,8 @@ MAX_TERMINALS: int = 8
 def coerce_enum(enum_cls: type[Enum], value: Any, field_name: str) -> Enum:
     """Map a member, exact value, or display label to ``enum_cls`` (explicit).
 
-    Raises ValueError listing the allowed values for anything else.
+    Legacy values map to canonical: LINEAR→CONSTANT_VELOCITY, SINUSOIDAL→FIGURE_8,
+    GRID/RECTANGLE/V/ARC→LINE, CW/PPM→OOK, OFF/STANDBY/LINKED→BEACONING.
     """
     if isinstance(value, enum_cls):
         return value
@@ -107,6 +100,18 @@ def coerce_enum(enum_cls: type[Enum], value: Any, field_name: str) -> Enum:
         label = labels.get(member.value, "")
         if label and text.lower() == label.lower():
             return member
+    # Legacy mappings for backward compat (pruned enums)
+    _legacy_map = {
+        FormationShape: {"arc": "line", "grid": "line", "rectangle": "line", "v_formation": "line"},
+        MotionProfile: {"linear": "constant_velocity", "sinusoidal": "figure_8"},
+        OperationalState: {"off": "beaconing", "standby": "beaconing", "linked": "beaconing"},
+        ModulationType: {"cw": "ook", "ppm": "ook"},
+    }
+    mapped = _legacy_map.get(enum_cls, {}).get(text.lower())
+    if mapped:
+        for member in enum_cls:
+            if member.value == mapped:
+                return member
     allowed = ", ".join(m.value for m in enum_cls)
     raise ValueError(f"Invalid {field_name} {value!r}. Allowed: {allowed}.")
 
@@ -196,39 +201,56 @@ class RemoteFormationConfig:
 
 @dataclass
 class RemoteTerminalConfig:
-    """Per-terminal configuration (RemoteTerminal.md §11)."""
+    """Per-terminal configuration (Plan Hybrid-AI §1 — pruned to pixel/SNR/TID)."""
 
     terminal_id: str = "RT-001"
-    power_enabled: bool = True
-    beacon_enabled: bool = True
+    # Single master emission switch — replaces triple power_enabled/beacon_enabled/operational_state
+    emission_enabled: bool = True
     operational_state: OperationalState = OperationalState.BEACONING
     optical_power_w: float = 0.5
     wavelength_nm: float = 1550.0
-    # NOTE (Fixes.md 4.9): BeaconGenerator always emits OOK frames; CW/PPM
-    # currently select emitted-power semantics in BeamModel only.
-    modulation: ModulationType = ModulationType.OOK
+    modulation: ModulationType = ModulationType.OOK  # locked to OOK
     spot_size_mrad: float = 1.0
-    # Beacon payload identity (wire fields): empty token follows the TID.
+    # Beacon payload identity (advanced, collapsed in GUI when count==1)
     token: str = ""
     network_id: int = 0
     enable_nav: bool = True
-    # Pointing (per-terminal beam direction error model, §47).
-    pointing_bias_deg: float = 0.005
+    # Pointing — bias is internal const (0.005), only jitter is user-visible
     pointing_jitter_sigma_deg: float = 0.002
+    # Backward-compat shims (not GUI-exposed): power_enabled/beacon_enabled map to emission_enabled
+    power_enabled: bool = True
+    beacon_enabled: bool = True
+    pointing_bias_deg: float = 0.005
 
     def validate(self) -> RemoteTerminalConfig:
         tid = str(self.terminal_id or "").strip()
         if not tid:
             raise ValueError("Terminal ID must be a non-empty string.")
+        # Map legacy triple-switch to single emission_enabled (backward compat)
         if not isinstance(self.operational_state, OperationalState):
-            raise ValueError(
-                f"Operational state must be an OperationalState member, "
-                f"got {self.operational_state!r}."
-            )
+            # Coerce legacy strings like OFF/STANDBY/LINKED → BEACONING/FAULT
+            try:
+                legacy = str(self.operational_state).lower()
+                if legacy in ("off", "standby", "linked"):
+                    self.operational_state = OperationalState.BEACONING
+                else:
+                    self.operational_state = coerce_enum(OperationalState, self.operational_state, "operational_state")
+            except Exception:
+                self.operational_state = OperationalState.BEACONING
         if not isinstance(self.modulation, ModulationType):
-            raise ValueError(
-                f"Modulation must be a ModulationType member, got {self.modulation!r}."
-            )
+            try:
+                self.modulation = coerce_enum(ModulationType, self.modulation, "modulation")
+            except ValueError:
+                self.modulation = ModulationType.OOK
+        # Sync emission_enabled with legacy power/beacon flags
+        legacy_power = bool(getattr(self, "power_enabled", True))
+        legacy_beacon = bool(getattr(self, "beacon_enabled", True))
+        if not legacy_power or not legacy_beacon:
+            self.emission_enabled = False
+        if self.operational_state == OperationalState.FAULT:
+            self.emission_enabled = False
+        self.power_enabled = bool(self.emission_enabled)
+        self.beacon_enabled = bool(self.emission_enabled)
         power = _require_number("Optical power", self.optical_power_w)
         if power < 0:
             raise ValueError("Optical power cannot be negative.")
@@ -270,10 +292,13 @@ class RemoteTerminalConfig:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> RemoteTerminalConfig:
         try:
+            # emission_enabled is new master; fallback to legacy flags
+            emission = data.get("emission_enabled", None)
+            if emission is None:
+                emission = bool(data.get("power_enabled", True)) and bool(data.get("beacon_enabled", True))
             return cls(
                 terminal_id=str(data.get("terminal_id", "RT-001")),
-                power_enabled=bool(data.get("power_enabled", True)),
-                beacon_enabled=bool(data.get("beacon_enabled", True)),
+                emission_enabled=bool(emission),
                 operational_state=coerce_enum(
                     OperationalState, data.get("operational_state", "beaconing"),
                     "operational state",
@@ -287,7 +312,6 @@ class RemoteTerminalConfig:
                 token=str(data.get("token", "")),
                 network_id=int(data.get("network_id", 0)),
                 enable_nav=bool(data.get("enable_nav", True)),
-                pointing_bias_deg=float(data.get("pointing_bias_deg", 0.005)),
                 pointing_jitter_sigma_deg=float(data.get("pointing_jitter_sigma_deg", 0.002)),
             ).validate()
         except (TypeError, ValueError, KeyError, AttributeError) as e:
@@ -346,9 +370,10 @@ def make_default_scenario(terminal_count: int = 1) -> RemoteScenarioConfig:
     return cfg.validate()
 
 
-# GUI field metadata (RemoteTerminal.md §57): label, control type, unit,
-# minimum, maximum, step, group, description. The formation/motion card is
-# built from this schema instead of hard-coding the structure.
+# GUI field metadata — pruned per Plan Hybrid-AI §1 (60% reduction).
+# Only pixel/SNR/TID-relevant fields are GUI-exposed. Advanced payload
+# (token/network_id/enable_nav) collapsed behind Advanced when count==1.
+# Derived fields (range, los_angle, beam_diameter) removed from GUI.
 FIELD_METADATA: dict[str, dict[str, Any]] = {
     "terminal_count": {
         "label": "Terminal Count", "control": "int", "unit": "",
@@ -358,17 +383,17 @@ FIELD_METADATA: dict[str, dict[str, Any]] = {
     "formation_shape": {
         "label": "Formation Shape", "control": "dropdown", "unit": "",
         "min": None, "max": None, "step": None, "group": "Formation",
-        "description": "Geometric arrangement of the terminals around the formation center.",
+        "description": "Geometric arrangement: Single / Line / Circle.",
     },
     "terminal_spacing_m": {
         "label": "Terminal Spacing", "control": "float", "unit": "m",
         "min": 0.0, "max": 5000.0, "step": 1.0, "group": "Formation",
-        "description": "Nominal separation between neighbouring terminals.",
+        "description": "Nominal separation between neighbouring terminals (visible if count>1).",
     },
     "motion_profile": {
         "label": "Motion Profile", "control": "dropdown", "unit": "",
         "min": None, "max": None, "step": None, "group": "Motion",
-        "description": "Trajectory followed by the formation center.",
+        "description": "Trajectory: Rest / Constant Velocity / Circular / Figure-8 / Random.",
     },
     "speed_mps": {
         "label": "Speed", "control": "float", "unit": "m/s",
@@ -395,20 +420,15 @@ FIELD_METADATA: dict[str, dict[str, Any]] = {
         "min": None, "max": None, "step": None, "group": "Identity",
         "description": "Unique identity transmitted in the beacon.",
     },
-    "power_enabled": {
-        "label": "Power", "control": "bool", "unit": "",
+    "emission_enabled": {
+        "label": "Emission", "control": "bool", "unit": "",
         "min": None, "max": None, "step": None, "group": "Emission",
-        "description": "Master optical power switch (ON/OFF).",
-    },
-    "beacon_enabled": {
-        "label": "Beacon", "control": "bool", "unit": "",
-        "min": None, "max": None, "step": None, "group": "Emission",
-        "description": "Beacon emission switch (ON/OFF).",
+        "description": "Master emission switch — ON=BEACONING, OFF=FAULT (replaces triple switch).",
     },
     "operational_state": {
         "label": "Operational State", "control": "dropdown", "unit": "",
         "min": None, "max": None, "step": None, "group": "Emission",
-        "description": "BEACONING/LINKED allow emission; OFF/STANDBY/FAULT inhibit it.",
+        "description": "BEACONING (emit) or FAULT (inhibit).",
     },
     "optical_power_w": {
         "label": "Optical Power", "control": "float", "unit": "W",
@@ -421,13 +441,6 @@ FIELD_METADATA: dict[str, dict[str, Any]] = {
         "step": 1.0, "group": "Optical",
         "description": "Carrier wavelength within the supported simulator range.",
     },
-    "modulation": {
-        "label": "Modulation", "control": "dropdown", "unit": "",
-        "min": None, "max": None, "step": None, "group": "Optical",
-        "description": "Beacon modulation format (default OOK). NOTE (Fixes.md 4.9): "
-                       "only OOK has an end-to-end protocol waveform; CW/PPM currently "
-                       "affect emitted-power semantics only and still generate OOK frames.",
-    },
     "spot_size_mrad": {
         "label": "Spot Size", "control": "float", "unit": "mrad",
         "min": 0.01, "max": 50.0, "step": 0.05, "group": "Optical",
@@ -435,23 +448,18 @@ FIELD_METADATA: dict[str, dict[str, Any]] = {
     },
     "token": {
         "label": "Token", "control": "text", "unit": "",
-        "min": None, "max": None, "step": None, "group": "Beacon Payload",
-        "description": "Beacon auth token (empty follows the Terminal ID).",
+        "min": None, "max": None, "step": None, "group": "Beacon Payload (Advanced)",
+        "description": "Beacon auth token — Advanced, only when count>1.",
     },
     "network_id": {
         "label": "Network ID", "control": "int", "unit": "",
-        "min": 0, "max": 255, "step": 1, "group": "Beacon Payload",
-        "description": "Wire network ID (0 = omitted, legacy-compatible).",
+        "min": 0, "max": 255, "step": 1, "group": "Beacon Payload (Advanced)",
+        "description": "Wire network ID — Advanced, only when count>1.",
     },
     "enable_nav": {
         "label": "NAV Extension", "control": "bool", "unit": "",
-        "min": None, "max": None, "step": None, "group": "Beacon Payload",
-        "description": "Attach the 12-byte navigation extension (timestamp + X/Y).",
-    },
-    "pointing_bias_deg": {
-        "label": "Pointing Bias", "control": "float", "unit": "deg",
-        "min": -1.0, "max": 1.0, "step": 0.001, "group": "Pointing",
-        "description": "Static beam-pointing bias added to the LOS angle.",
+        "min": None, "max": None, "step": None, "group": "Beacon Payload (Advanced)",
+        "description": "Attach NAV extension — Advanced, only when count>1.",
     },
     "pointing_jitter_sigma_deg": {
         "label": "Pointing Jitter", "control": "float", "unit": "deg",

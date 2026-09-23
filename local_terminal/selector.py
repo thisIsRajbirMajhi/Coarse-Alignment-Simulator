@@ -1,10 +1,7 @@
-# local_terminal/selector.py - V2 active-target selection (Plan V2 §16).
+# local_terminal/selector.py - V2 active-target selection (Plan Hybrid-AI §2).
 #
-# One active PTZ target. Simple priority:
-#   1. mission priority TID (if configured)
-#   2. strongest P_rx
-#   3. highest SNR
-# No composite score, no standby pool, no Hungarian.
+# Priority only (strongest_prx/highest_snr removed — duplicate of identity).
+# Single policy: mission priority → strongest P_rx.
 
 from __future__ import annotations
 
@@ -42,18 +39,12 @@ def select_active_v2(candidates, policy: str = "priority",
     valid = [c for c in cands if _tid(c)]
     if not valid:
         return None
-    policy = str(policy or "priority").lower()
-    if policy == "priority" and priority_order:
+    # Pruned: only priority policy kept (Plan Hybrid-AI). Other policies alias to priority.
+    if priority_order:
         order = {str(t): i for i, t in enumerate(priority_order)}
         ranked = sorted(valid, key=lambda c: (order.get(_tid(c), 10**9), -_prx(c), -_snr(c)))
         return _tid(ranked[0])
-    if policy == "strongest_prx":
-        return _tid(max(valid, key=lambda c: (_prx(c), _snr(c))))
-    if policy == "highest_snr":
-        return _tid(max(valid, key=lambda c: (_snr(c), _prx(c))))
-    if priority_order:
-        return select_active_v2(valid, "priority", priority_order)
-    return select_active_v2(valid, "strongest_prx")
+    return _tid(max(valid, key=lambda c: (_prx(c), _snr(c))))
 
 
 __all__ = ["select_active_v2"]

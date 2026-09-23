@@ -92,6 +92,23 @@ class SupervisorV2:
                                      self.cfg.reacq_full_scan_enabled)
         self.comm = CommReceiver()
         self.confirmer = TemporalConfirmer(self.cfg.candidate_confirm_frames)
+        # Hybrid-AI optional modules (lazy, one-frame fallback to classical)
+        self.ai_verifier = None
+        self.ai_scorer = None
+        self.ai_predictor = None
+        self.ai_ranker = None
+        if bool(getattr(self.cfg, "ai_enabled", False)):
+            try:
+                from local_terminal.ai.verifier import TinyCNNVerifier
+                from local_terminal.ai.scorer import MLPScorer
+                from local_terminal.ai.predictor import TemporalMLPPredictor
+                from local_terminal.ai.tuner import ScanRanker
+                self.ai_verifier = TinyCNNVerifier(threshold=float(getattr(self.cfg, "ai_verifier_threshold", 0.6)))
+                self.ai_scorer = MLPScorer()
+                self.ai_predictor = TemporalMLPPredictor()
+                self.ai_ranker = ScanRanker()
+            except Exception:
+                pass
         self.state = V2State.SEARCH
         self.sim_time = 0.0
         self.transitions: list[tuple[float, str, str, str]] = []
@@ -190,8 +207,6 @@ class SupervisorV2:
         return True
 
     def apply_local_config(self, cfg) -> None:
-        # V2 authoritative config is AutonomyConfig — single source, no duplicate path (BUG-13/14 fix)
-        # Legacy LocalTerminalConfig has been removed. Any legacy object is rejected with guidance to migrate.
         if isinstance(cfg, AutonomyConfig):
             self.cfg = cfg.validate()
             self.identity.config.p_rx_threshold_w = self.cfg.p_rx_threshold_w
@@ -203,6 +218,20 @@ class SupervisorV2:
             ))
             self.reacq = V2Reacquisition(list(self.cfg.reacq_radii_px), self.cfg.reacq_full_scan_enabled)
             self.confirmer = TemporalConfirmer(self.cfg.candidate_confirm_frames)
+            # Re-init AI modules on config change
+            self.ai_verifier = self.ai_scorer = self.ai_predictor = self.ai_ranker = None
+            if bool(getattr(self.cfg, "ai_enabled", False)):
+                try:
+                    from local_terminal.ai.verifier import TinyCNNVerifier
+                    from local_terminal.ai.scorer import MLPScorer
+                    from local_terminal.ai.predictor import TemporalMLPPredictor
+                    from local_terminal.ai.tuner import ScanRanker
+                    self.ai_verifier = TinyCNNVerifier(threshold=float(getattr(self.cfg, "ai_verifier_threshold", 0.6)))
+                    self.ai_scorer = MLPScorer()
+                    self.ai_predictor = TemporalMLPPredictor()
+                    self.ai_ranker = ScanRanker()
+                except Exception:
+                    pass
             return
         # Removed: legacy LocalTerminalConfig shim (BUG-13/14). Previously mapped scan/detector/tracker fields,
         # but that created duplicate authoritative paths. Now we fail fast with migration guidance.
@@ -231,8 +260,38 @@ class SupervisorV2:
         if beacon is not None and beacon.valid_crc:
             self._pending_beacon = beacon
 
-        spots = detect_spots(fov_frame, self.cfg)
-        self._last_spots = spots
+        # Hybrid-AI: if ai_enabled use AISpotDetector verify boost, else classical
+        if bool(getattr(self.cfg, "ai_enabled", False)) and self.ai_verifier is not None:
+            try:
+                # Re-run with verifier boost (still classical proposals + p>0.6 snr+=3)
+                from local_terminal.detector import detect_spots as _ds
+                proposals = _ds(fov_frame, self.cfg)
+                tmp = []
+                for c in proposals:
+                    try:
+                        p = self.ai_verifier.verify(fov_frame, c)
+                        if p >= float(getattr(self.cfg, "ai_verifier_threshold", 0.6)):
+                            c.snr_db = float(c.snr_db) + 3.0
+                        tmp.append(c)
+                    except Exception:
+                        tmp.append(c)
+                tmp.sort(key=lambda d: (d.snr_db * 0.7 + d.peak * 0.03), reverse=True)
+                spots = tmp[:8]
+                # Also feed confirmer with boosted list via manual update (reuse)
+                # Use same confirmer but feed boosted spots
+                self._last_spots = spots
+                confirmed = self.confirmer.update(spots)
+                # Skip original detect_spots double-call below — we already have spots/confirmed
+                # To avoid double update, skip the second confirmer.update by marking
+                _ai_spots_done = True
+            except Exception:
+                spots = detect_spots(fov_frame, self.cfg)
+                self._last_spots = spots
+                _ai_spots_done = False
+        else:
+            spots = detect_spots(fov_frame, self.cfg)
+            self._last_spots = spots
+            _ai_spots_done = False
         # BUG-12: scale temporal confirmation gate by measurement uncertainty and FOV
         # 12px base for 640x480, scaled by FOV and Kalman uncertainty (tracking) or fixed for acquisition
         try:
@@ -248,7 +307,8 @@ class SupervisorV2:
                 self.confirmer.gate_px = float(np.clip(12.0 * fov_scale, 8.0, 16.0))
         except Exception:
             pass
-        confirmed = self.confirmer.update(spots)
+        if not locals().get("_ai_spots_done", False):
+            confirmed = self.confirmer.update(spots)
 
         curr_angles = ((boresight_world[0] - cam_home[0]) / px_per_deg[0],
                        (cam_home[1] - boresight_world[1]) / px_per_deg[1])
@@ -280,7 +340,27 @@ class SupervisorV2:
                 self._go(V2State.IDENTIFY, "optical_candidate")
                 target_angles = curr_angles
             else:
-                # No joint P_rx+spot candidate — keep rastering. Star-only spots or P_rx-only must not pin scan.
+                # AI Ranker: if ai_enabled and we have last known, try ranked order (fallback systematic)
+                if bool(getattr(self.cfg, "ai_enabled", False)) and self.ai_ranker is not None and self.tracker.active_tid is not None:
+                    try:
+                        lx, ly = self.tracker.kf.position
+                        vx, vy = self.tracker.kf.velocity
+                        unc = float(self.tracker.effective_uncertainty_px())
+                        # Estimate bg_std from frame
+                        bg_std = 5.0
+                        try:
+                            import numpy as _np
+                            bg_std = float(_np.std(fov_frame)) if fov_frame is not None else 5.0
+                        except Exception:
+                            pass
+                        order = self.ai_ranker.ranked_schedule(last_known=(float(lx), float(ly)),
+                                                               velocity=(float(vx), float(vy)), unc=unc,
+                                                               misses=int(self.tracker.misses), bg_std=bg_std)
+                        if order is not None:
+                            self.scan._schedule = list(order)
+                            self.scan._schedule_ptr = 0
+                    except Exception:
+                        pass
                 pos = self.scan.step(has_decoding_candidate=False)
                 target_angles = pos.target_angles(cam_home, px_per_deg[0], px_per_deg[1])
 

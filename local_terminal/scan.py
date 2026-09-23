@@ -201,13 +201,30 @@ class ScanController:
 
     def _systematic_schedule(self) -> list[int]:
         if self.config.pattern == "SPIRAL":
-            # Center-out spiral order over 4 cols × 5 rows (center around col 1.5, row 2)
             indices = list(range(TOTAL_POSITIONS))
             cx, cy = 1.5, 2.0
             indices.sort(key=lambda i: (self.grid[i].col - cx) ** 2 + (self.grid[i].row - cy) ** 2)
             return indices
-        # Default RASTER: row-major 0..19
         return list(range(TOTAL_POSITIONS))
+
+    def ai_ranked_schedule(self, last_known=None, velocity=None, unc: float = 20.0,
+                           misses: int = 0, bg_std: float = 5.0, threshold: float = 0.7) -> list[int]:
+        """MLP Ranker 6→20 wrapper: ranked order if confident, else systematic fallback (Plan Hybrid-AI)."""
+        try:
+            from local_terminal.ai.tuner import ScanRanker
+            ranker = ScanRanker()
+            order = ranker.ranked_schedule(last_known, velocity, unc, misses, bg_std, threshold)
+            if order is not None:
+                self._schedule = list(order)
+                self._schedule_ptr = 0
+                self._dwell_count = 0
+                return list(self._schedule)
+        except Exception:
+            pass
+        self._schedule = self._systematic_schedule()
+        self._schedule_ptr = 0
+        self._dwell_count = 0
+        return list(self._schedule)
 
     # -- Step & Dwell (§4.3) -------------------------------------------
     def step(self, has_decoding_candidate: bool = False) -> ScanPosition:

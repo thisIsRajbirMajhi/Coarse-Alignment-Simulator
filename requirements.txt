@@ -1,10 +1,14 @@
-# Core simulator (GUI, rendering, synthesis, and kinematics)
+# Core simulator (GUI, rendering, synthesis, kinematics) — Plan Hybrid-AI §7
 numpy>=1.26,<2.6
-opencv-python>=4.8,<5.1
+opencv-python>=4.8,<5.1   # cv2.dnn for ONNX — ALL inference via OpenCV, no onnxruntime required
 PyQt5==5.15.11
 
-# Optional: Gymnasium wrapper for RL training (simulation/env.py works without it)
+# Optional: onnxruntime>=1.16 only if LSTM-64 kept; pure-OpenCV uses Temporal-MLP (default)
+# onnxruntime>=1.16
 # gymnasium>=0.29
 
-# Testing & development
+# Training only (dev, not shipped):
+# torch>=2.1 --extra-index-url CPU + onnx (export) — 5k crops 10ep ~10min CPU
+# ultralytics optional — YOLOv8n 3M 15ms alternative verifier (Advanced, not default)
+
 pytest>=8.0
