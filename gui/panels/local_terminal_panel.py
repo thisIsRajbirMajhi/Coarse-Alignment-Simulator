@@ -83,6 +83,19 @@ class LocalTerminalPanel(BaseConfigPanel):
         hint.setStyleSheet("color:#64748b; font-size:11px;")
         root.addWidget(hint)
 
+        # ========== AI TOGGLE (Plan Hybrid-AI §2 — 1-frame fallback to pure classical) ==========
+        ai_box, ai_grid = self._make_group("AI HYBRID — OFF = pure classical, ON = AI + classical veto")
+        self.chk_ai = QCheckBox("AI ON (Tiny-CNN verifier · MLP scorer · Temporal-MLP predictor · Ranker)")
+        self.chk_ai.setStyleSheet("color:#0f766e; font-size:12px; font-weight:600;")
+        self.chk_ai.setToolTip("OFF: deterministic V2 FSM only. ON: AI scores but classical gate always vetoes. One-frame fallback.")
+        self.spin_ai_thr = _dspin(0.3, 0.9, 0.05, decimals=2, tooltip="AI verifier threshold p(beacon) — 0.6 default")
+        self.spin_ai_thr.setValue(0.6)
+        ai_grid.addWidget(self.chk_ai, 0, 0, 1, 2)
+        ai_grid.addWidget(self._label("Verifier Thr"), 0, 2)
+        ai_grid.addWidget(self.spin_ai_thr, 0, 3)
+        ai_grid.addWidget(self._hint("AI is advisory: classical FSM wins. FPS ≥28 ON, ≥35 OFF. No GPU."), 1, 0, 1, 4)
+        root.addWidget(ai_box)
+
         # ========== PRIMARY: SEARCH & DETECTION ==========
         s_box, s_grid = self._make_group("SEARCH & DETECTION — Primary")
         self.combo_search = QComboBox()
@@ -132,8 +145,8 @@ class LocalTerminalPanel(BaseConfigPanel):
         # ========== PRIMARY: SELECTOR ==========
         sel_box, sel_grid = self._make_group("SELECTOR — Primary")
         self.combo_policy = QComboBox()
-        self.combo_policy.addItems(["priority", "strongest_prx", "highest_snr"])
-        self.combo_policy.setToolTip("Active target policy")
+        self.combo_policy.addItems(["priority"])
+        self.combo_policy.setToolTip("Pruned: priority only (strongest_prx/highest_snr removed per Plan)")
         self.edit_priority = QLineEdit("")
         self.edit_priority.setPlaceholderText("Priority TID order: RT-001, RT-002, … (empty = formation order)")
         self.edit_priority.setToolTip("Mission priority list (comma-separated TID, index 0 = highest)")
@@ -227,13 +240,12 @@ class LocalTerminalPanel(BaseConfigPanel):
         self.edit_priority.editingFinished.connect(self._on_changed)
 
     def _watched_widgets(self):
-        # Include every config-bound widget for wiring + blockSignals
         base = [
+            self.chk_ai, self.spin_ai_thr,
             self.combo_search, self.spin_scan_start,
             self.spin_snr, self.spin_confirm, self.spin_p_rx,
             self.spin_lost_unc, self.spin_lost_t, self.combo_reacq, self.chk_full_scan, self.edit_reacq,
             self.combo_policy, self.edit_priority,
-            # advanced
             self.spin_dwell, self.spin_ext_dwell, self.spin_margin, self.spin_min_area, self.spin_max_area,
             self.spin_q, self.spin_r, self.spin_r_low, self.spin_r_high, self.spin_gate_px, self.spin_mahal,
             self.spin_coast_unc, self.spin_coast_t,
@@ -267,7 +279,8 @@ class LocalTerminalPanel(BaseConfigPanel):
         # priority csv -> list
         prio = [x.strip() for x in self.edit_priority.text().split(",") if x.strip()]
         cfg = AutonomyConfig(
-            search_pattern=str(self.combo_search.currentText()),
+            ai_enabled=bool(self.chk_ai.isChecked()),
+            ai_verifier_threshold=float(self.spin_ai_thr.value()),
             search_dwell_frames=int(self.spin_dwell.value()),
             search_extended_dwell_frames=int(self.spin_ext_dwell.value()),
             search_start_index=int(self.spin_scan_start.value()),
@@ -309,11 +322,17 @@ class LocalTerminalPanel(BaseConfigPanel):
         try:
             for w in self._watched_widgets():
                 w.blockSignals(True)
+            self.chk_ai.setChecked(bool(getattr(cfg, "ai_enabled", False)))
+            self.spin_ai_thr.setValue(float(getattr(cfg, "ai_verifier_threshold", 0.6)))
             self.spin_dwell.setValue(int(cfg.search_dwell_frames))
             self.spin_ext_dwell.setValue(int(cfg.search_extended_dwell_frames))
             self.spin_scan_start.setValue(int(getattr(cfg, "search_start_index", 0)))
-            idx = self.combo_search.findText(str(cfg.search_pattern))
-            self.combo_search.setCurrentIndex(max(0, idx))
+            # search_pattern removed — AI ranker owns schedule; keep combo as legacy display
+            try:
+                self.combo_search.setEnabled(False)
+                self.combo_search.setToolTip("Pruned: AI Ranker owns schedule (systematic fallback)")
+            except Exception:
+                pass
             self.spin_snr.setValue(float(cfg.candidate_min_snr_db))
             self.spin_margin.setValue(float(cfg.candidate_peak_margin))
             self.spin_confirm.setValue(int(cfg.candidate_confirm_frames))

@@ -189,10 +189,13 @@ class RemoteTerminalPanel(BaseConfigPanel):
         self.combo_terminal.setToolTip("Select the terminal to edit")
         self.edit_tid = QLineEdit("RT-001")
         self.edit_tid.setToolTip(_tooltip("terminal_id"))
+        self.chk_emission = QCheckBox("ON")
+        self.chk_emission.setToolTip(_tooltip("emission_enabled"))
+        # Legacy aliases kept hidden for compat
         self.chk_power = QCheckBox("ON")
-        self.chk_power.setToolTip(_tooltip("power_enabled"))
+        self.chk_power.setVisible(False)
         self.chk_beacon = QCheckBox("ON")
-        self.chk_beacon.setToolTip(_tooltip("beacon_enabled"))
+        self.chk_beacon.setVisible(False)
         self.combo_state = QComboBox()
         for value, label in OPERATIONAL_STATE_LABELS.items():
             self.combo_state.addItem(label, value)
@@ -213,6 +216,7 @@ class RemoteTerminalPanel(BaseConfigPanel):
         for value, label in MODULATION_LABELS.items():
             self.combo_mod.addItem(label, value)
         self.combo_mod.setToolTip(_tooltip("modulation"))
+        self.combo_mod.setEnabled(False)  # locked to OOK per Plan
         self.spin_spot = QDoubleSpinBox()
         self.spin_spot.setRange(float(_meta("spot_size_mrad")["min"]),
                                 float(_meta("spot_size_mrad")["max"]))
@@ -224,10 +228,8 @@ class RemoteTerminalPanel(BaseConfigPanel):
         term_grid.addWidget(self._label("Terminal ID"), 1, 0)
         term_grid.addWidget(self.edit_tid, 1, 1)
         em_row = QHBoxLayout()
-        em_row.addWidget(self._label("Power"))
-        em_row.addWidget(self.chk_power)
-        em_row.addWidget(self._label("Beacon"))
-        em_row.addWidget(self.chk_beacon)
+        em_row.addWidget(self._label("Emission"))
+        em_row.addWidget(self.chk_emission)
         em_row.addStretch(1)
         term_grid.addLayout(em_row, 2, 0, 1, 2)
         term_grid.addWidget(self._label("Operational State"), 3, 0)
@@ -356,8 +358,7 @@ class RemoteTerminalPanel(BaseConfigPanel):
         self.chk_nav.toggled.connect(self._on_terminal_edited)
         self.spin_bias.valueChanged.connect(self._on_terminal_edited)
         self.spin_jitter.valueChanged.connect(self._on_terminal_edited)
-        self.chk_power.toggled.connect(self._on_terminal_edited)
-        self.chk_beacon.toggled.connect(self._on_terminal_edited)
+        self.chk_emission.toggled.connect(self._on_terminal_edited)
         self.combo_state.currentIndexChanged.connect(self._on_terminal_edited)
         self.spin_opt_power.valueChanged.connect(self._on_terminal_edited)
         self.spin_wavelength.valueChanged.connect(self._on_terminal_edited)
@@ -509,8 +510,10 @@ class RemoteTerminalPanel(BaseConfigPanel):
             return
         t = self._config.terminals[self._selected]
         self.edit_tid.setText(str(t.terminal_id))
-        self.chk_power.setChecked(bool(t.power_enabled))
-        self.chk_beacon.setChecked(bool(t.beacon_enabled))
+        # Single master emission switch (Plan)
+        self.chk_emission.setChecked(bool(getattr(t, "emission_enabled", True)))
+        self.chk_power.setChecked(bool(getattr(t, "emission_enabled", True)))
+        self.chk_beacon.setChecked(bool(getattr(t, "emission_enabled", True)))
         self._set_combo(self.combo_state, t.operational_state.value)
         self.spin_opt_power.setValue(float(t.optical_power_w))
         self.spin_wavelength.setValue(float(t.wavelength_nm))
@@ -527,12 +530,18 @@ class RemoteTerminalPanel(BaseConfigPanel):
             return
         t = self._config.terminals[self._selected]
         t.terminal_id = self.edit_tid.text().strip() or t.terminal_id
-        t.power_enabled = bool(self.chk_power.isChecked())
-        t.beacon_enabled = bool(self.chk_beacon.isChecked())
-        t.operational_state = coerce_enum(
-            OperationalState, self.combo_state.currentData(), "operational state")
-        t.modulation = coerce_enum(
-            ModulationType, self.combo_mod.currentData(), "modulation")
+        emission = bool(self.chk_emission.isChecked())
+        t.emission_enabled = emission
+        t.power_enabled = emission
+        t.beacon_enabled = emission
+        # OperationalState now BEACONING/FAULT only; map emission OFF→FAULT
+        st = coerce_enum(OperationalState, self.combo_state.currentData(), "operational state")
+        if not emission:
+            st = OperationalState.FAULT
+        elif st == OperationalState.FAULT and emission:
+            st = OperationalState.BEACONING
+        t.operational_state = st
+        t.modulation = coerce_enum(ModulationType, self.combo_mod.currentData(), "modulation")
         t.optical_power_w = float(self.spin_opt_power.value())
         t.wavelength_nm = float(self.spin_wavelength.value())
         t.spot_size_mrad = float(self.spin_spot.value())
