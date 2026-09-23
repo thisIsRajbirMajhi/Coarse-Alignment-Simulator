@@ -176,14 +176,36 @@ class SettingsDialog(QDialog):
         # 6. Disturbances Panel
         self.dist_panel = DisturbancesPanel(initial=session.disturbance_config)
 
-        # Wrap each panel in a scroll area with custom clean background
+        # --- Plan §5: 4 Cards (collapsed from 7 tabs) ---
+        # Card 1: Formation/Motion (count, shape 3, speed, heading, profile 5, start offset) — from remote_panel
+        # Card 2: Optical (power, wavelength, spot, jitter, emission) — from remote_panel
+        # Card 3: Camera/PID + AI (pan/tilt, kp/kd, AI OFF/ON) — camera+controller+local_panel
+        # Card 4: Disturbance (S&P, Gauss, jitter, Haze/Fog) — disturbances+environment atmosphere (Advanced collapsed)
+        # Preserve Presets as utility tab; keep original panels accessible via Advanced toggle if needed
         self._add_scrolled_tab(self.presets_panel, "Presets")
-        self._add_scrolled_tab(self.remote_panel, "Remote Terminal")
-        self._add_scrolled_tab(self.local_panel, "Local Terminal")
-        self._add_scrolled_tab(self.env_panel, "Environment")
-        self._add_scrolled_tab(self.dist_panel, "Disturbances")
-        self._add_scrolled_tab(self.camera_panel, "Camera & PTZ")
-        self._add_scrolled_tab(self.controller_panel, "PID Controller")
+        # Card 1+2 combined: Remote Terminal already groups Formation/Motion (Card1) + Optical (Card2) with Advanced collapsed
+        self._add_scrolled_tab(self.remote_panel, "Card 1·2 — Formation & Optical")
+        # Card 3: stack Camera, PID, Local (AI) vertically
+        card3 = QWidget(self)
+        card3_layout = QVBoxLayout(card3)
+        card3_layout.setContentsMargins(0, 0, 0, 0)
+        card3_layout.setSpacing(12)
+        card3_layout.addWidget(self.camera_panel)
+        card3_layout.addWidget(self.controller_panel)
+        card3_layout.addWidget(self.local_panel)
+        card3_layout.addStretch(1)
+        self._add_scrolled_tab(card3, "Card 3 — Camera/PID + AI")
+        # Card 4: stack Disturbances + Environment (atmosphere/starfield collapsed Advanced)
+        card4 = QWidget(self)
+        card4_layout = QVBoxLayout(card4)
+        card4_layout.setContentsMargins(0, 0, 0, 0)
+        card4_layout.setSpacing(12)
+        card4_layout.addWidget(self.dist_panel)
+        card4_layout.addWidget(self.env_panel)
+        card4_layout.addStretch(1)
+        self._add_scrolled_tab(card4, "Card 4 — Disturbance")
+        # Keep legacy tabs hidden but accessible for debugging (not added to QTabWidget to satisfy 4-card spec)
+        # To debug legacy 7-tab layout, temporarily re-add above _add_scrolled_tab lines
 
         # Store helper for apply (session provided at init, may be stale after reset — caller syncs via apply_preset)
         self._preset_helper = apply_preset_to_session
