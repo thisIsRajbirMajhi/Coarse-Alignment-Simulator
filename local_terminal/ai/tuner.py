@@ -20,9 +20,25 @@ class ScanRanker:
 
     def __init__(self):
         self.net = None
+        self.device = "cpu"
+        try:
+            import torch
+            if torch.cuda.is_available():
+                self.device = "cuda"
+        except Exception:
+            pass
         if cv2 is not None and os.path.exists(RANKER_PATH):
             try:
                 self.net = cv2.dnn.readNetFromONNX(RANKER_PATH)
+                try:
+                    if self.device == "cuda" and hasattr(cv2, "cuda") and cv2.cuda.getCudaEnabledDeviceCount() > 0:
+                        self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)
+                        self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CUDA)
+                    else:
+                        self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+                        self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+                except Exception:
+                    pass
             except Exception:
                 self.net = None
 

@@ -3,12 +3,19 @@ numpy>=1.26,<2.6
 opencv-python>=4.8,<5.1   # cv2.dnn for ONNX — ALL inference via OpenCV, no onnxruntime required
 PyQt5==5.15.11
 
-# Optional: onnxruntime>=1.16 only if LSTM-64 kept; pure-OpenCV uses Temporal-MLP (default)
-# onnxruntime>=1.16
-# gymnasium>=0.29
+# Inference (GPU auto-detected, CPU fallback)
+# onnxruntime>=1.16 — CPU by default; for GPU use onnxruntime-gpu with CUDA
+# pip install onnxruntime-gpu>=1.16  # requires CUDA 11.8 / cuDNN 8
+onnxruntime>=1.16
+# opencv with CUDA: pip install opencv-contrib-python -- if CUDA build, cv2.dnn will use DNN_BACKEND_CUDA
 
-# Training only (dev, not shipped):
-# torch>=2.1 --extra-index-url CPU + onnx (export) — 5k crops 10ep ~10min CPU
+# Training (GPU auto-detected, CPU fallback)
+# For GPU training: pip install torch --index-url https://download.pytorch.org/whl/cu121
+# For CPU-only: pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch>=2.1
+onnx>=1.14
+onnxscript>=0.1  # required for torch.onnx.export
 # ultralytics optional — YOLOv8n 3M 15ms alternative verifier (Advanced, not default)
+# pip install ultralytics
 
 pytest>=8.0

@@ -20,11 +20,27 @@ class TemporalMLPPredictor:
     def __init__(self):
         self.net = None
         self.use_lstm = False
+        self.device = "cpu"
+        try:
+            import torch
+            if torch.cuda.is_available():
+                self.device = "cuda"
+        except Exception:
+            pass
         # Prefer LSTM if onnxruntime available and model exists, else Temporal-MLP
         if os.path.exists(LSTM_PATH):
             try:
                 import onnxruntime  # type: ignore
-                self._ort_session = onnxruntime.InferenceSession(LSTM_PATH, providers=["CPUExecutionProvider"])
+                providers = ["CPUExecutionProvider"]
+                try:
+                    if self.device == "cuda" and "CUDAExecutionProvider" in onnxruntime.get_available_providers():
+                        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+                    elif self.device == "cuda":
+                        # Try CUDA anyway if torch says cuda available but ORT not built with it
+                        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+                except Exception:
+                    pass
+                self._ort_session = onnxruntime.InferenceSession(LSTM_PATH, providers=providers)
                 self.use_lstm = True
                 self._ort = onnxruntime
             except Exception:
@@ -32,6 +48,15 @@ class TemporalMLPPredictor:
         if not self.use_lstm and cv2 is not None and os.path.exists(MODEL_PATH):
             try:
                 self.net = cv2.dnn.readNetFromONNX(MODEL_PATH)
+                try:
+                    if self.device == "cuda" and hasattr(cv2, "cuda") and cv2.cuda.getCudaEnabledDeviceCount() > 0:
+                        self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)
+                        self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CUDA)
+                    else:
+                        self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+                        self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+                except Exception:
+                    pass
             except Exception:
                 self.net = None
         self._history: list[tuple[float, float, float, float]] = []
