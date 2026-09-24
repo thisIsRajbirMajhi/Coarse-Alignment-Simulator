@@ -1,0 +1,17 @@
+# simulation/__init__.py — Headless simulation package for AI training
+# Provides HeadlessSimulation (gym-like) without Qt, deterministic via seeded RNG.
+
+from src.simulation.headless import HeadlessSimulation  # noqa: F401
+
+try:
+    from src.simulation.env import FSOCEnv  # noqa: F401
+except Exception:
+    pass
+
+__all__ = ["HeadlessSimulation"]
+try:
+    FSOCEnv  # noqa: F821
+    __all__.append("FSOCEnv")
+except NameError:
+    pass
+

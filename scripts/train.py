@@ -14,7 +14,7 @@ Models:
   predictor: Temporal-MLP 32->64->2 ~4k or LSTM-64 ~35k — 2k traj
   ranker:   MLP 6->32->32->20 ~2k — imitation on oracle 20-cell traces
 
-Exports to local_terminal/ai/models/*.onnx (checked into main.spec)
+Exports to src/local_terminal/ai/models/*.onnx (checked into main.spec)
 """
 from __future__ import annotations
 import argparse, os, sys
@@ -44,6 +44,8 @@ def get_device(preferred: str = "auto") -> str:
     return "cpu"
 
 def train_verifier(epochs: int = 10, device: str = "cpu"):
+    import os
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
     import torch
     import torch.nn as nn
     import torch.optim as optim
@@ -121,16 +123,26 @@ def train_verifier(epochs: int = 10, device: str = "cpu"):
         print(f"  epoch {ep}/{epochs} loss={loss_sum/tot:.4f}")
 
     # Export ONNX
-    out_dir = Path("local_terminal/ai/models"); out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = Path("src/local_terminal/ai/models"); out_dir.mkdir(parents=True, exist_ok=True)
     dummy = torch.randn(1,1,32,32, device=device_t)
     model_cpu = model.to("cpu"); model_cpu.eval()
     dummy_cpu = dummy.to("cpu")
     try:
-        torch.onnx.export(model_cpu, dummy_cpu, str(out_dir/"verifier.onnx"), input_names=["input"], output_names=["p_beacon"], dynamic_axes={"input":{0:"batch"}}, opset_version=14)
+        torch.onnx.export(model_cpu, dummy_cpu, str(out_dir/"verifier.onnx"), input_names=["input"], output_names=["p_beacon"], dynamic_axes={"input":{0:"batch"}}, opset_version=18, dynamo=False)
         print(f"[verifier] Exported -> {out_dir/'verifier.onnx'}")
     except Exception as e:
         print(f"[verifier] ONNX export failed ({e}), pip install onnxscript. Saving .pt")
-        torch.save(model_cpu.state_dict(), str(out_dir/"verifier.pt"))
+        try:
+            torch.save(model_cpu.state_dict(), str(out_dir/"verifier.pt"))
+        except Exception:
+            pass
+        # also try alternative opset 11 export without dynamo
+        try:
+            import torch.onnx as _onnx
+            _onnx.export(model_cpu, dummy_cpu, str(out_dir/"verifier.onnx"), input_names=["input"], output_names=["p_beacon"], opset_version=11)
+            print(f"[verifier] Exported (opset11 fallback) -> {out_dir/'verifier.onnx'}")
+        except Exception as e2:
+            print(f"[verifier] Fallback also failed: {e2}")
 
 def train_scorer(epochs: int = 10, device: str = "cpu"):
     import torch, torch.nn as nn, torch.optim as optim
@@ -155,14 +167,24 @@ def train_scorer(epochs: int = 10, device: str = "cpu"):
         loss = crit(pred, y.to(device_t)); loss.backward(); opt.step()
         if ep%2==0: print(f"  epoch {ep} loss={loss.item():.4f}")
     import pathlib
-    out = pathlib.Path("local_terminal/ai/models/scorer.onnx")
+    out = pathlib.Path("src/local_terminal/ai/models/scorer.onnx")
     dummy = torch.randn(1,7)
+    mcpu = model.to("cpu"); mcpu.eval()
     try:
-        torch.onnx.export(model.to("cpu"), dummy, str(out), input_names=["feats"], output_names=["score"], opset_version=14)
+        torch.onnx.export(mcpu, dummy, str(out), input_names=["feats"], output_names=["score"], opset_version=18, dynamo=False)
         print(f"[scorer] Exported -> {out}")
     except Exception as e:
         print(f"[scorer] ONNX export failed ({e}), saving .pt")
-        torch.save(model.to("cpu").state_dict(), str(out.with_suffix(".pt")))
+        try:
+            torch.save(mcpu.state_dict(), str(out.with_suffix(".pt")))
+        except Exception:
+            pass
+        try:
+            import torch.onnx as _onnx2
+            _onnx2.export(mcpu, dummy, str(out), input_names=["feats"], output_names=["score"], opset_version=11)
+            print(f"[scorer] Exported (opset11) -> {out}")
+        except Exception as e2:
+            print(f"[scorer] Fallback also failed: {e2}")
 
 def train_predictor(epochs: int = 10, device: str = "cpu"):
     import torch, torch.nn as nn, torch.optim as optim
@@ -183,13 +205,23 @@ def train_predictor(epochs: int = 10, device: str = "cpu"):
         opt.zero_grad(); loss=crit(model(X.to(device_t)), y.to(device_t)); loss.backward(); opt.step()
         if ep%2==0: print(f"  epoch {ep} loss={loss.item():.4f}")
     import pathlib
-    out = pathlib.Path("local_terminal/ai/models/predictor.onnx")
+    out = pathlib.Path("src/local_terminal/ai/models/predictor.onnx")
+    mcpu2 = model.to("cpu"); mcpu2.eval()
     try:
-        torch.onnx.export(model.to("cpu"), torch.randn(1,32), str(out), input_names=["traj"], output_names=["delta"], opset_version=14)
+        torch.onnx.export(mcpu2, torch.randn(1,32), str(out), input_names=["traj"], output_names=["delta"], opset_version=18, dynamo=False)
         print(f"[predictor] Exported -> {out}")
     except Exception as e:
         print(f"[predictor] ONNX export failed ({e}), saving .pt")
-        torch.save(model.to("cpu").state_dict(), str(out.with_suffix(".pt")))
+        try:
+            torch.save(mcpu2.state_dict(), str(out.with_suffix(".pt")))
+        except Exception:
+            pass
+        try:
+            import torch.onnx as _onnx3
+            _onnx3.export(mcpu2, torch.randn(1,32), str(out), input_names=["traj"], output_names=["delta"], opset_version=11)
+            print(f"[predictor] Exported (opset11) -> {out}")
+        except Exception as e2:
+            print(f"[predictor] Fallback also failed: {e2}")
 
 def train_ranker(epochs: int = 10, device: str = "cpu"):
     import torch, torch.nn as nn, torch.optim as optim
@@ -202,20 +234,30 @@ def train_ranker(epochs: int = 10, device: str = "cpu"):
             self.net = nn.Sequential(nn.Linear(6,32), nn.ReLU(), nn.Linear(32,32), nn.ReLU(), nn.Linear(32,20))
         def forward(self,x): return self.net(x)
     X = np.random.rand(2000,6).astype(np.float32)
-    y = np.random.randint(0,20, size=(2000,))
-    X=torch.from_numpy(X); y=torch.from_numpy(y)
+    y = np.random.randint(0,20, size=(2000,)).astype(np.int64)
+    X=torch.from_numpy(X); y=torch.from_numpy(y).long()
     model=Ranker().to(device_t); crit=nn.CrossEntropyLoss(); opt=optim.Adam(model.parameters(), lr=1e-3)
     for ep in range(1, epochs+1):
         opt.zero_grad(); loss=crit(model(X.to(device_t)), y.to(device_t)); loss.backward(); opt.step()
         if ep%2==0: print(f"  epoch {ep} loss={loss.item():.4f}")
     import pathlib
-    out = pathlib.Path("local_terminal/ai/models/ranker.onnx")
+    out = pathlib.Path("src/local_terminal/ai/models/ranker.onnx")
+    mcpu3 = model.to("cpu"); mcpu3.eval()
     try:
-        torch.onnx.export(model.to("cpu"), torch.randn(1,6), str(out), input_names=["ctx"], output_names=["scores"], opset_version=14)
+        torch.onnx.export(mcpu3, torch.randn(1,6), str(out), input_names=["ctx"], output_names=["scores"], opset_version=18, dynamo=False)
         print(f"[ranker] Exported -> {out}")
     except Exception as e:
         print(f"[ranker] ONNX export failed ({e}), saving .pt")
-        torch.save(model.to("cpu").state_dict(), str(out.with_suffix(".pt")))
+        try:
+            torch.save(mcpu3.state_dict(), str(out.with_suffix(".pt")))
+        except Exception:
+            pass
+        try:
+            import torch.onnx as _onnx4
+            _onnx4.export(mcpu3, torch.randn(1,6), str(out), input_names=["ctx"], output_names=["scores"], opset_version=11)
+            print(f"[ranker] Exported (opset11) -> {out}")
+        except Exception as e2:
+            print(f"[ranker] Fallback also failed: {e2}")
 
 def main():
     ap = argparse.ArgumentParser(description="GPU Hybrid-AI training")
@@ -233,7 +275,7 @@ def main():
     if do_all or args.scorer: train_scorer(args.epochs, device)
     if do_all or args.predictor: train_predictor(args.epochs, device)
     if do_all or args.ranker: train_ranker(args.epochs, device)
-    print(f"Done on {device}. ONNX in local_terminal/ai/models/ (bundled via main.spec)")
+    print(f"Done on {device}. ONNX in src/local_terminal/ai/models/ (bundled via main.spec)")
 
 if __name__ == "__main__":
     main()

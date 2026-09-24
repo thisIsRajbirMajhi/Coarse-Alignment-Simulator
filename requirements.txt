@@ -18,4 +18,5 @@ onnxscript>=0.1  # required for torch.onnx.export
 # ultralytics optional — YOLOv8n 3M 15ms alternative verifier (Advanced, not default)
 # pip install ultralytics
 
+pyyaml>=6.0
 pytest>=8.0

@@ -1,0 +1,9 @@
+{"timestamp_s": 0.39999999999999997, "from_state": "SEARCH", "to_state": "IDENTIFY", "reason": "optical_candidate", "frame_index": 11}
+{"timestamp_s": 0.4333333333333333, "from_state": "IDENTIFY", "to_state": "ASSOCIATE", "reason": "RT-001_valid", "frame_index": 12}
+{"timestamp_s": 0.4666666666666666, "from_state": "ASSOCIATE", "to_state": "TRACK", "reason": "spot_associated_bright", "frame_index": 13}
+{"timestamp_s": 2.6333333333333337, "from_state": "TRACK", "to_state": "COAST", "reason": "spot_missing_debounced", "frame_index": 78}
+{"timestamp_s": 2.7666666666666666, "from_state": "COAST", "to_state": "TRACK", "reason": "spot_recovered_debounced", "frame_index": 82}
+{"timestamp_s": 4.466666666666661, "from_state": "TRACK", "to_state": "COAST", "reason": "spot_missing_debounced", "frame_index": 133}
+{"timestamp_s": 4.599999999999993, "from_state": "COAST", "to_state": "TRACK", "reason": "spot_recovered_debounced", "frame_index": 137}
+{"timestamp_s": 5.933333333333322, "from_state": "TRACK", "to_state": "COAST", "reason": "spot_missing_debounced", "frame_index": 177}
+{"timestamp_s": 6.066666666666655, "from_state": "COAST", "to_state": "TRACK", "reason": "spot_recovered_debounced", "frame_index": 181}

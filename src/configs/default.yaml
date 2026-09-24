@@ -1,0 +1,127 @@
+# configs/default.yaml - Unified RuntimeConfig example (Spec FSOC&PAT:32)
+# Groups: camera/target/tracking/ai/logging  -> camera/pid/environment/disturbance/autonomy/remote/logging
+camera:
+  fov_deg_h: 4.0
+  fov_deg_v: 3.0
+  resolution_w: 640
+  resolution_h: 480
+  update_rate_hz: 30.0
+  max_pan_speed_deg_s: 5.0
+  max_tilt_speed_deg_s: 5.0
+  max_pan_accel_deg_s2: 25.0
+  max_tilt_accel_deg_s2: 25.0
+  pan_min_deg: -90.0
+  pan_max_deg: 90.0
+  tilt_min_deg: -45.0
+  tilt_max_deg: 45.0
+  home_pan_deg: 0.0
+  home_tilt_deg: 0.0
+  damping_ratio: 0.707
+  inertia_kg_m2: 0.02
+  backlash_deg: 0.005
+  encoder_bits: 16
+  encoder_noise_deg: 0.001
+  simple_mode: false
+  start_pan_deg: 0.0
+  start_tilt_deg: 0.0
+  use_custom_start: false
+  scan_start_index: 0
+
+pid:
+  kp_pan: 5.0
+  ki_pan: 0.12
+  kd_pan: 0.45
+  kp_tilt: 5.0
+  ki_tilt: 0.12
+  kd_tilt: 0.45
+  tau: 0.015
+  deadband_px: 1.0
+  max_integral_deg: 10.0
+  max_output_deg_s: 8.0
+  mode: "AUTO"
+
+environment:
+  world_width: 2000
+  world_height: 2000
+  seed: 42
+  bg_top: 12
+  bg_bottom: 22
+  vignetting_pct: 0
+  haze_pct: 35
+  star_count: 60
+  star_brightness: 1.0
+
+disturbance:
+  turbulence: 0
+  vibration: 0
+  camera_motion: 0
+  noise: 0
+  enable_salt_pepper: false
+  enable_gaussian: false
+  enable_poisson: false
+  salt_pepper_density: 0.10
+  salt_pepper_ratio: 0.5
+  gaussian_sigma: 8.0
+  gaussian_sigma_max: 20.0
+  poisson_scale: 1.0
+  poisson_peak: 100.0
+  camera_jitter: 0.0
+  atmospheric_preset: "Clear"
+  atmospheric_contrast: 0.0
+  atmospheric_brightness: 0.0
+  platform_profile: "Linear"
+  platform_speed: 0.0
+
+autonomy:
+  search_dwell_frames: 1
+  search_extended_dwell_frames: 10
+  search_start_index: 0
+  ai_enabled: false
+  ai_verifier_threshold: 0.6
+  candidate_min_snr_db: 6.0
+  candidate_peak_margin: 8.0
+  candidate_confirm_frames: 2
+  candidate_min_area_px: 12
+  candidate_max_area_px: 250
+  association_gate_px: 200.0
+  association_mahal_threshold: 9.21
+  kalman_process_noise_q: 8.0
+  kalman_measurement_noise_r_base: 4.0
+  kalman_r_scale_low_snr: 6.0
+  kalman_r_scale_high_snr: 0.5
+  coast_max_uncertainty_px: 30.0
+  coast_timeout_s: 1.0
+  lost_uncertainty_threshold_px: 30.0
+  lost_timeout_s: 0.5
+  reacq_radii_px: [50.0, 100.0, 200.0, 400.0, 800.0]
+  reacq_full_scan_enabled: true
+  active_target_policy: "priority"
+  mission_priority: []
+  p_rx_threshold_w: 0.0
+
+remote:
+  formation:
+    terminal_count: 1
+    formation_shape: "single"
+    motion_profile: "constant_velocity"
+    terminal_spacing_m: 100.0
+    speed_mps: 10.0
+    heading_deg: 0.0
+    start_offset_x_m: 0.0
+    start_offset_y_m: 0.0
+  terminals:
+    - terminal_id: "RT-001"
+      emission_enabled: true
+      operational_state: "beaconing"
+      optical_power_w: 0.5
+      wavelength_nm: 1550.0
+      modulation: "ook"
+      spot_size_mrad: 1.0
+      pointing_jitter_sigma_deg: 0.002
+  single_beacon_mode: false
+
+logging:
+  level: "INFO"
+  log_dir: "outputs/logs"
+  enable_frame_log: false
+  enable_run_log: true
