@@ -10,6 +10,7 @@ build/
 .venv/
 venv/
 env/
+.env
 
 # PyQt / OS
 *.pyc
@@ -18,28 +19,37 @@ env/
 .DS_Store
 Thumbs.db
 *.log
+*.sqlite3
 
 # PyInstaller (keep main.spec)
 build/
 dist/
 # *.spec  # keep main.spec tracked
 
-# Generated data (no longer logged)
+# Generated data / datasets (large, not logged)
 *.csv
 *.json
 !requirements.json
+data/
+dataset/
+Reports/*.csv
+local_terminal/ai/models/*.pt
+
+# Testing / lint
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+*.sublime-*
 
 # Temp
 *.tmp
 *.bak
-
-# Dataset
-dataset/
-
-
+*.orig
