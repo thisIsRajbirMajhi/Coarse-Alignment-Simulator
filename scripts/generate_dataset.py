@@ -4,7 +4,9 @@ Loops HeadlessConfig via env/config.py:176 DomainRand S&P10% Gauss20 stars4000 f
 Saves 640x480 gray + xy label + SNR. No training here; use torch→ONNX separately."""
 
 from __future__ import annotations
-import os, csv, random
+import os, sys, csv, random
+# Ensure repo root on path when run as `python scripts/generate_dataset.py`
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import numpy as np
 
 OUT_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "verifier_crops")
@@ -46,7 +48,7 @@ def main(n: int = 5000):
         cv2.imwrite(os.path.join(OUT_DIR, f"crop_{i:05d}_{label}.png"), gray)
         if i % 500 == 0:
             print(f"{i}/{n}")
-    print(f"Done → {OUT_DIR}")
+    print(f"Done -> {OUT_DIR}")
 
 if __name__ == "__main__":
     main()
